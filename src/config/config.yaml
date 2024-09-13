@@ -25,7 +25,9 @@ translation_model_1:
   stream: false
 
 chunk_size: 14
-threads: 40  # Number of threads for parallel processing
+threads: 40 # Number of threads for parallel processing
+max_chars: 68
+max_duration: 7.0
 
 # Deepseek
 translation_model:

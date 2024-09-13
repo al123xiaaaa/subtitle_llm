@@ -20,8 +20,8 @@ def translate_subtitles(input_file, output_file, target_language):
         subtitle = FileHandler.read_srt(input_file)
     elif input_format == "json":
         json_handler = JSONSubtitleHandler(
-            max_chars=config.get("max_chars", 122),
-            max_duration=config.get("max_duration", 7.0),
+            max_chars=int(config.get("max_chars", 58)),
+            max_duration=float(config.get("max_duration", 7.0)),
         )
         subtitle = json_handler.process_json_to_subtitle(input_file)
     else:
@@ -177,7 +177,7 @@ Please format your response as follows:
 def translate_chunk(client, config, chunk, context, target_language, token_usage):
     chunk_size = len(chunk)
     chunk_text = "\n".join(
-        [f"[{i+1}]\n{entry.original_text}" for i, entry in enumerate(chunk)]
+        [f"[{i+1}]\n{entry.original_text}  " for i, entry in enumerate(chunk)]
     )
     prompt = f"""You are a professional translator tasked with translating subtitles to {target_language}.
 
@@ -235,7 +235,7 @@ def refine_translation(
 ):
     chunk_size = len(chunk)
     original_text = "\n".join(
-        [f"[{i+1}]\n{entry.original_text}" for i, entry in enumerate(chunk)]
+        [f"[{i+1}]\n{entry.original_text}  " for i, entry in enumerate(chunk)]
     )
     prompt = f"""You are a professional translator specializing in {target_language}. Your task is to refine a rough translation of subtitles.
 
