@@ -14,15 +14,7 @@ python3 main.py -i input.srt -o output.srt -to "chinese"
 subtitle_llm/
 │
 ├── src/
-│   ├── __init__.py
-│   ├── models/
-│   │   ├── __init__.py
-│   │   ├── subtitle.py
-│   │   └── subtitle_entry.py
-│   └── services/
-│       ├── __init__.py
-│       ├── file_handler.py
-│       └── translator.py
+│   ├── to be continued
 │
 ├── tests/
 │   ├── __init__.py

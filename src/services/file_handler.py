@@ -3,28 +3,29 @@ from src.models.subtitle import Subtitle
 from src.models.subtitle_entry import SubtitleEntry
 import chardet
 
+
 class FileHandler:
     @staticmethod
     def read_srt(file_path: str) -> Subtitle:
         # 创建一个新的字幕对象
         subtitle = Subtitle()
         # 定义可能的编码列表
-        encodings = ['utf-8', 'utf-16', 'iso-8859-1', 'windows-1252']
-        
+        encodings = ["utf-8", "utf-16", "iso-8859-1", "windows-1252"]
+
         # 尝试使用不同的编码打开文件
         for encoding in encodings:
             try:
-                with open(file_path, 'r', encoding=encoding) as file:
+                with open(file_path, "r", encoding=encoding) as file:
                     lines = file.readlines()
                     break
             except UnicodeDecodeError:
                 continue
         else:
             # 如果所有编码都失败，尝试检测编码
-            with open(file_path, 'rb') as file:
+            with open(file_path, "rb") as file:
                 raw_data = file.read()
             detected = chardet.detect(raw_data)
-            encoding = detected['encoding']
+            encoding = detected["encoding"]
             lines = raw_data.decode(encoding).splitlines()
 
         def parse_entries(lines):
@@ -40,31 +41,37 @@ class FileHandler:
                 yield entry
 
         def is_timecode(line):
-            return ' --> ' in line and line.replace(':', '').replace(',', '').replace(' --> ', '').isdigit()
+            return (
+                " --> " in line
+                and line.replace(":", "")
+                .replace(",", "")
+                .replace(" --> ", "")
+                .isdigit()
+            )
 
         for entry in parse_entries(lines):
             if len(entry) >= 3 and is_timecode(entry[1]):
                 try:
                     index = int(entry[0])
-                    start, end = entry[1].split(' --> ')
-                    text = '\n'.join(entry[2:])
+                    start, end = entry[1].split(" --> ")
+                    text = "\n".join(entry[2:])
                     subtitle.add_entry(SubtitleEntry(index, start, end, text))
                 except ValueError:
                     # 如果第一行不是有效的索引，将整个条目视为文本
-                    text = '\n'.join(entry)
+                    text = "\n".join(entry)
                     if subtitle.entries:
-                        subtitle.entries[-1].text += '\n' + text
+                        subtitle.entries[-1].text += "\n" + text
             elif subtitle.entries:
                 # 如果不是有效的字幕条目，将其添加到前一个条目的文本中
-                subtitle.entries[-1].text += '\n' + '\n'.join(entry)
+                subtitle.entries[-1].text += "\n" + "\n".join(entry)
 
         return subtitle
 
     @staticmethod
     def write_srt(subtitle, output_file):
-        with open(output_file, 'w', encoding='utf-8') as file:
+        with open(output_file, "w", encoding="utf-8") as file:
             for entry in subtitle.entries:
-                file.write(str(entry) + '\n\n')
+                file.write(str(entry) + "\n\n")
 
     @staticmethod
     def ensure_directory(file_path: str):

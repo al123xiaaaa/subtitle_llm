@@ -10,7 +10,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/main.py",
       "console": "integratedTerminal",
-      "args": ["-i", "./data/input/input_2.srt", "-o", "./data/output/output_2_gpt-4o-mini.srt", "-to", "Chinese"]
+      "args": ["-i", "./data/input/input_1.json", "-o", "./data/output/output_1_deepseek-chat.srt", "-to", "Chinese"]
     },
     {
       "name": "Python: Run unittest for test_file_handler.py",

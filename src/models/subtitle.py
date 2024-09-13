@@ -1,5 +1,6 @@
 from .subtitle_entry import SubtitleEntry
 
+
 class Subtitle:
     def __init__(self):
         self.entries = []
