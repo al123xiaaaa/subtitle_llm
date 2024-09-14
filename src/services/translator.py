@@ -7,6 +7,7 @@ from src.utils.utility_functions import (
     chunk_list,
 )
 import concurrent.futures
+import re
 
 
 def translate_subtitles(input_file, output_file, target_language):
@@ -73,7 +74,10 @@ def translate_subtitles(input_file, output_file, target_language):
         print(f"Refined translation: \n{refined_translation}\n")
 
         # 检查并修复缺失的翻译行
-        if "[Translation missing line" in refined_translation:
+        if (
+            "Translation missing line" in refined_translation
+            or "Translated text" in refined_translation
+        ):
             refined_translation = fix_missing_translations(
                 client,
                 config["translation_model"],
@@ -84,7 +88,26 @@ def translate_subtitles(input_file, output_file, target_language):
             )
             print(f"Fixed translation: \n{refined_translation}\n")
 
-        chunk_results = list(zip(chunk, refined_translation.split("\n")))
+        # Parse the refined_translation with indices
+        translated_lines = refined_translation.strip().split("\n")
+        if len(translated_lines) != 2 * len(chunk):
+            raise ValueError("Mismatch between number of indices and translations.")
+
+        chunk_results = []
+        for i in range(0, len(translated_lines), 2):
+            index_line = translated_lines[i].strip()
+            translation_line = translated_lines[i + 1].strip()
+
+            # Extract index number
+            match = re.match(r"\[(\d+)\]", index_line)
+            if not match:
+                raise ValueError(f"Invalid index format: {index_line}")
+            index = int(match.group(1))
+
+            # Map to the corresponding SubtitleEntry
+            entry = chunk[index - 1]  # Assuming chunk is 0-indexed
+            chunk_results.append((entry, translation_line))
+
         return chunk_results, local_token_usage
 
     # 使用配置中的线程数进行并行处理
@@ -177,7 +200,7 @@ Please format your response as follows:
 def translate_chunk(client, config, chunk, context, target_language, token_usage):
     chunk_size = len(chunk)
     chunk_text = "\n".join(
-        [f"[{i+1}]\n{entry.original_text}  " for i, entry in enumerate(chunk)]
+        [f"[{i+1}]\n[{entry.original_text}]" for i, entry in enumerate(chunk)]
     )
     prompt = f"""You are a professional translator tasked with translating subtitles to {target_language}.
 
@@ -197,11 +220,7 @@ Instructions:
 6. Maintain the EXACT number of entries as the original ({chunk_size}).
 7. Do NOT merge or split subtitle entries. Each [index] must correspond to exactly one subtitle entry.
 8. Do NOT include any additional text, explanations, or the original text in your response.
-9. If one complete subtitle is separated to two lines or more, leave it as is. This is the most important rule! For example:
-    I thought I was going to be an astronomer, but I think I had a
-    我曾以为自己会成为一名天文学家，但我想我
-    a conversation with my advisor that was about being gainfully employed.
-    和我导师的一次关于就业的对话。
+9. If one complete subtitle is separated to two lines or more, leave it as is. This is the most important rule!
 10. Strictly correspond to punctuation marks, do not add or delete punctuation marks at will. Pay special attention to whether there are punctuation marks at the end of sentences, if the original sentence does not have a punctuation mark at the end, then no punctuation mark can be added to the end of the translated sentence!
 
 WARNING: Merging or splitting entries will severely impact subtitle quality. Ensure each [index] corresponds to exactly one translated entry.
@@ -235,7 +254,7 @@ def refine_translation(
 ):
     chunk_size = len(chunk)
     original_text = "\n".join(
-        [f"[{i+1}]\n{entry.original_text}  " for i, entry in enumerate(chunk)]
+        [f"[{i+1}]\n[{entry.original_text}]" for i, entry in enumerate(chunk)]
     )
     prompt = f"""You are a professional translator specializing in {target_language}. Your task is to refine a rough translation of subtitles.
 
@@ -262,11 +281,7 @@ Instructions:
    - Ensure consistency with the surrounding context.
 9. Correct any mistakes or inaccuracies in the rough translation.
 10. Do NOT include any additional text, explanations, or the original text, or 'Here is the refined translation:' 'Note: blah blah blah' etc. in your response.
-11. If one complete subtitle is separated to two lines or more, leave it as is. This is the most important rule! For example:
-    I thought I was going to be an astronomer, but I think I had a
-    我曾以为自己会成为一名天文学家，但我想我
-    a conversation with my advisor that was about being gainfully employed.
-    和我导师的一次关于就业的对话。
+11. If one complete subtitle is separated to two lines or more, leave it as is. This is the most important rule!
 12. Strictly correspond to punctuation marks, do not add or delete punctuation marks at will. Pay special attention to whether there are punctuation marks at the end of sentences, if the original sentence does not have a punctuation mark at the end, then no punctuation mark can be added to the end of the translated sentence!
 13. Every translated text length should be matched with the original text length.
 
@@ -302,7 +317,7 @@ def fix_missing_translations(
 ):
     chunk_size = len(chunk)
     original_text = "\n".join(
-        [f"[{i+1}]\n{entry.original_text}" for i, entry in enumerate(chunk)]
+        [f"[{i+1}]\n[{entry.original_text}]" for i, entry in enumerate(chunk)]
     )
     prompt = f"""You are a professional translator specializing in {target_language}. Your task is to fix missing translations in a subtitle chunk.
 
@@ -313,22 +328,50 @@ Current translation with missing lines:
 {refined_translation}
 
 Instructions:
-1. Focus only on fixing the entries marked as [Translation missing line - index].
-2. Provide translations for these missing entries based on the original text.
-3. Re-translate the whole subtitle chunk.
+1. Identify any lines in the current translation that are missing or incomplete. These lines are indicated in the translation as '[Translation missing line - index]'.
+2. For each missing translation, provide an accurate translation of the corresponding original text line.
+3. Re-translate the entire subtitle chunk, ensuring all lines are translated.
 4. Maintain the exact format and number of entries.
 5. Ensure consistency with the surrounding context.
-6. Do NOT include any additional text, explanations, or the original text, or 'Here is the fixed translation:' etc. in your response.
+6. Do NOT include any additional text, explanations, or the original text, or phrases like 'Here is the fixed translation:' in your response.
 7. Ensure the total number of translated entries (including fixed ones) is exactly {chunk_size}, matching the original chunk size.
 
-Example of the required format(index from [1] to [{chunk_size}]):
-[1]
-[Fixed translated text for entry 1]
+Example:
+
+Suppose the Original text is:
 [2]
-[Fixed translated text for entry 2]
-...
-[{chunk_size}]
-[Fixed translated text for entry {chunk_size}]
+This is an intimate setting for two candidates who have never met.
+[3]
+President Trump won the coin toss.
+[4]
+He chose to deliver the final closing statement of the evening.
+[5]
+Vice President Harris selected the podium to the right.
+
+And the wrong Current translation with missing lines is:
+[2]
+[Translation missing line - 2]
+[3]
+这是一个亲密的环境，适合两位从未见过面的候选人。
+[4]
+特朗普总统赢得了抛硬币的机会。
+[5]
+他选择在今晚进行最后的总结发言。
+[6]
+哈里斯副总统选择了右侧的讲台。
+
+Then the Correct fixed re-translation should be:
+[2]
+这是一个亲密的环境，适合两位从未见过面的候选人。
+[3]
+特朗普总统赢得了抛硬币的机会。
+[4]
+他选择在今晚进行最后的总结发言。
+[5]
+哈里斯副总统选择了右侧的讲台。
+
+Your task is to re-arrange the translation to match the original text paragraphing from start to end! And then fix the missing translation.
+
 
 Now, provide the fixed re-translation following this format:
 """

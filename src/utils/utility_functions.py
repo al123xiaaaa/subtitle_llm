@@ -19,31 +19,43 @@ def count_words(text: str) -> int:
 
 
 def process_translation(original_text: str, translated_text: str) -> str:
-    """Process the translated text to match the original format."""
+    """Process the translated text to match the desired format with indices."""
     original_lines = original_text.split("\n")
     translated_lines = translated_text.split("\n")
     processed_lines = []
+    current_index = None
     current_translation = ""
 
     for line in translated_lines:
-        if line.strip().startswith("[") and line.strip().endswith("]"):
-            if current_translation:
-                processed_lines.append(current_translation.strip())
+        stripped_line = line.strip()
+        # Check if the line is an index, e.g., [1]
+        if re.match(r"\[\d+\]", stripped_line):
+            # If there's an existing translation, append it before starting a new one
+            if current_index is not None and current_translation:
+                processed_lines.append(f"[{current_index}]")
+                processed_lines.append(f"{current_translation.strip()}  ")
+            # Extract the new index
+            current_index = stripped_line.strip("[]")
             current_translation = ""
         else:
             current_translation += line + " "
 
-    if current_translation:
-        processed_lines.append(current_translation.strip())
+    # Append the last translation if exists
+    if current_index is not None and current_translation:
+        processed_lines.append(f"[{current_index}]")
+        processed_lines.append(f"{current_translation.strip()}  ")
 
-    # 确保翻译后的行数与原始行数相同
-    while (
-        len(processed_lines) < len(original_lines) // 2
-    ):  # 因为原始文本每两行表示一个条目
-        # 对于缺失的翻译行，添加占位符
-        processed_lines.append(
-            f"[Translation missing line - {len(processed_lines) + 1}]"
-        )
+    # Ensure the number of translated entries matches the original entries
+    expected_entries = (
+        len(original_lines) // 2
+    )  # Each entry has two lines: index and text
+    actual_entries = len(processed_lines) // 2
+
+    while actual_entries < expected_entries:
+        missing_index = actual_entries + 1
+        processed_lines.append(f"[{missing_index}]")
+        processed_lines.append(f"[Translation missing line - {missing_index}]")
+        actual_entries += 1
 
     return "\n".join(processed_lines)
 
