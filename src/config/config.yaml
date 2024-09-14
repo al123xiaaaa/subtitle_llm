@@ -24,7 +24,7 @@ translation_model_1:
   n: 1
   stream: false
 
-chunk_size: 14
+chunk_size: 38
 threads: 40 # Number of threads for parallel processing
 max_chars: 68
 max_duration: 7.0
@@ -48,7 +48,7 @@ translation_model_3:
   api_key: "sk-71vszCdxPZ5YWupqw37AkfAxjcMkAxB4BQgqDjlv16716MIX"
   model: "gpt-4o-mini"
   max_tokens: 1024
-  temperature: 0.6
+  temperature: 0.3
   top_p: 1.0
   frequency_penalty: 0.0
   presence_penalty: 0.0

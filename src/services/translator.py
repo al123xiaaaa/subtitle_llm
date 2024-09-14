@@ -221,8 +221,22 @@ Instructions:
 7. Do NOT merge or split subtitle entries. Each [index] must correspond to exactly one subtitle entry.
 8. Do NOT include any additional text, explanations, or the original text in your response.
 9. If one complete subtitle is separated to two lines or more, leave it as is. This is the most important rule!
-10. Strictly correspond to punctuation marks, do not add or delete punctuation marks at will. Pay special attention to whether there are punctuation marks at the end of sentences, if the original sentence does not have a punctuation mark at the end, then no punctuation mark can be added to the end of the translated sentence!
-
+10. Pay special attention to whether there are punctuation marks at the end of sentences, if the original sentence does not have a punctuation mark at the end, then no punctuation mark can be added to the end of the translated sentence! For example:
+    [3]
+    I learned a lot in the meantime, so today we are taking this project to the next level.
+    在这段时间里，我学到了很多，所以今天我们将这个项目提升到一个新的水平。
+    [4]
+    I'll show you how to use Siglib embeddings to divide players into teams, how to use the keypoint detection and
+    我将向你展示如何使用 Siglib embeddings 将球员划分为队伍，如何利用关键点检测和
+    [5]
+    homography to create video game style radar view.
+    透视变换创建视频游戏风格的雷达视图。
+    [6]
+    We'll also use the extracted data to calculate some advanced stats like ball trajectory and Voronoi
+    我们还将使用提取的数据计算一些高级统计数据，比如球的轨迹和
+    [7]
+    diagram illustrating team control over the pitch.
+    展示球队对场地控制的 Voronoi diagram。
 WARNING: Merging or splitting entries will severely impact subtitle quality. Ensure each [index] corresponds to exactly one translated entry.
 
 Example of the required format(index from [1] to [{chunk_size}]):
@@ -282,7 +296,22 @@ Instructions:
 9. Correct any mistakes or inaccuracies in the rough translation.
 10. Do NOT include any additional text, explanations, or the original text, or 'Here is the refined translation:' 'Note: blah blah blah' etc. in your response.
 11. If one complete subtitle is separated to two lines or more, leave it as is. This is the most important rule!
-12. Strictly correspond to punctuation marks, do not add or delete punctuation marks at will. Pay special attention to whether there are punctuation marks at the end of sentences, if the original sentence does not have a punctuation mark at the end, then no punctuation mark can be added to the end of the translated sentence!
+12. Pay special attention to whether there are punctuation marks at the end of sentences, if the original sentence does not have a punctuation mark at the end, then no punctuation mark can be added to the end of the translated sentence! For example:
+    [3]
+    I learned a lot in the meantime, so today we are taking this project to the next level.
+    在这段时间里，我学到了很多，所以今天我们将这个项目提升到一个新的水平。
+    [4]
+    I'll show you how to use Siglib embeddings to divide players into teams, how to use the keypoint detection and
+    我将向你展示如何使用 Siglib embeddings 将球员划分为队伍，如何利用关键点检测和
+    [5]
+    homography to create video game style radar view.
+    透视变换创建视频游戏风格的雷达视图。
+    [6]
+    We'll also use the extracted data to calculate some advanced stats like ball trajectory and Voronoi
+    我们还将使用提取的数据计算一些高级统计数据，比如球的轨迹和
+    [7]
+    diagram illustrating team control over the pitch.
+    展示球队对场地控制的 Voronoi diagram。
 13. Every translated text length should be matched with the original text length.
 
 WARNING: Merging or splitting entries will severely impact subtitle quality. Ensure each [index] corresponds to exactly one translated entry.
