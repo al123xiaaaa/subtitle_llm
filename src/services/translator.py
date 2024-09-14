@@ -42,6 +42,12 @@ def translate_subtitles(input_file, output_file, target_language):
     )
     context = f"Overall summary: {overall_summary}\nShort Terms to keep unchanged: {', '.join(untranslatable_terms)}"
     print(f"Context: {context}")
+    
+    # Save context to a file
+    context_file_path = output_file.rsplit('.', 1)[0] + '_context.txt'
+    with open(context_file_path, 'w', encoding='utf-8') as context_file:
+        context_file.write(context)
+    print(f"Context saved to: {context_file_path}")
 
     total_token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     translated_entries = []
