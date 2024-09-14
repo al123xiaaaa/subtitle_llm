@@ -60,6 +60,35 @@ def process_translation(original_text: str, translated_text: str) -> str:
     return "\n".join(processed_lines)
 
 
+def combine_translations_by_index(original_translation, fixed_translation):
+    # Split both translations into lines
+    original_lines = original_translation.strip().split("\n")
+    fixed_lines = [line for line in fixed_translation.strip().split("\n") if line.strip()]
+
+    # Create a dictionary to store the fixed translations
+    fixed_translations = {}
+    for i in range(0, len(fixed_lines), 2):
+        index = fixed_lines[i].strip("[]")
+        translation = fixed_lines[i + 1]
+        fixed_translations[index] = translation
+
+    # Combine the translations
+    combined_lines = []
+    for i in range(0, len(original_lines), 2):
+        index = original_lines[i].strip("[]")
+        translation = original_lines[i + 1]
+
+        # If the line was missing and has been fixed, use the fixed translation
+        if "Translation missing line" in translation and index in fixed_translations:
+            translation = fixed_translations[index]
+
+        combined_lines.append(f"[{index}]")
+        combined_lines.append(translation)
+
+    # Join the combined lines into a single string
+    return "\n".join(combined_lines)
+
+
 def chunk_list(lst: List[Any], chunk_size: int) -> List[List[Any]]:
     """Split a list into chunks of specified size."""
     return [lst[i : i + chunk_size] for i in range(0, len(lst), chunk_size)]

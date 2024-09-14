@@ -5,6 +5,7 @@ from src.utils.utility_functions import (
     load_yaml_config,
     process_translation,
     chunk_list,
+    combine_translations_by_index,
 )
 import concurrent.futures
 import re
@@ -38,10 +39,12 @@ def translate_subtitles(input_file, output_file, target_language):
         ]
     )
     overall_summary, untranslatable_terms = generate_summary_and_terms(
-        client_summary, config["summary_model"], subtitle_text_for_summary, target_language
+        client_summary,
+        config["summary_model"],
+        subtitle_text_for_summary,
+        target_language,
     )
     context = f"Overall summary: {overall_summary}\nShort Terms: {', '.join(untranslatable_terms)}"
-    print(f"Context: {context}")
 
     context = review_context_in_console(context)
     # Save context to a file
@@ -68,6 +71,23 @@ def translate_subtitles(input_file, output_file, target_language):
             target_language,
             local_token_usage,
         )
+        # 检查并修复缺失的翻译行
+        if (
+            "Translation missing line" in rough_translation
+            or "Translated text" in rough_translation
+        ):
+            rough_missing_translation = fix_missing_translations(
+                client,
+                config["translation_model"],
+                chunk,
+                rough_translation,
+                target_language,
+                local_token_usage,
+            )
+            rough_translation = combine_translations_by_index(
+                rough_translation, rough_missing_translation
+            )
+            rough_translation = re_translate(client, config["translation_model"], chunk, rough_translation, target_language, local_token_usage)
         print(f"Rough translation: \n{rough_translation}\n")
         refined_translation = refine_translation(
             client,
@@ -78,14 +98,13 @@ def translate_subtitles(input_file, output_file, target_language):
             target_language,
             local_token_usage,
         )
-        print(f"Refined translation: \n{refined_translation}\n")
 
         # 检查并修复缺失的翻译行
         if (
             "Translation missing line" in refined_translation
             or "Translated text" in refined_translation
         ):
-            refined_translation = fix_missing_translations(
+            refined_missing_translation = fix_missing_translations(
                 client,
                 config["translation_model"],
                 chunk,
@@ -93,8 +112,11 @@ def translate_subtitles(input_file, output_file, target_language):
                 target_language,
                 local_token_usage,
             )
-            print(f"Fixed translation: \n{refined_translation}\n")
-
+            refined_translation = combine_translations_by_index(
+                refined_translation, refined_missing_translation
+            )
+            refined_translation = re_translate(client, config["translation_model"], chunk, refined_translation, target_language, local_token_usage)
+        print(f"Refined translation: \n{refined_translation}\n")
         # Parse the refined_translation with indices
         translated_lines = refined_translation.strip().split("\n")
         if len(translated_lines) != 2 * len(chunk):
@@ -399,72 +421,117 @@ Now, provide your refined translation following this format:
 
 
 def fix_missing_translations(
-    client, config, chunk, refined_translation, target_language, token_usage
+    client, config, chunk, processed_lines, target_language, token_usage
 ):
     chunk_size = len(chunk)
     original_text = "\n".join(
         [f"[{i+1}]\n[{entry.original_text}]" for i, entry in enumerate(chunk)]
     )
+    missing_lines = {}
+    
+    # Split the processed_lines string into a list
+    processed_lines_list = processed_lines.split('\n')
+    
+    for i in range(0, len(processed_lines_list), 2):
+        if i + 1 < len(processed_lines_list):
+            # Extract index number
+            index = processed_lines_list[i].strip("[]")
+            # Check if the line contains 'Translation missing line'
+            if "Translation missing line" in processed_lines_list[i + 1]:
+                missing_lines[index] = processed_lines_list[i + 1].strip("[]")
+
+    # If no missing lines are found, return the original processed_lines
+    if not missing_lines:
+        return processed_lines
+
+    is_single_missing_line = len(missing_lines) == 1
+    if is_single_missing_line:
+        missing_index = next(iter(missing_lines))
+        example_format = f"""Example of the required format:
+[{missing_index}]
+[Translated text for entry {missing_index}]
+"""
+    else:
+        example_format = f"""Example of the required format(index from [{min(missing_lines)}] to [{max(missing_lines)}]):
+[{min(missing_lines)}]
+[Translated text for entry {min(missing_lines)}]
+...
+[{max(missing_lines)}]
+[Translated text for entry {max(missing_lines)}]
+"""
+
     prompt = f"""You are a professional translator specializing in {target_language}. Your task is to fix missing translations in a subtitle chunk.
 
 Original text:
 {original_text}
 
-Current translation with missing lines:
-{refined_translation}
+Translation missing lines [{", ".join([str(index) for index in missing_lines])}]:
+{"\n".join([f"[{index}]\n[{line}]" for index, line in missing_lines.items()])}
 
 Instructions:
-1. Identify any lines in the current translation that are missing or incomplete. These lines are indicated in the translation as '[Translation missing line - index]'.
-2. For each missing translation, provide an accurate translation of the corresponding original text line.
-3. Re-translate the entire subtitle chunk, ensuring all lines are translated.
-4. Maintain the exact format and number of entries.
-5. Ensure consistency with the surrounding context.
-6. Do NOT include any additional text, explanations, or the original text, or phrases like 'Here is the fixed translation:' in your response.
-7. Ensure the total number of translated entries (including fixed ones) is exactly {chunk_size}, matching the original chunk size.
+1. For each missing translation, provide an accurate translation of the corresponding original text line.
+2. Maintain the exact format and number of entries.
+3. Do NOT include any additional text, explanations, or the original text, or phrases like 'Here is the fixed translation:' in your response.
 
-Example:
+{example_format}
 
-Suppose the Original text is:
-[2]
-This is an intimate setting for two candidates who have never met.
-[3]
-President Trump won the coin toss.
-[4]
-He chose to deliver the final closing statement of the evening.
-[5]
-Vice President Harris selected the podium to the right.
+Now, provide the translation following this format:
+"""
+    result = LLMClientFactory.create_completion(
+        client, config, [{"role": "user", "content": prompt}]
+    )
+    fixed_translation = result["content"]
+    usage = result["usage"]
+    # 累积令牌使用量
+    token_usage["prompt_tokens"] += usage.prompt_tokens
+    token_usage["completion_tokens"] += usage.completion_tokens
+    token_usage["total_tokens"] += usage.total_tokens
+    return fixed_translation
 
-And the wrong Current translation with missing lines is:
-[2]
-[Translation missing line - 2]
-[3]
-这是一个亲密的环境，适合两位从未见过面的候选人。
-[4]
-特朗普总统赢得了抛硬币的机会。
-[5]
-他选择在今晚进行最后的总结发言。
-[6]
-哈里斯副总统选择了右侧的讲台。
 
-Then the Correct fixed re-translation should be:
-[2]
-这是一个亲密的环境，适合两位从未见过面的候选人。
-[3]
-特朗普总统赢得了抛硬币的机会。
-[4]
-他选择在今晚进行最后的总结发言。
-[5]
-哈里斯副总统选择了右侧的讲台。
+def re_translate(
+    client, config, chunk, translation, target_language, token_usage
+):
+    chunk_size = len(chunk)
+    original_text = "\n".join(
+        [f"[{i+1}]\n[{entry.original_text}]" for i, entry in enumerate(chunk)]
+    )
+    prompt = f"""You are a professional translator specializing in {target_language}. Your task is to totally re-translate the following subtitle chunk in order to eliminate the repeated translated lines.
 
-Your task is to re-arrange the translation to match the original text paragraphing from start to end! And then fix the missing translation.
+Original text:
+{original_text}
 
+Wrong translation:
+{translation}
+
+Instructions:
+1. Retranslate the entire subtitle chunk, ensure all {chunk_size} lines are translated.
+2. Maintain the exact format and number of entries.
+3. Do NOT include any additional text, explanations, or the original text, or phrases like 'Here is the fixed translation:' in your response.
+4. Ensure the total number of translated entries (including fixed ones) is exactly {chunk_size}, matching the original chunk size.
+
+Example of the required xml format:
+<response>
+    <reflection_thinking>
+        You need to think step by step as a list to determine the wrong arrangement or wrong translation.
+    </reflection_thinking>
+    <translation>
+        [1]
+        [Translated text for entry 1]
+        [2]
+        [Translated text for entry 2]
+        ...
+        [{chunk_size}]
+        [Translated text for entry {chunk_size}]
+    </translation>
+</response>
 
 Now, provide the fixed re-translation following this format:
 """
     result = LLMClientFactory.create_completion(
         client, config, [{"role": "user", "content": prompt}]
     )
-    fixed_translation = result["content"]
+    fixed_translation = re.search(r'<translation>(.*?)</translation>', result["content"], re.DOTALL).group(1).strip()
     usage = result["usage"]
     # 累积令牌使用量
     token_usage["prompt_tokens"] += usage.prompt_tokens
