@@ -42,10 +42,11 @@ def translate_subtitles(input_file, output_file, target_language):
     )
     context = f"Overall summary: {overall_summary}\nShort Terms to keep unchanged: {', '.join(untranslatable_terms)}"
     print(f"Context: {context}")
-    
+
+    context = review_context_in_console(context)
     # Save context to a file
-    context_file_path = output_file.rsplit('.', 1)[0] + '_context.txt'
-    with open(context_file_path, 'w', encoding='utf-8') as context_file:
+    context_file_path = output_file.rsplit(".", 1)[0] + "_context.txt"
+    with open(context_file_path, "w", encoding="utf-8") as context_file:
         context_file.write(context)
     print(f"Context saved to: {context_file_path}")
 
@@ -166,6 +167,56 @@ def translate_subtitles(input_file, output_file, target_language):
     subtitle.entries = translated_entries
     FileHandler.write_srt(subtitle, output_file)
     return subtitle
+
+
+def review_context_in_console(context):
+    """Displays the context in the console and allows the user to review and edit it."""
+    print("\n===== Context Review =====")
+    print(context)
+    print("==========================\n")
+
+    while True:
+        user_input = (
+            input("Choose an action: (Y) Proceed, (E) Edit, (A) Abort: ")
+            .strip()
+            .lower()
+        )
+        if user_input == "y":
+            print("Proceeding with the current context...")
+            return context
+        elif user_input == "e":
+            print("Enter your edited context. Press Enter on an empty line to finish.")
+            edited_lines = []
+            while True:
+                line = input()
+                if line == "":
+                    break
+                edited_lines.append(line)
+            edited_context = "\n".join(edited_lines)
+            if edited_context.strip() == "":
+                print("No changes made. Keeping the original context.")
+                return context
+            else:
+                print("\n===== Edited Context =====")
+                print(edited_context)
+                print("==========================\n")
+                # Confirm the edited context
+                confirm = (
+                    input("Do you want to use the edited context? (Y/N): ")
+                    .strip()
+                    .lower()
+                )
+                if confirm == "y":
+                    return edited_context
+                else:
+                    print("Discarding edits. Keeping the original context.")
+        elif user_input == "a":
+            print("Aborting the translation process as per user request.")
+            exit(0)
+        else:
+            print(
+                "Invalid input. Please enter 'Y' to proceed, 'E' to edit, or 'A' to abort."
+            )
 
 
 def generate_summary_and_terms(client, config, content):
