@@ -38,9 +38,9 @@ def translate_subtitles(input_file, output_file, target_language):
         ]
     )
     overall_summary, untranslatable_terms = generate_summary_and_terms(
-        client_summary, config["summary_model"], subtitle_text_for_summary
+        client_summary, config["summary_model"], subtitle_text_for_summary, target_language
     )
-    context = f"Overall summary: {overall_summary}\nShort Terms to keep unchanged: {', '.join(untranslatable_terms)}"
+    context = f"Overall summary: {overall_summary}\nShort Terms: {', '.join(untranslatable_terms)}"
     print(f"Context: {context}")
 
     context = review_context_in_console(context)
@@ -219,11 +219,11 @@ def review_context_in_console(context):
             )
 
 
-def generate_summary_and_terms(client, config, content):
+def generate_summary_and_terms(client, config, content, target_language):
     prompt = f"""Analyze the following subtitle content and provide two outputs(response in Chinese):
 
 1. A brief summary of the content.
-2. A list of technical terms, proper nouns, or specific terminology that should not be translated.
+2. A list of technical terms, proper nouns, or specific terminology with {target_language} translation.
 
 Subtitle content:
 {content}
@@ -232,9 +232,9 @@ Please format your response as follows:
 总结: [Your summary here]
 
 短语术语:
-- [Term 1]
-- [Term 2]
-- [Term 3]
+- [Term 1]({target_language} translation)
+- [Term 2]({target_language} translation)
+- [Term 3]({target_language} translation)
 ...
 """
     result = LLMClientFactory.create_completion(
