@@ -87,7 +87,14 @@ def translate_subtitles(input_file, output_file, target_language):
             rough_translation = combine_translations_by_index(
                 rough_translation, rough_missing_translation
             )
-            rough_translation = re_translate(client, config["translation_model"], chunk, rough_translation, target_language, local_token_usage)
+            rough_translation = re_translate(
+                client,
+                config["translation_model"],
+                chunk,
+                rough_translation,
+                target_language,
+                local_token_usage,
+            )
         print(f"Rough translation: \n{rough_translation}\n")
         refined_translation = refine_translation(
             client,
@@ -115,7 +122,14 @@ def translate_subtitles(input_file, output_file, target_language):
             refined_translation = combine_translations_by_index(
                 refined_translation, refined_missing_translation
             )
-            refined_translation = re_translate(client, config["translation_model"], chunk, refined_translation, target_language, local_token_usage)
+            refined_translation = re_translate(
+                client,
+                config["translation_model"],
+                chunk,
+                refined_translation,
+                target_language,
+                local_token_usage,
+            )
         print(f"Refined translation: \n{refined_translation}\n")
         # Parse the refined_translation with indices
         translated_lines = refined_translation.strip().split("\n")
@@ -428,10 +442,10 @@ def fix_missing_translations(
         [f"[{i+1}]\n[{entry.original_text}]" for i, entry in enumerate(chunk)]
     )
     missing_lines = {}
-    
+
     # Split the processed_lines string into a list
-    processed_lines_list = processed_lines.split('\n')
-    
+    processed_lines_list = processed_lines.split("\n")
+
     for i in range(0, len(processed_lines_list), 2):
         if i + 1 < len(processed_lines_list):
             # Extract index number
@@ -460,13 +474,19 @@ def fix_missing_translations(
 [Translated text for entry {max(missing_lines)}]
 """
 
+    # Precompute the joined missing lines
+    missing_lines_formatted = "\n".join(
+        [f"[{index}]\n[{line}]" for index, line in missing_lines.items()]
+    )
+
+    # Construct the prompt using the precomputed string
     prompt = f"""You are a professional translator specializing in {target_language}. Your task is to fix missing translations in a subtitle chunk.
 
 Original text:
 {original_text}
 
 Translation missing lines [{", ".join([str(index) for index in missing_lines])}]:
-{"\n".join([f"[{index}]\n[{line}]" for index, line in missing_lines.items()])}
+{missing_lines_formatted}
 
 Instructions:
 1. For each missing translation, provide an accurate translation of the corresponding original text line.
@@ -489,9 +509,7 @@ Now, provide the translation following this format:
     return fixed_translation
 
 
-def re_translate(
-    client, config, chunk, translation, target_language, token_usage
-):
+def re_translate(client, config, chunk, translation, target_language, token_usage):
     chunk_size = len(chunk)
     original_text = "\n".join(
         [f"[{i+1}]\n[{entry.original_text}]" for i, entry in enumerate(chunk)]
@@ -531,7 +549,11 @@ Now, provide the fixed re-translation following this format:
     result = LLMClientFactory.create_completion(
         client, config, [{"role": "user", "content": prompt}]
     )
-    fixed_translation = re.search(r'<translation>(.*?)</translation>', result["content"], re.DOTALL).group(1).strip()
+    fixed_translation = (
+        re.search(r"<translation>(.*?)</translation>", result["content"], re.DOTALL)
+        .group(1)
+        .strip()
+    )
     usage = result["usage"]
     # 累积令牌使用量
     token_usage["prompt_tokens"] += usage.prompt_tokens
