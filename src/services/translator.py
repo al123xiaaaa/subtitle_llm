@@ -519,7 +519,7 @@ def re_translate(client, config, chunk, translation, target_language, token_usag
 Original text:
 {original_text}
 
-Wrong translation:
+Intermediate translation:
 {translation}
 
 Instructions:
@@ -527,21 +527,28 @@ Instructions:
 2. Maintain the exact format and number of entries.
 3. Do NOT include any additional text, explanations, or the original text, or phrases like 'Here is the fixed translation:' in your response.
 4. Ensure the total number of translated entries (including fixed ones) is exactly {chunk_size}, matching the original chunk size.
+5. Reflect before you start to translate.
 
 Example of the required xml format:
 <response>
-    <reflection_thinking>
-        You need to think step by step as a list to determine the wrong arrangement or wrong translation.
-    </reflection_thinking>
-    <translation>
-        [1]
-        [Translated text for entry 1]
-        [2]
-        [Translated text for entry 2]
-        ...
-        [{chunk_size}]
-        [Translated text for entry {chunk_size}]
-    </translation>
+<reflection_thinking>
+(一行一行比对 Original text 和 Intermediate translation，确定错误翻译或错误排列)
+<wrong_list>
+<wrong>wrong 1</wrong>
+<wrong>wrong 2</wrong>
+<wrong>wrong 3</wrong>
+...
+</wrong_list>
+</reflection_thinking>
+<translation>
+[1]
+[Translated text for entry 1]
+[2]
+[Translated text for entry 2]
+...
+[{chunk_size}]
+[Translated text for entry {chunk_size}]
+</translation>
 </response>
 
 Now, provide the fixed re-translation following this format:
