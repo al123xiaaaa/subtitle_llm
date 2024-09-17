@@ -4,6 +4,7 @@ import platform
 import tempfile
 import json
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +39,11 @@ class TUIManager:
 
         if system == "Windows":
             if venv_activate:
-                # 使用 '&&' 连接激活虚拟环境和运行命令
-                full_command = (
-                    f'cmd /c "cd /d "{project_root}" && "{venv_activate}" && {command}"'
-                )
+                # 使用 'start' 命令打开新的命令提示符窗口，激活虚拟环境并运行命令
+                full_command = f'start cmd /k "cd /d "{project_root}" && "{venv_activate}" && {command}"'
             else:
                 # 如果未找到虚拟环境，直接运行命令
-                full_command = f'cmd /c "cd /d "{project_root}" && {command}"'
+                full_command = f'start cmd /k "cd /d "{project_root}" && {command}"'
         elif system == "Darwin":  # macOS
             if venv_activate:
                 # 使用 AppleScript 激活虚拟环境并运行命令
@@ -83,34 +82,35 @@ class TUIManager:
 
         # 启动新的终端
         try:
-            if system == "Darwin":
+            if system == "Windows":
+                subprocess.run(full_command, shell=True, check=True)
+            elif system == "Darwin":
                 subprocess.run(full_command, check=True)
             else:
-                subprocess.Popen(full_command, shell=(system == "Windows"))
+                subprocess.Popen(full_command, shell=False)
             logger.info("TUI launched successfully.")
         except subprocess.CalledProcessError as e:
             logger.error(f"Failed to launch TUI: {e}")
             raise
 
-        # 等待用户完成 TUI 操作
-        # 这里简化处理，等待用户按回车继续
-        input("请在 TUI 完成后按回车继续...")
-
-        # 读取更新后的数据
-        try:
-            with open(tmpfile_path, "r", encoding="utf-8") as f:
-                updated_data = json.load(f)
-            logger.info("Updated data retrieved from TUI.")
-            return updated_data
-        except Exception as e:
-            logger.error(f"Failed to read updated data: {e}")
-            raise
-        finally:
+        # 等待 TUI 应用完成并更新临时文件
+        while True:
             try:
-                os.remove(tmpfile_path)
-                logger.info("Temporary file removed.")
-            except OSError as e:
-                logger.warning(f"Failed to remove temporary file: {e}")
+                with open(tmpfile_path, "r", encoding="utf-8") as f:
+                    updated_data = json.load(f)
+                if "tui_completed" in updated_data and updated_data["tui_completed"]:
+                    logger.info("TUI completed. Retrieving updated data.")
+                    return updated_data
+            except json.JSONDecodeError:
+                # 文件可能正在被写入，等待一段时间后重试
+                time.sleep(0.5)
+            except FileNotFoundError:
+                logger.error(
+                    "Temporary file not found. TUI may have encountered an error."
+                )
+                return None
+
+        return None
 
     def find_virtualenv_activate(self, project_root):
         """

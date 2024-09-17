@@ -101,7 +101,9 @@ class CustomHandlingApp(App):
 
     async def on_key(self, event: events.Key) -> None:
         table = self.query_one("#subtitles_table", DataTable)
-        if event.key == "space":
+        if event.key == "q":
+            await self.on_quit()
+        elif event.key == "space":
             # 获取当前光标所在行
             row_index = table.cursor_row
             print(f"光标所在行: {row_index}")
@@ -184,3 +186,25 @@ class CustomHandlingApp(App):
         except Exception as e:
             logger.error(f"Failed to write selected entries to temp file: {e}")
             self.query_one("#status", Static).update("Failed to write selected lines.")
+
+    def on_quit(self):
+        # Update the temporary file with the completed flag
+        data = {
+            "selected_subtitle_entries": [
+                entry.to_dict()
+                for entry in self.subtitle_entries
+                if entry.needs_retranslation
+            ],
+            "target_language": self.target_language,
+            "config": self.config,
+            "tui_completed": True,
+        }
+        try:
+            with open(self.temp_file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+            logger.info("TUI completed. Updated data written to temporary file.")
+        except Exception as e:
+            logger.error(f"Failed to write updated data to temp file: {e}")
+
+        # Quit the application
+        self.exit()
