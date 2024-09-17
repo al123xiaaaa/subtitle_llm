@@ -76,7 +76,9 @@ class LLMClientFactory:
             content = response["choices"][0]["message"]["content"].strip()
             # 计算令牌使用情况
             prompt_tokens = LLMClientFactory.num_tokens_from_messages(messages, model)
-            completion_tokens = len(tiktoken.encoding_for_model(model).encode(content))
+            completion_tokens = LLMClientFactory.num_tokens_from_messages(
+                [{"content": content}], model
+            )
             usage = {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,

@@ -1,0 +1,20 @@
+DataTable {
+  border: solid #FFFFFF;
+  background: #e2d9d9;
+  color: #FFFFFF;
+}
+
+DataTable .row--selected {
+  background: #3399FF;
+  color: #FFFFFF;
+}
+
+Button {
+  margin: 1 1;
+}
+
+#status {
+  height: 1;
+  background: #333333;
+  color: #FFFFFF;
+}

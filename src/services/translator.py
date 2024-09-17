@@ -1,17 +1,64 @@
 from src.services.file_handler import FileHandler
 from src.services.llm_client_factory import LLMClientFactory
-from src.services.json_handler import JSONSubtitleHandler  # 新增导入
+from src.services.json_handler import JSONSubtitleHandler
 from src.utils.utility_functions import (
     load_yaml_config,
     process_translation,
     chunk_list,
     combine_translations_by_index,
 )
+from src.services.tui_manager import TUIManager
+from src.utils.prompts import (
+    GENERATE_SUMMARY_PROMPT,
+    TRANSLATE_CHUNK_PROMPT,
+    REFINE_TRANSLATION_PROMPT,
+    FIX_MISSING_TRANSLATIONS_PROMPT,
+    RE_TRANSLATE_PROMPT,
+)
+from src.models.subtitle_entry import SubtitleEntry
+
 import concurrent.futures
 import re
+import threading
+import sys
+import os
+
+# 配置日志
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-def translate_subtitles(input_file, output_file, target_language):
+class InputWithTimeout:
+    """辅助类，用于在指定时间内获取用户输入。"""
+
+    def __init__(self, prompt, timeout):
+        self.prompt = prompt
+        self.timeout = timeout
+        self.input = None
+        self.input_received = threading.Event()
+
+    def _get_input(self):
+        try:
+            self.input = input(self.prompt)
+            self.input_received.set()
+        except EOFError:
+            # 处理EOF错误，例如当输入被关闭时
+            self.input_received.set()
+
+    def get_input(self):
+        thread = threading.Thread(target=self._get_input)
+        thread.daemon = True
+        thread.start()
+        self.input_received.wait(self.timeout)
+        if self.input_received.is_set():
+            return self.input
+        else:
+            return None
+
+
+def translate_subtitles(input_file, output_file, target_language, custom_handling=True):
     config = load_yaml_config()
     client = LLMClientFactory.create_client(config["translation_model"])
     client_summary = LLMClientFactory.create_client(config["summary_model"])
@@ -51,18 +98,27 @@ def translate_subtitles(input_file, output_file, target_language):
     context_file_path = output_file.rsplit(".", 1)[0] + "_context.txt"
     with open(context_file_path, "w", encoding="utf-8") as context_file:
         context_file.write(context)
-    print(f"Context saved to: {context_file_path}")
+    logger.info(f"Context saved to: {context_file_path}")
 
     total_token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     translated_entries = []
 
+    # 初始化 TUIManager
+    run_script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "run_custom_handling.py"
+    )
+    run_script = os.path.abspath(run_script)
+    tui_manager = TUIManager(run_script)
+
     def process_chunk(chunk, chunk_index, total_chunks):
-        print(f"Processing chunk {chunk_index}/{total_chunks}")
+        logger.info(f"Processing chunk {chunk_index}/{total_chunks}")
         local_token_usage = {
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
         }
+
+        # 初始翻译
         rough_translation = translate_chunk(
             client,
             config["translation_model"],
@@ -71,31 +127,14 @@ def translate_subtitles(input_file, output_file, target_language):
             target_language,
             local_token_usage,
         )
-        # 检查并修复缺失的翻译行
-        if (
-            "Translation missing line" in rough_translation
-            or "Translated text" in rough_translation
-        ):
-            rough_missing_translation = fix_missing_translations(
-                client,
-                config["translation_model"],
-                chunk,
-                rough_translation,
-                target_language,
-                local_token_usage,
-            )
-            rough_translation = combine_translations_by_index(
-                rough_translation, rough_missing_translation
-            )
-            rough_translation = re_translate(
-                client,
-                config["translation_model"],
-                chunk,
-                rough_translation,
-                target_language,
-                local_token_usage,
-            )
-        print(f"Rough translation: \n{rough_translation}\n")
+
+        # 处理缺失的翻译
+        rough_translation = handle_missing_translations(
+            rough_translation, chunk, chunk_index, total_chunks, local_token_usage
+        )
+        logger.info(f"Rough translation: \n{rough_translation}\n")
+
+        # 精炼翻译
         refined_translation = refine_translation(
             client,
             config["translation_model"],
@@ -106,55 +145,111 @@ def translate_subtitles(input_file, output_file, target_language):
             local_token_usage,
         )
 
-        # 检查并修复缺失的翻译行
+        # 再次处理缺失的翻译
+        refined_translation = handle_missing_translations(
+            refined_translation, chunk, chunk_index, total_chunks, local_token_usage
+        )
+        logger.info(f"Refined translation: \n{refined_translation}\n")
+
+        # 解析翻译结果
+        chunk_results = parse_translation_results(refined_translation, chunk)
+
+        return chunk_results, local_token_usage
+
+    def handle_missing_translations(
+        translation, chunk, chunk_index, total_chunks, local_token_usage
+    ):
         if (
-            "Translation missing line" in refined_translation
-            or "Translated text" in refined_translation
+            "Translation missing line" in translation
+            or "Translated text" in translation
+            or any(entry.translated_text == "" for entry in chunk)
         ):
-            refined_missing_translation = fix_missing_translations(
-                client,
-                config["translation_model"],
-                chunk,
-                refined_translation,
-                target_language,
-                local_token_usage,
+            if custom_handling:
+                return handle_custom_translation(
+                    translation, chunk, chunk_index, total_chunks, local_token_usage
+                )
+            else:
+                return handle_default_translation(translation, chunk, local_token_usage)
+        return translation
+
+    def handle_custom_translation(
+        translation, chunk, chunk_index, total_chunks, local_token_usage
+    ):
+        data = {
+            "subtitle_entries": [entry.to_dict() for entry in chunk],
+            "target_language": target_language,
+            "config": config,
+        }
+        data_need_to_translate = tui_manager.open_new_terminal(data)
+        selected_entries = data_need_to_translate.get("selected_subtitle_entries", [])
+
+        if selected_entries:
+            selected_subtitles = [
+                SubtitleEntry.from_dict(entry) for entry in selected_entries
+            ]
+            selected_chunk_results, selected_token_usage = process_chunk(
+                selected_subtitles, chunk_index, total_chunks
             )
-            refined_translation = combine_translations_by_index(
-                refined_translation, refined_missing_translation
+
+            for key in local_token_usage:
+                local_token_usage[key] += selected_token_usage.get(key, 0)
+
+            return "\n".join(
+                [
+                    f"[{entry.index}]\n{entry.translated_text}"
+                    for entry in selected_subtitles
+                ]
             )
-            refined_translation = re_translate(
-                client,
-                config["translation_model"],
-                chunk,
-                refined_translation,
-                target_language,
-                local_token_usage,
-            )
-        print(f"Refined translation: \n{refined_translation}\n")
-        # Parse the refined_translation with indices
-        translated_lines = refined_translation.strip().split("\n")
+        else:
+            logger.info("No entries selected for re-translation.")
+            return translation
+
+    def handle_default_translation(translation, chunk, local_token_usage):
+        rough_missing_translation = fix_missing_translations(
+            client,
+            config["translation_model"],
+            chunk,
+            translation,
+            target_language,
+            local_token_usage,
+        )
+        combined_translation = combine_translations_by_index(
+            translation, rough_missing_translation
+        )
+        return re_translate(
+            client,
+            config["translation_model"],
+            chunk,
+            combined_translation,
+            target_language,
+            local_token_usage,
+        )
+
+    def parse_translation_results(translation, chunk):
+        translated_lines = translation.strip().split("\n")
         if len(translated_lines) != 2 * len(chunk):
             raise ValueError("Mismatch between number of indices and translations.")
 
         chunk_results = []
         for i in range(0, len(translated_lines), 2):
-            index_line = translated_lines[i].strip()
-            translation_line = translated_lines[i + 1].strip()
-
-            # Extract index number
-            match = re.match(r"\[(\d+)\]", index_line)
-            if not match:
-                raise ValueError(f"Invalid index format: {index_line}")
-            index = int(match.group(1))
-
-            # Map to the corresponding SubtitleEntry
-            entry = chunk[index - 1]  # Assuming chunk is 0-indexed
+            index_line, translation_line = (
+                translated_lines[i].strip(),
+                translated_lines[i + 1].strip(),
+            )
+            index = parse_index(index_line)
+            entry = chunk[index - 1]  # 假设 chunk 是 0 索引
             chunk_results.append((entry, translation_line))
 
-        return chunk_results, local_token_usage
+        return chunk_results
+
+    def parse_index(index_line):
+        match = re.match(r"\[(\d+)\]", index_line)
+        if not match:
+            raise ValueError(f"Invalid index format: {index_line}")
+        return int(match.group(1))
 
     # 使用配置中的线程数进行并行处理
-    max_workers = config["threads"]  # 默认 40
+    max_workers = config.get("threads", 4)  # 默认 4
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         filtered_chunks = []
@@ -184,13 +279,14 @@ def translate_subtitles(input_file, output_file, target_language):
                     entry.set_translated_text(refined_text.strip())
                     translated_entries.append(entry)
             except Exception as e:
-                print(f"An error occurred while processing a chunk: {e}")
+                logger.error(f"An error occurred while processing a chunk: {e}")
                 # 可以在这里添加更多的错误处理逻辑
 
     # 最后，打印总共使用的令牌数量
-    print(f"总共使用的令牌数量: {total_token_usage['total_tokens']}")
-    print(f"  提示令牌: {total_token_usage['prompt_tokens']}")
-    print(f"  完成令牌: {total_token_usage['completion_tokens']}")
+    logger.info(f"总共使用的令牌数量: {total_token_usage['total_tokens']}")
+    logger.info(f"  提示令牌: {total_token_usage['prompt_tokens']}")
+    logger.info(f"  完成令牌: {total_token_usage['completion_tokens']}")
+
     # 添加非常短的字幕行，不进行翻译
     for entry in subtitle.entries:
         if len(entry.original_text.strip()) <= 4:
@@ -212,67 +308,59 @@ def review_context_in_console(context):
     print("==========================\n")
 
     while True:
-        user_input = (
-            input("Choose an action: (Y) Proceed, (E) Edit, (A) Abort: ")
-            .strip()
-            .lower()
-        )
-        if user_input == "y":
-            print("Proceeding with the current context...")
-            return context
-        elif user_input == "e":
-            print("Enter your edited context. Press Enter on an empty line to finish.")
-            edited_lines = []
-            while True:
-                line = input()
-                if line == "":
-                    break
-                edited_lines.append(line)
-            edited_context = "\n".join(edited_lines)
-            if edited_context.strip() == "":
-                print("No changes made. Keeping the original context.")
+        prompt = "Choose an action: (Y) Proceed, (E) Edit, (A) Abort: "
+        input_with_timeout = InputWithTimeout(prompt, 60)
+        user_input = input_with_timeout.get_input()
+
+        if user_input is not None:
+            user_input = user_input.strip().lower()
+            if user_input == "y":
+                print("Proceeding with the current context...")
                 return context
-            else:
-                print("\n===== Edited Context =====")
-                print(edited_context)
-                print("==========================\n")
-                # Confirm the edited context
-                confirm = (
-                    input("Do you want to use the edited context? (Y/N): ")
-                    .strip()
-                    .lower()
+            elif user_input == "e":
+                print(
+                    "Enter your edited context. Press Enter on an empty line to finish."
                 )
-                if confirm == "y":
-                    return edited_context
+                edited_lines = []
+                while True:
+                    line = input()
+                    if line == "":
+                        break
+                    edited_lines.append(line)
+                edited_context = "\n".join(edited_lines)
+                if edited_context.strip() == "":
+                    print("No changes made. Keeping the original context.")
+                    return context
                 else:
-                    print("Discarding edits. Keeping the original context.")
-        elif user_input == "a":
-            print("Aborting the translation process as per user request.")
-            exit(0)
+                    print("\n===== Edited Context =====")
+                    print(edited_context)
+                    print("==========================\n")
+                    # Confirm the edited context
+                    confirm_prompt = "Do you want to use the edited context? (Y/N): "
+                    confirm_input = InputWithTimeout(confirm_prompt, 60).get_input()
+                    if (
+                        confirm_input is not None
+                        and confirm_input.strip().lower() == "y"
+                    ):
+                        return edited_context
+                    else:
+                        print("Discarding edits. Keeping the original context.")
+            elif user_input == "a":
+                print("Aborting the translation process as per user request.")
+                sys.exit(0)
+            else:
+                print(
+                    "Invalid input. Please enter 'Y' to proceed, 'E' to edit, or 'A' to abort."
+                )
         else:
-            print(
-                "Invalid input. Please enter 'Y' to proceed, 'E' to edit, or 'A' to abort."
-            )
+            print("\n60秒已到，自动继续后续流程。")
+            return context
 
 
 def generate_summary_and_terms(client, config, content, target_language):
-    prompt = f"""Analyze the following subtitle content and provide two outputs(response in Chinese):
-
-1. A brief summary of the content.
-2. A list of technical terms, proper nouns, or specific terminology with {target_language} translation.
-
-Subtitle content:
-{content}
-
-Please format your response as follows:
-总结: [Your summary here]
-
-短语术语:
-- [Term 1]({target_language} translation)
-- [Term 2]({target_language} translation)
-- [Term 3]({target_language} translation)
-...
-"""
+    prompt = GENERATE_SUMMARY_PROMPT.format(
+        target_language=target_language, content=content
+    )
     result = LLMClientFactory.create_completion(
         client, config, [{"role": "user", "content": prompt}]
     )
@@ -290,70 +378,32 @@ Please format your response as follows:
     return summary, terms
 
 
+def update_token_usage(token_usage, usage):
+    """更新令牌使用量"""
+    for key in ["prompt_tokens", "completion_tokens", "total_tokens"]:
+        if isinstance(usage, dict):
+            token_usage[key] += usage.get(key, 0)
+        else:
+            token_usage[key] += getattr(usage, key, 0)
+
+
 def translate_chunk(client, config, chunk, context, target_language, token_usage):
     chunk_size = len(chunk)
     chunk_text = "\n".join(
         [f"[{i+1}]\n[{entry.original_text}]" for i, entry in enumerate(chunk)]
     )
-    prompt = f"""You are a professional translator tasked with translating subtitles to {target_language}.
-
-Context: {context}
-
-Original subtitle chunk:
-{chunk_text}
-
-Instructions:
-1. Translate the above subtitle chunk to {target_language}.
-2. You MUST follow this EXACT format for each entry:
-   [index]
-   [Translated text]
-3. The [index] MUST be on its own line, followed by the translated text on the next line.
-4. Ensure the translation accurately conveys the original meaning.
-5. Preserve the tone and style appropriate for subtitles.
-6. Maintain the EXACT number of entries as the original ({chunk_size}).
-7. Do NOT merge or split subtitle entries. Each [index] must correspond to exactly one subtitle entry.
-8. Do NOT include any additional text, explanations, or the original text in your response.
-9. If one complete subtitle is separated to two lines or more, leave it as is. This is the most important rule!
-10. Pay special attention to whether there are punctuation marks at the end of sentences, if the original sentence does not have a punctuation mark at the end, then no punctuation mark can be added to the end of the translated sentence! For example:
-    [3]
-    I learned a lot in the meantime, so today we are taking this project to the next level.
-    在这段时间里，我学到了很多，所以今天我们将这个项目提升到一个新的水平。
-    [4]
-    I'll show you how to use Siglib embeddings to divide players into teams, how to use the keypoint detection and
-    我将向你展示如何使用 Siglib embeddings 将球员划分为队伍，如何利用关键点检测和
-    [5]
-    homography to create video game style radar view.
-    透视变换创建视频游戏风格的雷达视图。
-    [6]
-    We'll also use the extracted data to calculate some advanced stats like ball trajectory and Voronoi
-    我们还将使用提取的数据计算一些高级统计数据，比如球的轨迹和
-    [7]
-    diagram illustrating team control over the pitch.
-    展示球队对场地控制的 Voronoi diagram。
-WARNING: Merging or splitting entries will severely impact subtitle quality. Ensure each [index] corresponds to exactly one translated entry.
-
-Example of the required format(index from [1] to [{chunk_size}]):
-[1]
-[Translated text for entry 1]
-[2]
-[Translated text for entry 2]
-...
-[{chunk_size}]
-[Translated text for entry {chunk_size}]
-
-Now, provide your translation following this format:
-"""
+    prompt = TRANSLATE_CHUNK_PROMPT.format(
+        target_language=target_language,
+        context=context,
+        chunk_text=chunk_text,
+        chunk_size=chunk_size,
+    )
     result = LLMClientFactory.create_completion(
         client, config, [{"role": "user", "content": prompt}]
     )
     translated_text = result["content"]
-    usage = result["usage"]
-    # 累积令牌使用量
-    token_usage["prompt_tokens"] += usage.prompt_tokens
-    token_usage["completion_tokens"] += usage.completion_tokens
-    token_usage["total_tokens"] += usage.total_tokens
-
-    return process_translation(chunk_text, translated_text)
+    update_token_usage(token_usage, result["usage"])
+    return process_translation(chunk_text, translated_text, chunk)
 
 
 def refine_translation(
@@ -363,75 +413,19 @@ def refine_translation(
     original_text = "\n".join(
         [f"[{i+1}]\n[{entry.original_text}]" for i, entry in enumerate(chunk)]
     )
-    prompt = f"""You are a professional translator specializing in {target_language}. Your task is to refine a rough translation of subtitles.
-
-Context: {context}
-
-Original text:
-{original_text}
-
-Rough translation:
-{rough_translation}
-
-Instructions:
-1. Refine the translation to {target_language}.
-2. You MUST follow this EXACT format for each entry:
-   [index]
-   [Refined translated text]
-3. The [index] MUST be on its own line, followed by the refined translated text on the next line.
-4. Ensure accurate conveyance of the original meaning.
-5. Maintain appropriate tone and style for each line.
-6. Keep the EXACT number of entries ({chunk_size}) as the original.
-7. Do NOT merge or split subtitle entries. Each [index] must correspond to exactly one subtitle entry.
-8. Pay special attention to entries marked as [Translation missing line - index]:
-   - For these entries, provide a new translation based on the original text.
-   - Ensure consistency with the surrounding context.
-9. Correct any mistakes or inaccuracies in the rough translation.
-10. Do NOT include any additional text, explanations, or the original text, or 'Here is the refined translation:' 'Note: blah blah blah' etc. in your response.
-11. If one complete subtitle is separated to two lines or more, leave it as is. This is the most important rule!
-12. Pay special attention to whether there are punctuation marks at the end of sentences, if the original sentence does not have a punctuation mark at the end, then no punctuation mark can be added to the end of the translated sentence! For example:
-    [3]
-    I learned a lot in the meantime, so today we are taking this project to the next level.
-    在这段时间里，我学到了很多，所以今天我们将这个项目提升到一个新的水平。
-    [4]
-    I'll show you how to use Siglib embeddings to divide players into teams, how to use the keypoint detection and
-    我将向你展示如何使用 Siglib embeddings 将球员划分为队伍，如何利用关键点检测和
-    [5]
-    homography to create video game style radar view.
-    透视变换创建视频游戏风格的雷达视图。
-    [6]
-    We'll also use the extracted data to calculate some advanced stats like ball trajectory and Voronoi
-    我们还将使用提取的数据计算一些高级统计数据，比如球的轨迹和
-    [7]
-    diagram illustrating team control over the pitch.
-    展示球队对场地控制的 Voronoi diagram。
-13. Every translated text length should be matched with the original text length.
-
-WARNING: Merging or splitting entries will severely impact subtitle quality. Ensure each [index] corresponds to exactly one translated entry.
-
-Example of the required format(index from [1] to [{chunk_size}]):
-[1]
-[Refined translated text for entry 1]
-[2]
-[Refined translated text for entry 2]
-[3]
-[Refined translated text for entry 3]
-...
-[{chunk_size}]
-[Refined translated text for entry {chunk_size}]
-
-Now, provide your refined translation following this format:
-"""
+    prompt = REFINE_TRANSLATION_PROMPT.format(
+        target_language=target_language,
+        context=context,
+        original_text=original_text,
+        rough_translation=rough_translation,
+        chunk_size=chunk_size,
+    )
     result = LLMClientFactory.create_completion(
         client, config, [{"role": "user", "content": prompt}]
     )
     refined_translation = result["content"]
-    usage = result["usage"]
-    # 累积令牌使用量
-    token_usage["prompt_tokens"] += usage.prompt_tokens
-    token_usage["completion_tokens"] += usage.completion_tokens
-    token_usage["total_tokens"] += usage.total_tokens
-    return process_translation(original_text, refined_translation)
+    update_token_usage(token_usage, result["usage"])
+    return process_translation(original_text, refined_translation, chunk)
 
 
 def fix_missing_translations(
@@ -480,32 +474,18 @@ def fix_missing_translations(
     )
 
     # Construct the prompt using the precomputed string
-    prompt = f"""You are a professional translator specializing in {target_language}. Your task is to fix missing translations in a subtitle chunk.
-
-Original text:
-{original_text}
-
-Translation missing lines [{", ".join([str(index) for index in missing_lines])}]:
-{missing_lines_formatted}
-
-Instructions:
-1. For each missing translation, provide an accurate translation of the corresponding original text line.
-2. Maintain the exact format and number of entries.
-3. Do NOT include any additional text, explanations, or the original text, or phrases like 'Here is the fixed translation:' in your response.
-
-{example_format}
-
-Now, provide the translation following this format:
-"""
+    prompt = FIX_MISSING_TRANSLATIONS_PROMPT.format(
+        target_language=target_language,
+        original_text=original_text,
+        missing_lines_indices=", ".join([str(index) for index in missing_lines]),
+        missing_lines_formatted=missing_lines_formatted,
+        example_format=example_format,
+    )
     result = LLMClientFactory.create_completion(
         client, config, [{"role": "user", "content": prompt}]
     )
     fixed_translation = result["content"]
-    usage = result["usage"]
-    # 累积令牌使用量
-    token_usage["prompt_tokens"] += usage.prompt_tokens
-    token_usage["completion_tokens"] += usage.completion_tokens
-    token_usage["total_tokens"] += usage.total_tokens
+    update_token_usage(token_usage, result["usage"])
     return fixed_translation
 
 
@@ -514,45 +494,12 @@ def re_translate(client, config, chunk, translation, target_language, token_usag
     original_text = "\n".join(
         [f"[{i+1}]\n[{entry.original_text}]" for i, entry in enumerate(chunk)]
     )
-    prompt = f"""You are a professional translator specializing in {target_language}. Your task is to totally re-translate the following subtitle chunk in order to eliminate the repeated translated lines.
-
-Original text:
-{original_text}
-
-Intermediate translation:
-{translation}
-
-Instructions:
-1. Retranslate the entire subtitle chunk, ensure all {chunk_size} lines are translated.
-2. Maintain the exact format and number of entries.
-3. Do NOT include any additional text, explanations, or the original text, or phrases like 'Here is the fixed translation:' in your response.
-4. Ensure the total number of translated entries (including fixed ones) is exactly {chunk_size}, matching the original chunk size.
-5. Reflect before you start to translate.
-
-Example of the required xml format:
-<response>
-<reflection_thinking>
-(一行一行比对 Original text 和 Intermediate translation，确定错误翻译或错误排列)
-<wrong_list>
-<wrong>wrong 1</wrong>
-<wrong>wrong 2</wrong>
-<wrong>wrong 3</wrong>
-...
-</wrong_list>
-</reflection_thinking>
-<translation>
-[1]
-[Translated text for entry 1]
-[2]
-[Translated text for entry 2]
-...
-[{chunk_size}]
-[Translated text for entry {chunk_size}]
-</translation>
-</response>
-
-Now, provide the fixed re-translation following this format:
-"""
+    prompt = RE_TRANSLATE_PROMPT.format(
+        target_language=target_language,
+        original_text=original_text,
+        translation=translation,
+        chunk_size=chunk_size,
+    )
     result = LLMClientFactory.create_completion(
         client, config, [{"role": "user", "content": prompt}]
     )
@@ -561,9 +508,5 @@ Now, provide the fixed re-translation following this format:
         .group(1)
         .strip()
     )
-    usage = result["usage"]
-    # 累积令牌使用量
-    token_usage["prompt_tokens"] += usage.prompt_tokens
-    token_usage["completion_tokens"] += usage.completion_tokens
-    token_usage["total_tokens"] += usage.total_tokens
-    return process_translation(original_text, fixed_translation)
+    update_token_usage(token_usage, result["usage"])
+    return process_translation(original_text, fixed_translation, chunk)

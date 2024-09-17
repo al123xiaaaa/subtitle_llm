@@ -1,6 +1,7 @@
 import re
 import math
 from typing import List, Dict, Any
+from src.models.subtitle_entry import SubtitleEntry
 
 
 def seconds_to_srt_time(seconds: float) -> str:
@@ -18,13 +19,16 @@ def count_words(text: str) -> int:
     return len(words)
 
 
-def process_translation(original_text: str, translated_text: str) -> str:
-    """Process the translated text to match the desired format with indices."""
+def process_translation(
+    original_text: str, translated_text: str, chunk: List[SubtitleEntry]
+) -> str:
+    """Process the translated text to match the desired format with indices and fill chunks."""
     original_lines = original_text.split("\n")
     translated_lines = translated_text.split("\n")
     processed_lines = []
     current_index = None
     current_translation = ""
+    translations_dict = {}
 
     for line in translated_lines:
         stripped_line = line.strip()
@@ -34,6 +38,7 @@ def process_translation(original_text: str, translated_text: str) -> str:
             if current_index is not None and current_translation:
                 processed_lines.append(f"[{current_index}]")
                 processed_lines.append(f"{current_translation.strip()}  ")
+                translations_dict[int(current_index)] = current_translation.strip()
             # Extract the new index
             current_index = stripped_line.strip("[]")
             current_translation = ""
@@ -44,6 +49,7 @@ def process_translation(original_text: str, translated_text: str) -> str:
     if current_index is not None and current_translation:
         processed_lines.append(f"[{current_index}]")
         processed_lines.append(f"{current_translation.strip()}  ")
+        translations_dict[int(current_index)] = current_translation.strip()
 
     # Ensure the number of translated entries matches the original entries
     expected_entries = (
@@ -55,7 +61,12 @@ def process_translation(original_text: str, translated_text: str) -> str:
         missing_index = actual_entries + 1
         processed_lines.append(f"[{missing_index}]")
         processed_lines.append(f"[Translation missing line - {missing_index}]")
+        translations_dict[missing_index] = f"[Translation missing line - {missing_index}]"
         actual_entries += 1
+
+    # 使用局部索引（1..chunk_size）来填充 translated_text
+    for local_idx, entry in enumerate(chunk, start=1):
+        entry.translated_text = translations_dict.get(local_idx, "")
 
     return "\n".join(processed_lines)
 
@@ -63,7 +74,9 @@ def process_translation(original_text: str, translated_text: str) -> str:
 def combine_translations_by_index(original_translation, fixed_translation):
     # Split both translations into lines
     original_lines = original_translation.strip().split("\n")
-    fixed_lines = [line for line in fixed_translation.strip().split("\n") if line.strip()]
+    fixed_lines = [
+        line for line in fixed_translation.strip().split("\n") if line.strip()
+    ]
 
     # Create a dictionary to store the fixed translations
     fixed_translations = {}
