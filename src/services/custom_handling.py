@@ -76,12 +76,6 @@ class CustomHandlingApp(App):
 
     def on_mount(self):
         table = self.query_one("#subtitles_table", DataTable)
-        # table.add_columns(
-        #     "Index",
-        #     "Original Text",
-        #     "Translated Text",
-        #     ("Needs Retranslation", "needs_retranslation")  # 添加一个唯一的键
-        # )
         table.add_column("Index", key="index")
         table.add_column("Original Text", key="original_text")
         table.add_column("Translated Text", key="translated_text")
@@ -106,10 +100,8 @@ class CustomHandlingApp(App):
         elif event.key == "space":
             # 获取当前光标所在行
             row_index = table.cursor_row
-            print(f"光标所在行: {row_index}")
             if row_index is not None:
                 selected_entries = self.handle_spacebar_selection(row_index)
-                logger.info(f"选中行: {selected_entries}")
                 # 将选中的条目写入临时文件
                 self.write_selected_entries_to_temp_file(selected_entries)
                 self.query_one("#status", Static).update(
@@ -118,36 +110,31 @@ class CustomHandlingApp(App):
         elif event.key == "escape":
             if self.selected_line is not None:
                 table.unhighlight_row(self.selected_line - 1)
-                logger.info(f"Unselected line: {self.selected_line}")
                 self.selected_line = None
 
     def handle_spacebar_selection(self, row_index: int) -> list:
         """
         处理空格键选择，选中当前行及其后续所有行。
         """
-        logger.info(f"handle_spacebar_selection called with row_index: {row_index}")
         start_index = row_index
         total_entries = len(self.subtitle_entries)
-        logger.info(f"Total entries: {total_entries}")
 
         # 高亮选中行及后续行
         table = self.query_one("#subtitles_table", DataTable)
-        logger.info(f"Table row count: {table.row_count}")
+
+        # Set needs_retranslation to False for rows before the selected row
+        for i in range(0, start_index):
+            row_key = f"row-{i}"
+            self.subtitle_entries[i].needs_retranslation = False
+            table.update_cell(row_key, "needs_retranslation", "No")
+            table.remove_class("highlighted", row_key)
 
         for i in range(start_index, total_entries):
-            logger.info(f"Processing row {i}")
             # 添加检查，确保行索引在有效范围内
             if i < table.row_count:
                 row_key = f"row-{i}"  # 与添加行时的 row_key 一致
-                logger.info(f"Adding 'highlighted' class to row {row_key}")
                 table.add_class("highlighted", row_key)
-
-                logger.info(f"Setting needs_retranslation to True for entry {i}")
                 self.subtitle_entries[i].needs_retranslation = True
-
-                logger.info(
-                    f"Updating cell for row {row_key}, column 'needs_retranslation' to 'Yes'"
-                )
                 table.update_cell(row_key, "needs_retranslation", "Yes")
             else:
                 logger.info(
@@ -155,11 +142,9 @@ class CustomHandlingApp(App):
                 )
 
         self.selected_line = start_index + 1  # 行索引从1开始
-        logger.info(f"Selected lines from line {self.selected_line} to {total_entries}")
 
         # 根据选中行索引返回相应数据
         selected_entries = self.subtitle_entries[start_index:total_entries]
-        logger.info(f"Number of selected entries: {len(selected_entries)}")
         return selected_entries
 
     def write_selected_entries_to_temp_file(self, selected_entries: list):
@@ -173,7 +158,6 @@ class CustomHandlingApp(App):
             "target_language": self.target_language,
             "config": self.config,
         }
-        print(f"写入临时文件: {data}")
         try:
             with open(self.temp_file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
