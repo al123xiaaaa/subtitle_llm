@@ -17,6 +17,12 @@ class Subtitle:
     def remove_entry(self, index):
         del self.entries[index]
 
+    # 重新排序
+    def reorder_entries(self):
+        # index 索引重新由1开始
+        for i, entry in enumerate(self.entries):
+            entry.index = i + 1
+
     def __len__(self):
         return len(self.entries)
 

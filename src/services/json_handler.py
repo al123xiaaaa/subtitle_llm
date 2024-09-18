@@ -23,16 +23,16 @@ class JSONSubtitleHandler:
             words = []
             prev_word = None
             for w in seg.get("words", []):
-                if 'start' not in w or 'end' not in w or 'score' not in w:
+                if "start" not in w or "end" not in w or "score" not in w:
                     if prev_word:
-                        w['start'] = prev_word.start + 0.3
-                        w['end'] = prev_word.end + 0.5
-                        w['score'] = prev_word.score
+                        w["start"] = prev_word.start + 0.3
+                        w["end"] = prev_word.end + 0.5
+                        w["score"] = prev_word.score
                     else:
                         # If it's the first word and missing attributes, use segment start/end
-                        w['start'] = seg.get("start", 0.0)
-                        w['end'] = seg.get("end", 0.0)
-                        w['score'] = 0.0  # Default score
+                        w["start"] = seg.get("start", 0.0)
+                        w["end"] = seg.get("end", 0.0)
+                        w["score"] = 0.0  # Default score
 
                 word = Word(**w)
                 words.append(word)
@@ -135,6 +135,7 @@ class JSONSubtitleHandler:
         # **优化步骤**：合并包含 <=3 个单词的字幕行到前一行
         self.merge_short_subtitles(subtitle)
 
+        subtitle.reorder_entries()
         return subtitle
 
     def merge_short_subtitles(self, subtitle: Subtitle, max_words: int = 3):

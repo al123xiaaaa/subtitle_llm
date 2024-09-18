@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class TUIManager:
-    def __init__(self, run_script_path, width=220, height=42):
+    def __init__(self, run_script_path, width=300, height=52):
         self.run_script_path = run_script_path
         self.width = width
         self.height = height

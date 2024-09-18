@@ -36,9 +36,9 @@ translation_model_1:
   n: 1
   stream: false
 
-chunk_size: 14
+chunk_size: 24
 threads: 10 # Number of threads for parallel processing
-max_chars: 128
+max_chars: 132
 max_duration: 10.0
 
 # Deepseek
