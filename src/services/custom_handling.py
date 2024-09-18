@@ -171,7 +171,12 @@ class CustomHandlingApp(App):
             logger.error(f"Failed to write selected entries to temp file: {e}")
             self.query_one("#status", Static).update("Failed to write selected lines.")
 
-    def on_quit(self):
+    async def on_quit(self):  # 将方法改为异步
+        # 将所有需要重新翻译的条目的翻译文本清空
+        for entry in self.subtitle_entries:
+            if entry.needs_retranslation:
+                entry.translated_text = ""
+
         # Update the temporary file with the completed flag
         data = {
             "selected_subtitle_entries": [
@@ -191,4 +196,4 @@ class CustomHandlingApp(App):
             logger.error(f"Failed to write updated data to temp file: {e}")
 
         # Quit the application
-        self.exit()
+        await self.action_quit()  # 使用 Textual 的内置退出方法

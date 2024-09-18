@@ -5,13 +5,16 @@ import tempfile
 import json
 import logging
 import time
+import shlex
 
 logger = logging.getLogger(__name__)
 
 
 class TUIManager:
-    def __init__(self, run_script_path):
+    def __init__(self, run_script_path, width=220, height=42):
         self.run_script_path = run_script_path
+        self.width = width
+        self.height = height
 
     def open_new_terminal(self, data):
         """
@@ -37,45 +40,43 @@ class TUIManager:
         command = f"python {self.run_script_path} {tmpfile_path}"
         full_command = ""
 
+        # 下面是根据不同操作系统构建命令，单引号不可变更，因为它们用于包裹整个命令字符串。
+        # 在Windows中，单引号用于确保整个命令被正确传递给cmd。
+        # 在macOS中，单引号用于AppleScript中的字符串定界。
+        # 在Linux中，单引号用于确保命令中的特殊字符不被shell解释。
+        # 更改这些单引号可能会导致命令解析错误或执行失败。
         if system == "Windows":
             if venv_activate:
-                # 使用 'start' 命令打开新的命令提示符窗口，激活虚拟环境并运行命令
-                full_command = f'start cmd /k "cd /d "{project_root}" && "{venv_activate}" && {command}"'
+                full_command = f'start cmd /k "mode con: cols={self.width} lines={self.height} && cd /d "{project_root}" && "{venv_activate}" && {command}"'
             else:
-                # 如果未找到虚拟环境，直接运行命令
-                full_command = f'start cmd /k "cd /d "{project_root}" && {command}"'
+                full_command = f'start cmd /k "mode con: cols={self.width} lines={self.height} && cd /d "{project_root}" && {command}"'
         elif system == "Darwin":  # macOS
             if venv_activate:
-                # 使用 AppleScript 激活虚拟环境并运行命令
-                apple_script = f"""
+                apple_script = f'''
                 tell application "Terminal"
-                    do script "source \\"{venv_activate}\\" && cd \\"{project_root}\\" && {command}"
+                    do script "printf '\\\\e[8;{self.height};{self.width}t' && source {shlex.quote(venv_activate)} && cd {shlex.quote(project_root)} && {command}"
                     activate
                 end tell
-                """
+                '''
             else:
-                # 如果未找到虚拟环境，直接运行命令
-                apple_script = f"""
+                apple_script = f'''
                 tell application "Terminal"
-                    do script "cd \\"{project_root}\\" && {command}"
+                    do script "printf '\\\\e[8;{self.height};{self.width}t' && cd {shlex.quote(project_root)} && {command}"
                     activate
                 end tell
-                """
+                '''
             full_command = ["osascript", "-e", apple_script]
         elif system == "Linux":
+            terminal_command = f"x-terminal-emulator -geometry {self.width}x{self.height}"
             if venv_activate:
-                # 使用 bash 启动新终端，激活虚拟环境并运行命令
                 full_command = [
-                    "x-terminal-emulator",
-                    "-e",
-                    f'bash -c \'source "{venv_activate}" && cd "{project_root}" && {command}; exec bash\'',
+                    "bash", "-c",
+                    f'{terminal_command} -e \'bash -c "source {shlex.quote(venv_activate)} && cd {shlex.quote(project_root)} && {command}; exec bash"\''
                 ]
             else:
-                # 如果未找到虚拟环境，直接运行命令
                 full_command = [
-                    "x-terminal-emulator",
-                    "-e",
-                    f"bash -c 'cd \"{project_root}\" && {command}; exec bash'",
+                    "bash", "-c",
+                    f'{terminal_command} -e \'bash -c "cd {shlex.quote(project_root)} && {command}; exec bash"\''
                 ]
         else:
             raise OSError(f"Unsupported operating system: {system}")

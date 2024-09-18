@@ -61,7 +61,9 @@ def process_translation(
         missing_index = actual_entries + 1
         processed_lines.append(f"[{missing_index}]")
         processed_lines.append(f"[Translation missing line - {missing_index}]")
-        translations_dict[missing_index] = f"[Translation missing line - {missing_index}]"
+        translations_dict[missing_index] = (
+            f"[Translation missing line - {missing_index}]"
+        )
         actual_entries += 1
 
     # 使用局部索引（1..chunk_size）来填充 translated_text
@@ -102,9 +104,54 @@ def combine_translations_by_index(original_translation, fixed_translation):
     return "\n".join(combined_lines)
 
 
-def chunk_list(lst: List[Any], chunk_size: int) -> List[List[Any]]:
-    """Split a list into chunks of specified size."""
-    return [lst[i : i + chunk_size] for i in range(0, len(lst), chunk_size)]
+def chunk_list(lst: List[SubtitleEntry], chunk_size: int) -> List[List[SubtitleEntry]]:
+    """
+    Split a list of SubtitleEntry into chunks, trying to respect sentence boundaries.
+
+    :param lst: List of SubtitleEntry objects to be chunked.
+    :param chunk_size: Approximate number of lines per chunk.
+    :return: A list of chunks, each being a list of SubtitleEntry objects.
+    """
+    chunks = []
+    i = 0
+    n = len(lst)
+    sentence_endings = {".", "!", "?"}
+
+    while i < n:
+        # Tentative end index for the current chunk
+        end = min(i + chunk_size, n)
+        split = end
+
+        # Search for the last entry within the chunk that ends with a sentence-ending punctuation
+        for j in range(end - 1, i - 1, -1):
+            if any(
+                lst[j].original_text.rstrip().endswith(punct)
+                for punct in sentence_endings
+            ):
+                split = j + 1
+                break
+
+        # If no sentence boundary found within the chunk, try to extend the chunk
+        if split == end:
+            # Look ahead up to another chunk_size for a sentence boundary
+            extended_end = min(end + chunk_size, n)
+            for j in range(end, extended_end):
+                if any(
+                    lst[j].original_text.rstrip().endswith(punct)
+                    for punct in sentence_endings
+                ):
+                    split = j + 1
+                    break
+
+        # If still no sentence boundary found, split at the original end
+        if split == i:
+            split = end
+
+        # Append the current chunk
+        chunks.append(lst[i:split])
+        i = split
+
+    return chunks
 
 
 def load_yaml_config() -> Dict[str, Any]:
