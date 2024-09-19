@@ -181,16 +181,17 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                 (
                     len(entry.translated_text.strip()) - 2
                 )  # 减2是因为翻译前后多了两个字符，[和]
-                < 0.13 * len(entry.original_text)
+                < 0.11 * len(entry.original_text)
                 for entry in chunk
             )  # 或者相对于原句，翻译后的文本长度与原句长度的比例小于10%
         ):
             if custom_handling:
                 return handle_custom_translation(translation, chunk, local_token_usage)
             else:
-                return handle_default_translation(
-                    translation, chunk, local_token_usage
-                ), chunk
+                return (
+                    handle_default_translation(translation, chunk, local_token_usage),
+                    chunk,
+                )
         return translation, chunk
 
     def handle_custom_translation(translation, chunk, local_token_usage):

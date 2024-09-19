@@ -1,12 +1,27 @@
 DataTable {
-  border: solid #FFFFFF;
-  background: #e2d9d9;
-  color: #FFFFFF;
+  border: solid #ffffff;
+  background: #4c4848;
+  color: #ffffff;
 }
 
 DataTable .row--selected {
-  background: #3399FF;
-  color: #FFFFFF;
+  background: #3399ff;
+  color: #ffffff;
+}
+
+/* 增加表格行的高度 */
+DataTable .datatable--row {
+  height: auto;
+  min-height: 3;
+  padding: 1 0;
+}
+
+/* 调整单元格内容的样式 */
+DataTable .datatable--cell-content {
+  max-height: 100%;
+  height: auto;
+  content-align: left top;
+  overflow: auto;
 }
 
 Button {
@@ -16,5 +31,5 @@ Button {
 #status {
   height: 1;
   background: #333333;
-  color: #FFFFFF;
+  color: #ffffff;
 }

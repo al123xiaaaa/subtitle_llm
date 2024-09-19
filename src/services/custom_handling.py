@@ -76,10 +76,10 @@ class CustomHandlingApp(App):
 
     def on_mount(self):
         table = self.query_one("#subtitles_table", DataTable)
-        table.add_column("Index", key="index")
-        table.add_column("Original Text", key="original_text")
-        table.add_column("Translated Text", key="translated_text")
-        table.add_column("Needs Retranslation", key="needs_retranslation")
+        table.add_column("Index", key="index", width=10)
+        table.add_column("Original Text", key="original_text", width=70)
+        table.add_column("Translated Text", key="translated_text", width=70)
+        table.add_column("Needs Retranslation", key="needs_retranslation", width=10)
         table.cursor_type = "row"
         for i, entry in enumerate(self.subtitle_entries):
             needs_retranslation = "Yes" if entry.needs_retranslation else "No"
@@ -89,6 +89,7 @@ class CustomHandlingApp(App):
                 entry.translated_text,
                 needs_retranslation,
                 key=f"row-{i}",  # 指定 row_key
+                height=2,
             )
         table.scroll_end()
         self.query_one("#status", Static).update("Ready.")
