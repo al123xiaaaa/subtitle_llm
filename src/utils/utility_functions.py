@@ -43,6 +43,7 @@ def process_translation(
             current_index = stripped_line.strip("[]")
             current_translation = ""
         else:
+            line = re.sub(r"^\[+|\]+$", "", line.strip())
             current_translation += line + " "
 
     # Append the last translation if exists

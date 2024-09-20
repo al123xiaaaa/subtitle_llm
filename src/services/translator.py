@@ -135,9 +135,9 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
             )
 
             # 处理缺失的翻译
-            rough_translation, rough_chunk = handle_missing_translations(
-                rough_translation, chunk, local_token_usage
-            )
+            # rough_translation, rough_chunk = handle_missing_translations(
+            #     rough_translation, chunk, local_token_usage
+            # )
             # logger.info(f"Rough translation: \n{rough_translation}\n")
 
             # 精炼翻译
@@ -173,25 +173,31 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
             raise
 
     def handle_missing_translations(translation, chunk, local_token_usage):
-        if (
-            "Translation missing line" in translation
-            or "Translated text" in translation
-            or any(entry.translated_text.strip() == "" for entry in chunk)
-            or any(
-                (
+        needs_retranslation = False
+        for i, entry in enumerate(chunk):
+            if (
+                entry.translated_text.strip() == ""
+                or "Translation missing line" in entry.translated_text
+                or "Translated text" in entry.translated_text
+                or "翻译缺失" in entry.translated_text
+                or (
                     len(entry.translated_text.strip()) - 2
-                )  # 减2是因为翻译前后多了两个字符，[和]
-                < 0.11 * len(entry.original_text)
-                for entry in chunk
-            )  # 或者相对于原句，翻译后的文本长度与原句长度的比例小于10%
-        ):
+                    < 0.11 * len(entry.original_text)
+                    and len(entry.original_text) > 28
+                )
+            ):
+                needs_retranslation = True
+
+            if needs_retranslation:
+                entry.needs_retranslation = True
+
+        if any(entry.needs_retranslation for entry in chunk):
             if custom_handling:
                 return handle_custom_translation(translation, chunk, local_token_usage)
             else:
-                return (
-                    handle_default_translation(translation, chunk, local_token_usage),
-                    chunk,
-                )
+                return handle_default_translation(
+                    translation, chunk, local_token_usage
+                ), chunk
         return translation, chunk
 
     def handle_custom_translation(translation, chunk, local_token_usage):
@@ -211,8 +217,14 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
             if selected_entries:
                 try:
                     selected_subtitles = [
-                        SubtitleEntry.from_dict(entry) for entry in selected_entries
+                        SubtitleEntry.from_dict(entry)
+                        for entry in selected_entries
+                        if entry.get("needs_retranslation", False)
                     ]
+                    # reset selected_subtitles' needs_retranslation to False
+                    for entry in selected_subtitles:
+                        entry.needs_retranslation = False
+
                     selected_chunk_results, selected_token_usage = process_chunk(
                         selected_subtitles
                     )
@@ -322,6 +334,12 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
         if len(entry.original_text.strip()) <= IGNORE_SUBTITLE_LENGTH:
             entry.set_translated_text(entry.original_text.strip())
             translated_entries.append(entry)
+
+    # 对于翻译后的字幕，前后有[]的，去掉。[]可能有多个，就像[[xxx]]，要全部去掉。
+    # for entry in translated_entries:
+    #     entry.set_translated_text(
+    #         re.sub(r"^\[+|\]+$", "", entry.translated_text.strip())
+    #     )
 
     # 根据原始顺序对翻译后的条目进行排序
     translated_entries.sort(key=lambda x: x.index)
