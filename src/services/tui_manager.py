@@ -25,11 +25,16 @@ class TUIManager:
             os.path.join(os.path.dirname(self.run_script_path), "..", "..")
         )
 
+        tui_input_data = {
+            "subtitle_entries": data,
+            "tui_completed": False,
+        }
+
         # 序列化数据到临时文件
         with tempfile.NamedTemporaryFile(
             mode="w+", delete=False, suffix=".json"
         ) as tmpfile:
-            json.dump(data, tmpfile, ensure_ascii=False, indent=4)
+            json.dump(tui_input_data, tmpfile, ensure_ascii=False, indent=4)
             tmpfile_path = tmpfile.name
             logger.info(f"Temporary file created at: {tmpfile_path}")
 
@@ -52,31 +57,35 @@ class TUIManager:
                 full_command = f'start cmd /k "mode con: cols={self.width} lines={self.height} && cd /d "{project_root}" && {command}"'
         elif system == "Darwin":  # macOS
             if venv_activate:
-                apple_script = f'''
+                apple_script = f"""
                 tell application "Terminal"
                     do script "printf '\\\\e[8;{self.height};{self.width}t' && source {shlex.quote(venv_activate)} && cd {shlex.quote(project_root)} && {command}"
                     activate
                 end tell
-                '''
+                """
             else:
-                apple_script = f'''
+                apple_script = f"""
                 tell application "Terminal"
                     do script "printf '\\\\e[8;{self.height};{self.width}t' && cd {shlex.quote(project_root)} && {command}"
                     activate
                 end tell
-                '''
+                """
             full_command = ["osascript", "-e", apple_script]
         elif system == "Linux":
-            terminal_command = f"x-terminal-emulator -geometry {self.width}x{self.height}"
+            terminal_command = (
+                f"x-terminal-emulator -geometry {self.width}x{self.height}"
+            )
             if venv_activate:
                 full_command = [
-                    "bash", "-c",
-                    f'{terminal_command} -e \'bash -c "source {shlex.quote(venv_activate)} && cd {shlex.quote(project_root)} && {command}; exec bash"\''
+                    "bash",
+                    "-c",
+                    f"{terminal_command} -e 'bash -c \"source {shlex.quote(venv_activate)} && cd {shlex.quote(project_root)} && {command}; exec bash\"'",
                 ]
             else:
                 full_command = [
-                    "bash", "-c",
-                    f'{terminal_command} -e \'bash -c "cd {shlex.quote(project_root)} && {command}; exec bash"\''
+                    "bash",
+                    "-c",
+                    f"{terminal_command} -e 'bash -c \"cd {shlex.quote(project_root)} && {command}; exec bash\"'",
                 ]
         else:
             raise OSError(f"Unsupported operating system: {system}")
@@ -101,7 +110,7 @@ class TUIManager:
                     updated_data = json.load(f)
                 if "tui_completed" in updated_data and updated_data["tui_completed"]:
                     logger.info("TUI completed. Retrieving updated data.")
-                    return updated_data
+                    return updated_data["selected_subtitle_entries"]
             except json.JSONDecodeError:
                 # 文件可能正在被写入，等待一段时间后重试
                 time.sleep(0.5)

@@ -39,3 +39,7 @@ class SubtitleEntry:
         entry.translated_text = data.get("translated_text", "")
         entry.needs_retranslation = data.get("needs_retranslation", False)
         return entry
+
+    def set_needs_retranslation(self, value):
+        self.needs_retranslation = value
+        return self

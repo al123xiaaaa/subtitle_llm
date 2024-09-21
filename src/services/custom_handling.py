@@ -3,22 +3,17 @@ from textual.widgets import (
     Header,
     Footer,
     DataTable,
-    Button,
     Static,
-    LoadingIndicator,
 )
-from textual.containers import Container, Horizontal
+from textual.containers import Container
 from textual.reactive import reactive
 from textual import events
 from textual.message import Message
 
-import asyncio
-import re
 import logging
-import json  # 新增
+import json
 
 from src.models.subtitle_entry import SubtitleEntry
-import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -55,15 +50,11 @@ class CustomHandlingApp(App):
     def __init__(
         self,
         subtitle_entries: list[SubtitleEntry],
-        target_language: str,
-        config: dict,
         temp_file_path: str,  # 新增参数
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.subtitle_entries = subtitle_entries
-        self.target_language = target_language
-        self.config = config
         self.temp_file_path = temp_file_path  # 保存临时文件路径
 
     def compose(self) -> ComposeResult:
@@ -153,11 +144,7 @@ class CustomHandlingApp(App):
         将选中的字幕条目写入临时文件。
         """
         data = {
-            "selected_subtitle_entries": [
-                entry.to_dict() for entry in selected_entries
-            ],
-            "target_language": self.target_language,
-            "config": self.config,
+            "selected_subtitle_entries": [entry.to_dict() for entry in selected_entries]
         }
         try:
             with open(self.temp_file_path, "w", encoding="utf-8") as f:
@@ -185,8 +172,6 @@ class CustomHandlingApp(App):
                 for entry in self.subtitle_entries
                 if entry.needs_retranslation
             ],
-            "target_language": self.target_language,
-            "config": self.config,
             "tui_completed": True,
         }
         try:

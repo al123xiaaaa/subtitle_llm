@@ -202,31 +202,21 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
 
     def handle_custom_translation(translation, chunk, local_token_usage):
         try:
-            data = {
-                "subtitle_entries": [entry.to_dict() for entry in chunk],
-                "target_language": target_language,
-                "config": config,
-            }
-            data_need_to_translate = tui_manager.open_new_terminal(data)
-            selected_entries = [
-                entry
-                for entry in data_need_to_translate.get("selected_subtitle_entries", [])
-                if entry.get("needs_retranslation", False)
-            ]
+            selected_entries_dicts = tui_manager.open_new_terminal(
+                [entry.to_dict() for entry in chunk]
+            )
 
-            if selected_entries:
+            if selected_entries_dicts:
                 try:
-                    selected_subtitles = [
-                        SubtitleEntry.from_dict(entry)
-                        for entry in selected_entries
-                        if entry.get("needs_retranslation", False)
+                    selected_entries = [
+                        SubtitleEntry.from_dict(entry_dict).set_needs_retranslation(
+                            False
+                        )
+                        for entry_dict in selected_entries_dicts
                     ]
-                    # reset selected_subtitles' needs_retranslation to False
-                    for entry in selected_subtitles:
-                        entry.needs_retranslation = False
 
                     selected_chunk_results, selected_token_usage = process_chunk(
-                        selected_subtitles
+                        selected_entries
                     )
 
                     # 创建一个字典来存储更新后的翻译

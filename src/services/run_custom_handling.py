@@ -1,7 +1,6 @@
 import sys
 import os
 import json
-import tempfile
 import logging
 
 # Determine the absolute path to the project root
@@ -34,8 +33,6 @@ def main():
     subtitle_entries = [
         SubtitleEntry.from_dict(entry) for entry in data["subtitle_entries"]
     ]
-    target_language = data["target_language"]
-    config = data["config"]
 
     # 使用传入的 data_file 作为 temp_file_path
     temp_file_path = data_file
@@ -44,8 +41,6 @@ def main():
         # 初始化并运行 TUI 应用
         app = CustomHandlingApp(
             subtitle_entries,
-            target_language,
-            config,
             temp_file_path=temp_file_path,
         )
         app.run()
