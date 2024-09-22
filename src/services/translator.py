@@ -1,5 +1,5 @@
 from src.services.file_handler import FileHandler
-from src.services.llm_client_factory import LLMClientFactory
+from src.services.factories.llm_client_factory import LLMClientFactory
 from src.services.json_handler import JSONSubtitleHandler
 from src.utils.utility_functions import (
     load_yaml_config,

@@ -1,6 +1,6 @@
 # LLM Endpoint Settings
 
-summary_model:
+summary_model_0:
   type: "openai"
   endpoint: "https://api.deepbricks.ai/v1"
   api_key: "sk-71vszCdxPZ5YWupqw37AkfAxjcMkAxB4BQgqDjlv16716MIX"
@@ -22,6 +22,17 @@ summary_model_1:
   frequency_penalty: 0.0
   presence_penalty: 0.0
   stream: false
+
+summary_model:
+  type: "gemini"
+  api_key: "AIzaSyCnelMUQn4sHXXrHW8ZuYMer4ruzxmBdLY"
+  model: "gemini-1.5-flash"
+  max_tokens: 8192
+  temperature: 0.5
+  top_p: 0.95
+  top_k: 64
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
 
 translation_model_1:
   type: "custom"

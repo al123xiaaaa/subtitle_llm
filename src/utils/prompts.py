@@ -1,5 +1,5 @@
 GENERATE_SUMMARY_PROMPT = """Analyze the following subtitle content and provide:
-1. A concise summary of the video content (2-3 sentences).
+1. A concise {target_language} summary of the video content (5-7 sentences).
 2. A list of technical terms, proper nouns, or specific terminology with {target_language} translation.
 
 Subtitle content:
