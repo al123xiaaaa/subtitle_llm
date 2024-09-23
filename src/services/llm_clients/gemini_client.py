@@ -1,13 +1,19 @@
 from src.services.llm_clients.llm_client import LLMClient
+from src.utils.rate_limiter import RateLimiter
 from typing import List, Dict, Any
 import google.generativeai as genai
 import logging
+import time
+from google.api_core import exceptions
 
 logger = logging.getLogger(__name__)
 
 
 class GeminiClient(LLMClient):
-    def __init__(self, api_key: str, base_url: str) -> None:
+    def __init__(
+        self, api_key: str, base_url: str, rate_limiter: RateLimiter = None
+    ) -> None:
+        super().__init__(rate_limiter)
         self.api_key = api_key
         self.base_url = base_url
         genai.configure(api_key=self.api_key)
@@ -15,6 +21,11 @@ class GeminiClient(LLMClient):
     def create_completion(
         self, config: Dict[str, Any], messages: List[Dict[str, str]]
     ) -> Dict[str, Any]:
+        logger.info("Starting create_completion in GeminiClient")
+        if self.rate_limiter:
+            logger.debug("Acquiring rate limiter")
+            self.rate_limiter.acquire()
+
         # 创建生成配置
         generation_config = {
             "temperature": config.get("temperature", 0.45),
@@ -34,25 +45,44 @@ class GeminiClient(LLMClient):
         for message in messages[:-1]:  # 除了最后一条消息
             history.append({"role": message["role"], "parts": [message["content"]]})
 
-        try:
-            # 开始聊天会话
-            chat_session = model.start_chat(history=history)
+        max_retries = 6
+        retry_delay = 6
 
-            # 发送最后一条消息
-            response = chat_session.send_message(messages[-1]["content"])
-            content = response.text.strip()
+        for attempt in range(max_retries):
+            try:
+                # 开始聊天会话
+                chat_session = model.start_chat(history=history)
 
-            # 计算令牌使用情况（注意：Gemini 可能没有提供精确的令牌计数）
-            prompt_tokens = self.num_tokens_from_messages(messages, config["model"])
-            completion_tokens = self.num_tokens_from_messages(
-                [{"content": content}], config["model"]
-            )
-            usage = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            }
-            return {"content": content, "usage": usage}
-        except Exception as e:
-            logger.error(f"Gemini API error: {e}")
-            raise
+                # 发送最后一条消息
+                response = chat_session.send_message(messages[-1]["content"])
+                content = response.text.strip()
+                logger.debug(
+                    f"Received response: {content[:50]}..."
+                )  # Log first 50 chars
+
+                # 计算令牌使用情况（注意：Gemini 可能没有提供精确的令牌计数）
+                prompt_tokens = self.num_tokens_from_messages(messages, config["model"])
+                completion_tokens = self.num_tokens_from_messages(
+                    [{"content": content}], config["model"]
+                )
+                usage = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                }
+                logger.info("Successfully completed create_completion")
+                return {"content": content, "usage": usage}
+            except exceptions.ResourceExhausted as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"Rate limit exceeded. Retrying in {retry_delay} seconds..."
+                    )
+                    time.sleep(retry_delay)
+                else:
+                    logger.error(f"Max retries exceeded. Gemini API error: {e}")
+                    raise
+            except Exception as e:
+                logger.error(f"Gemini API error: {e}")
+                raise
+
+        raise Exception("Max retries exceeded")

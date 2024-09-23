@@ -1,9 +1,13 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
 import tiktoken
+from src.utils.rate_limiter import RateLimiter
 
 
 class LLMClient(ABC):
+    def __init__(self, rate_limiter: RateLimiter = None):
+        self.rate_limiter = rate_limiter
+
     @abstractmethod
     def create_completion(
         self, config: Dict[str, Any], messages: List[Dict[str, str]]

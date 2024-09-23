@@ -7,7 +7,7 @@ from src.utils.utility_functions import (
     chunk_list,
     combine_translations_by_index,
 )
-from src.services.tui_manager import TUIManager
+from src.services.tui.tui_manager import TUIManager
 from src.utils.prompts import (
     GENERATE_SUMMARY_PROMPT,
     TRANSLATE_CHUNK_PROMPT,
@@ -134,12 +134,6 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                 local_token_usage,
             )
 
-            # 处理缺失的翻译
-            # rough_translation, rough_chunk = handle_missing_translations(
-            #     rough_translation, chunk, local_token_usage
-            # )
-            # logger.info(f"Rough translation: \n{rough_translation}\n")
-
             # 精炼翻译
             refined_translation = refine_translation(
                 client,
@@ -151,11 +145,10 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                 local_token_usage,
             )
 
-            # 再次处理缺失的翻译
+            # 处理缺失的翻译
             refined_translation, refined_chunk = handle_missing_translations(
                 refined_translation, chunk, local_token_usage
             )
-            # logger.info(f"Refined translation: \n{refined_translation}\n")
 
             # 解析翻译结果
             try:
@@ -188,7 +181,9 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
             ):
                 needs_retranslation = True
 
-            if needs_retranslation:
+            if (
+                needs_retranslation
+            ):  # 从第一条被认为需要重新翻译的条目开始，后续的都需要重新翻译
                 entry.needs_retranslation = True
 
         if any(entry.needs_retranslation for entry in chunk):

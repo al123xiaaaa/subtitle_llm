@@ -1,4 +1,5 @@
 from src.services.llm_clients.llm_client import LLMClient
+from src.utils.rate_limiter import RateLimiter
 from typing import List, Dict, Any
 import requests
 import time
@@ -8,13 +9,19 @@ logger = logging.getLogger(__name__)
 
 
 class CustomLLMClient(LLMClient):
-    def __init__(self, api_key: str, base_url: str) -> None:
+    def __init__(
+        self, api_key: str, base_url: str, rate_limiter: RateLimiter = None
+    ) -> None:
+        super().__init__(rate_limiter)
         self.api_key = api_key
         self.base_url = base_url
 
     def create_completion(
         self, config: Dict[str, Any], messages: List[Dict[str, str]]
     ) -> Dict[str, Any]:
+        if self.rate_limiter:
+            self.rate_limiter.acquire()
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",

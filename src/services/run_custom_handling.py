@@ -12,7 +12,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from src.models.subtitle_entry import SubtitleEntry
-from src.services.custom_handling import CustomHandlingApp
+from src.services.tui.custom_handling import CustomHandlingApp
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
