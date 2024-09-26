@@ -53,7 +53,7 @@ TRANSLATE_CHUNK_PROMPT = """You are a professional translator tasked with transl
 [{chunk_size}]
 [Translated text for entry {chunk_size}]
 
-**Now, provide your translation following this format:**
+**Now, provide your translation following this format in {target_language}:**
 """
 
 REFINE_TRANSLATION_PROMPT = """You are a professional translator specializing in {target_language}. Your task is to refine a rough translation of subtitles.
@@ -101,7 +101,7 @@ REFINE_TRANSLATION_PROMPT = """You are a professional translator specializing in
 [{chunk_size}]
 [Refined translated text for entry {chunk_size}]
 
-**Now, provide your refined translation following this format:**
+**Now, provide your refined translation following this format in {target_language}:**
 """
 
 FIX_MISSING_TRANSLATIONS_PROMPT = """You are a professional translator specializing in {target_language}. Your task is to fix missing translations in a subtitle chunk.

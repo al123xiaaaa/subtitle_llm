@@ -175,7 +175,7 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                 or "翻译缺失" in entry.translated_text
                 or (
                     len(entry.translated_text.strip()) - 2
-                    < 0.11 * len(entry.original_text)
+                    < 0.1 * len(entry.original_text)
                     and len(entry.original_text) > 28
                 )
             ):

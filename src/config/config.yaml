@@ -26,11 +26,11 @@ summary_model_1:
 summary_model:
   type: "gemini"
   api_key: "AIzaSyCnelMUQn4sHXXrHW8ZuYMer4ruzxmBdLY"
-  model: "gemini-1.5-flash-exp-0827"
+  model: "gemini-1.5-flash-002"
   max_tokens: 8192
   temperature: 0.5
   top_p: 0.95
-  top_k: 64
+  top_k: 12
   frequency_penalty: 0.0
   presence_penalty: 0.0
 
@@ -47,9 +47,9 @@ translation_model_1:
   n: 1
   stream: false
 
-chunk_size: 28
+chunk_size: 48
 threads: 6 # Number of threads for parallel processing
-rate_limit: 20  # requests per minute
+rate_limit: 20 # requests per minute
 max_chars: 132
 max_duration: 10.0
 
@@ -81,11 +81,11 @@ translation_model_3:
 translation_model:
   type: "gemini"
   api_key: "AIzaSyCnelMUQn4sHXXrHW8ZuYMer4ruzxmBdLY"
-  model: "gemini-1.5-flash-exp-0827"
+  model: "gemini-1.5-flash-002"
   max_tokens: 8192
   temperature: 0.5
   top_p: 0.95
-  top_k: 64
+  top_k: 12
   frequency_penalty: 0.0
   presence_penalty: 0.0
-  rate_limit: 14  # requests per minute
+  rate_limit: 10 # requests per minute

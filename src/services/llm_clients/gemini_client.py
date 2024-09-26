@@ -2,6 +2,7 @@ from src.services.llm_clients.llm_client import LLMClient
 from src.utils.rate_limiter import RateLimiter
 from typing import List, Dict, Any
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import logging
 import time
 from google.api_core import exceptions
@@ -38,6 +39,12 @@ class GeminiClient(LLMClient):
         model = genai.GenerativeModel(
             model_name=config["model"],
             generation_config=generation_config,
+            safety_settings={
+                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            },
         )
 
         # 准备聊天历史
@@ -46,7 +53,7 @@ class GeminiClient(LLMClient):
             history.append({"role": message["role"], "parts": [message["content"]]})
 
         max_retries = 6
-        retry_delay = 6
+        retry_delay = 40
 
         for attempt in range(max_retries):
             try:
@@ -72,17 +79,14 @@ class GeminiClient(LLMClient):
                 }
                 logger.info("Successfully completed create_completion")
                 return {"content": content, "usage": usage}
-            except exceptions.ResourceExhausted as e:
+            except (exceptions.ResourceExhausted, Exception) as e:
                 if attempt < max_retries - 1:
                     logger.warning(
-                        f"Rate limit exceeded. Retrying in {retry_delay} seconds..."
+                        f"Error occurred: {e}. Retrying in {retry_delay} seconds..."
                     )
                     time.sleep(retry_delay)
                 else:
                     logger.error(f"Max retries exceeded. Gemini API error: {e}")
                     raise
-            except Exception as e:
-                logger.error(f"Gemini API error: {e}")
-                raise
 
         raise Exception("Max retries exceeded")
