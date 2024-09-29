@@ -201,6 +201,13 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                 [entry.to_dict() for entry in chunk]
             )
 
+            if all(
+                not entry_dict.get("needs_retranslation", True)
+                for entry_dict in selected_entries_dicts
+            ):
+                logger.info("All translations accepted. Skipping re-translation.")
+                return translation, chunk
+
             if selected_entries_dicts:
                 try:
                     selected_entries = [
@@ -227,7 +234,7 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                                 chunk_entry.index
                             ]
                         merged_translation += (
-                            f"[{i + 1}]\n[{chunk_entry.translated_text}]\n"
+                            f"[{i + 1}]\n{chunk_entry.translated_text}\n"
                         )
 
                     return merged_translation, chunk

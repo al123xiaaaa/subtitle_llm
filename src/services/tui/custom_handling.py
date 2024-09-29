@@ -8,54 +8,38 @@ from textual.widgets import (
 from textual.containers import Container
 from textual.reactive import reactive
 from textual import events
-from textual.message import Message
 
 import logging
 import json
 
 from src.models.subtitle_entry import SubtitleEntry
 
-# Configure logging
+# 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-class LineSelected(Message):
-    """Message sent when a line is selected."""
-
-    def __init__(self, start_line_index: int) -> None:
-        self.start_line_index = start_line_index
-        super().__init__()
-
-
-class TranslationFinished(Message):
-    """Message sent when translation is finished."""
-
-    def __init__(self, translations: dict) -> None:
-        self.translations = translations
-        super().__init__()
 
 
 class CustomHandlingApp(App):
     CSS_PATH = "custom_handling.css"
     BINDINGS = [
-        ("q", "quit", "Quit"),
-        ("space", "select_line", "Select Line and Translate"),
+        ("q", "quit", "退出"),
+        ("space", "select_line", "选择行并翻译"),
+        ("s", "skip", "跳过"),
     ]
 
-    # Define reactive variables at the class level
+    # 响应式变量
     selected_line = reactive(None)
-    translation_result = reactive(None)
 
+    # 1. 生命周期方法
     def __init__(
         self,
         subtitle_entries: list[SubtitleEntry],
-        temp_file_path: str,  # 新增参数
+        temp_file_path: str,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.subtitle_entries = subtitle_entries
-        self.temp_file_path = temp_file_path  # 保存临时文件路径
+        self.temp_file_path = temp_file_path
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -83,8 +67,9 @@ class CustomHandlingApp(App):
                 height=2,
             )
         table.scroll_end()
-        self.query_one("#status", Static).update("Ready.")
+        self.query_one("#status", Static).update("准备就绪。")
 
+    # 2. 事件处理方法
     async def on_key(self, event: events.Key) -> None:
         table = self.query_one("#subtitles_table", DataTable)
         if event.key == "q":
@@ -95,91 +80,102 @@ class CustomHandlingApp(App):
             if row_index is not None:
                 selected_entries = self.handle_spacebar_selection(row_index)
                 # 将选中的条目写入临时文件
-                self.write_selected_entries_to_temp_file(selected_entries)
-                self.query_one("#status", Static).update(
-                    "Selected lines written for translation."
+                self.write_data_to_temp_file(
+                    {
+                        "selected_subtitle_entries": [
+                            entry.to_dict() for entry in selected_entries
+                        ]
+                    }
                 )
+                self.query_one("#status", Static).update("选中的行已写入以供翻译。")
+        elif event.key == "s":
+            await self.on_key_s()
         elif event.key == "escape":
             if self.selected_line is not None:
                 table.unhighlight_row(self.selected_line - 1)
                 self.selected_line = None
 
-    def handle_spacebar_selection(self, row_index: int) -> list:
-        """
-        处理空格键选择，选中当前行及其后续所有行。
-        """
-        start_index = row_index
-        total_entries = len(self.subtitle_entries)
-
-        # 高亮选中行及后续行
-        table = self.query_one("#subtitles_table", DataTable)
-
-        # Set needs_retranslation to False for rows before the selected row
-        for i in range(0, start_index):
-            row_key = f"row-{i}"
-            self.subtitle_entries[i].needs_retranslation = False
-            table.update_cell(row_key, "needs_retranslation", "No")
-            table.remove_class("highlighted", row_key)
-
-        for i in range(start_index, total_entries):
-            # 添加检查，确保行索引在有效范围内
-            if i < table.row_count:
-                row_key = f"row-{i}"  # 与添加行时的 row_key 一致
-                table.add_class("highlighted", row_key)
-                self.subtitle_entries[i].needs_retranslation = True
-                table.update_cell(row_key, "needs_retranslation", "Yes")
-            else:
-                logger.info(
-                    f"Row {i} is out of range (table.row_count: {table.row_count})"
-                )
-
-        self.selected_line = start_index + 1  # 行索引从1开始
-
-        # 根据选中行索引返回相应数据
-        selected_entries = self.subtitle_entries[start_index:total_entries]
-        return selected_entries
-
-    def write_selected_entries_to_temp_file(self, selected_entries: list):
-        """
-        将选中的字幕条目写入临时文件。
-        """
-        data = {
-            "selected_subtitle_entries": [entry.to_dict() for entry in selected_entries]
-        }
-        try:
-            with open(self.temp_file_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-            logger.info(
-                f"Selected entries written to temporary file: {self.temp_file_path}"
-            )
-            self.query_one("#status", Static).update(
-                "Selected lines written for translation."
-            )
-        except Exception as e:
-            logger.error(f"Failed to write selected entries to temp file: {e}")
-            self.query_one("#status", Static).update("Failed to write selected lines.")
-
-    async def on_quit(self):  # 将方法改为异步
-        # 将所有需要重新翻译的条目的翻译文本清空
+    async def on_quit(self):
+        """退出应用前的处理"""
+        # 清空需要重新翻译的条目的翻译文本
         for entry in self.subtitle_entries:
             if entry.needs_retranslation:
                 entry.translated_text = ""
 
-        # Update the temporary file with the completed flag
-        data = {
-            "selected_subtitle_entries": [
-                entry.to_dict()
-                for entry in self.subtitle_entries
-                if entry.needs_retranslation
-            ],
-            "tui_completed": True,
-        }
+        # 更新临时文件，添加完成标志
+        self.write_data_to_temp_file(
+            {
+                "selected_subtitle_entries": [
+                    entry.to_dict()
+                    for entry in self.subtitle_entries
+                    if entry.needs_retranslation
+                ],
+                "tui_completed": True,
+            }
+        )
+
+        # 退出应用
+        await self.action_quit()
+
+    async def on_key_s(self):
+        """处理 's' 键按下事件"""
+        # 将所有条目设置为不需要重新翻译
+        self.update_retranslation_status(0, len(self.subtitle_entries), False)
+
+        self.query_one("#status", Static).update("所有翻译已接受。跳过重新翻译。")
+
+        # 更新临时文件，添加完成标志
+        self.write_data_to_temp_file(
+            {
+                "selected_subtitle_entries": [
+                    entry.to_dict() for entry in self.subtitle_entries
+                ],
+                "tui_completed": True,
+            }
+        )
+
+        # 退出应用
+        await self.action_quit()
+
+    # 3. 核心功能方法
+    def handle_spacebar_selection(self, row_index: int) -> list:
+        """处理空格键选择，选中当前行及其后续所有行。"""
+        start_index = row_index
+        total_entries = len(self.subtitle_entries)
+
+        # 更新行的需要重新翻译状态
+        self.update_retranslation_status(0, start_index, False)
+        self.update_retranslation_status(start_index, total_entries, True)
+
+        self.selected_line = start_index + 1  # 行索引从1开始
+        return self.subtitle_entries[start_index:total_entries]
+
+    def update_retranslation_status(
+        self, start: int, end: int, needs_retranslation: bool
+    ):
+        """更新指定范围内行的重新翻译状态"""
+        table = self.query_one("#subtitles_table", DataTable)
+        status_text = "是" if needs_retranslation else "否"
+        for i in range(start, end):
+            if i < table.row_count:
+                row_key = f"row-{i}"
+                self.subtitle_entries[i].needs_retranslation = needs_retranslation
+                table.update_cell(row_key, "needs_retranslation", status_text)
+                if needs_retranslation:
+                    table.add_class("highlighted", row_key)
+                else:
+                    table.remove_class("highlighted", row_key)
+            else:
+                logger.info(f"行 {i} 超出范围 (table.row_count: {table.row_count})")
+
+    # 4. 辅助方法
+    def write_data_to_temp_file(self, data: dict):
+        """将数据写入临时文件"""
         try:
             with open(self.temp_file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
-            logger.info("TUI completed. Updated data written to temporary file.")
+            logger.info(f"数据已写入临时文件: {self.temp_file_path}")
+            self.query_one("#status", Static).update("数据已成功写入临时文件。")
         except Exception as e:
-            logger.error(f"Failed to write updated data to temp file: {e}")
-
-        # Quit the application
-        await self.action_quit()  # 使用 Textual 的内置退出方法
+            logger.error(f"写入数据到临时文件失败: {e}")
+            self.query_one("#status", Static).update("写入数据到临时文件失败。")
