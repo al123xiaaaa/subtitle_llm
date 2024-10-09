@@ -1,35 +1,45 @@
+/* Base styling for the DataTable */
 DataTable {
   border: solid #ffffff;
   background: #4c4848;
   color: #ffffff;
 }
 
-DataTable .row--selected {
-  background: #3399ff;
-  color: #ffffff;
-}
-
-/* 增加表格行的高度 */
+/* Adjust the row height and padding */
 DataTable .datatable--row {
-  height: auto;
   min-height: 3;
   padding: 1 0;
 }
 
-/* 调整单元格内容的样式 */
-DataTable .datatable--cell-content {
-  max-height: 100%;
-  height: auto;
+/* Adjust cell content alignment */
+DataTable .datatable--cell {
   content-align: left top;
-  overflow: auto;
 }
 
-Button {
-  margin: 1 1;
-}
-
+/* Style for the status bar */
 #status {
   height: 1;
   background: #333333;
   color: #ffffff;
+}
+
+/* Highlight selected rows */
+DataTable .selected {
+  background: #3399ff;
+  color: #ffffff;
+}
+
+/* Highlight rows needing retranslation */
+DataTable .highlighted {
+  background: #ffa500; /* Orange background */
+  color: #000000;      /* Black text for contrast */
+}
+
+/* Optional: Zebra striping for better readability */
+DataTable .datatable--even-row {
+  background: #4c4848;
+}
+
+DataTable .datatable--odd-row {
+  background: #5c5a5a;
 }
