@@ -269,6 +269,16 @@ class CustomHandlingApp(App):
         merged_start_time = self.subtitle_entries[selected_indices[0]].start_time
         merged_end_time = self.subtitle_entries[selected_indices[-1]].end_time
 
+        # 记录合并操作到 merge_map
+        self.merge_map.append(
+            {
+                "merged_index": self.subtitle_entries[target_index].index,
+                "merged_from_indices": [
+                    self.subtitle_entries[i].index for i in merged_from_indices
+                ],
+            }
+        )
+
         # 更新目标条目
         target_entry = self.subtitle_entries[target_index]
         target_entry.start_time = merged_start_time
@@ -312,14 +322,6 @@ class CustomHandlingApp(App):
         self.clear_selection()
         self.update_retranslation_status(target_index, len(self.subtitle_entries), True)
         self.query_one("#status", Static).update("选中的行已合并并标记为需要重新翻译。")
-
-        # 记录合并操作到 merge_map
-        self.merge_map.append(
-            {
-                "merged_index": target_index + 1,
-                "merged_from_indices": [idx + 1 for idx in merged_from_indices],
-            }
-        )
 
     # 4. Helper methods
     def write_data_to_temp_file(self, data: dict):

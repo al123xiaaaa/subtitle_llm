@@ -152,7 +152,7 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
 
             # 解析翻译结果
             try:
-                chunk_results = parse_translation_results(refined_translation, chunk)
+                chunk_results = parse_translation_results(refined_translation, refined_chunk)
             except Exception as e:
                 logger.error(f"Error in parse_translation_results: {e}")
                 logger.error(f"Refined translation: {refined_translation}")
@@ -201,6 +201,9 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
             selected_entries_dicts = data["selected_subtitle_entries"]
             merge_map = data.get("merge_map", [])
 
+            # Create a mapping from index to SubtitleEntry for easy access
+            index_to_entry = {entry.index: entry for entry in chunk}
+
             if all(
                 not entry_dict.get("needs_retranslation", True)
                 for entry_dict in selected_entries_dicts
@@ -212,32 +215,52 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                 try:
                     # Apply merge operations to the chunk
                     for merge_op in merge_map:
-                        merged_index = (
-                            merge_op["merged_index"] - 1
-                        )  # Adjust to 0-based index
-                        merged_from_indices = [
-                            idx - 1 for idx in merge_op["merged_from_indices"]
-                        ]  # Adjust to 0-based index
+                        merged_index = merge_op["merged_index"]
+                        merged_from_indices = merge_op["merged_from_indices"]
 
-                        # Create merged entry
+                        # Ensure all indices exist
+                        if merged_index not in index_to_entry:
+                            logger.error(
+                                f"Merged index {merged_index} not found in chunk."
+                            )
+                            continue
+                        missing_indices = [
+                            idx
+                            for idx in merged_from_indices
+                            if idx not in index_to_entry
+                        ]
+                        if missing_indices:
+                            logger.error(
+                                f"Merged from indices {missing_indices} not found in chunk."
+                            )
+                            continue
+
+                        # Create merged entry using index attribute
                         merged_text = " ".join(
-                            chunk[i].original_text for i in merged_from_indices
+                            index_to_entry[idx].original_text
+                            for idx in merged_from_indices
                         )
-                        merged_start_time = chunk[merged_from_indices[0]].start_time
-                        merged_end_time = chunk[merged_from_indices[-1]].end_time
+                        merged_start_time = index_to_entry[
+                            merged_from_indices[0]
+                        ].start_time
+                        merged_end_time = index_to_entry[
+                            merged_from_indices[-1]
+                        ].end_time
+
                         merged_entry = SubtitleEntry(
-                            index=merged_index + 1,
+                            index=merged_index,
                             start_time=merged_start_time,
                             end_time=merged_end_time,
                             text=merged_text,
                         )
-                        chunk[merged_index] = merged_entry
+                        index_to_entry[merged_index] = merged_entry
 
-                        # Remove merged entries from chunk
-                        for i in sorted(
-                            merged_from_indices[1:], reverse=True
-                        ):  # Remove from the end to avoid index issues
-                            del chunk[i]
+                        # Remove merged entries from the mapping
+                        for i in sorted(merged_from_indices[1:], reverse=True):
+                            del index_to_entry[i]
+
+                    # Update the chunk list based on the modified mapping
+                    chunk = list(index_to_entry.values())
 
                     # Process selected entries for translation
                     selected_entries = [
