@@ -14,7 +14,7 @@ import json
 
 from src.models.subtitle_entry import SubtitleEntry
 
-# Configure logging
+# 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,10 @@ class CustomHandlingApp(App):
     ]
 
     # Reactive variable to store selected lines
-    selected_lines = reactive(set())  # Using a set to store selected row keys
+    selected_lines = reactive(set())  # 使用集合存储选中的行键
+
+    # 新增 merge_map 属性，用于记录合并操作
+    merge_map = reactive([])  # 使用列表存储合并映射
 
     # 1. Lifecycle methods
     def __init__(
@@ -89,7 +92,8 @@ class CustomHandlingApp(App):
                     {
                         "selected_subtitle_entries": [
                             entry.to_dict() for entry in selected_entries
-                        ]
+                        ],
+                        "merge_map": self.merge_map.copy(),  # 将 merge_map 一并写入
                     }
                 )
                 self.query_one("#status", Static).update("选中的行已写入以供翻译。")
@@ -116,7 +120,7 @@ class CustomHandlingApp(App):
             if entry.needs_retranslation:
                 entry.translated_text = ""
 
-        # Update the temp file with a completion flag
+        # 更新 merge_map 到 temp 文件
         self.write_data_to_temp_file(
             {
                 "selected_subtitle_entries": [
@@ -125,6 +129,7 @@ class CustomHandlingApp(App):
                     if entry.needs_retranslation
                 ],
                 "tui_completed": True,
+                "merge_map": self.merge_map.copy(),  # 将 merge_map 一并写入
             }
         )
 
@@ -133,6 +138,8 @@ class CustomHandlingApp(App):
 
     async def on_key_s(self):
         """Handle the 's' key press event"""
+        for entry in self.subtitle_entries:
+            entry.needs_retranslation = False
         # Set all entries to not need retranslation
         self.update_retranslation_status(0, len(self.subtitle_entries), False)
 
@@ -145,6 +152,7 @@ class CustomHandlingApp(App):
                     entry.to_dict() for entry in self.subtitle_entries
                 ],
                 "tui_completed": True,
+                "merge_map": self.merge_map.copy(),  # 将 merge_map 一并写入
             }
         )
 
@@ -182,7 +190,7 @@ class CustomHandlingApp(App):
             else:
                 logger.info(f"行 {i} 超出范围 (table.row_count: {table.row_count})")
 
-    # New method: Toggle selection
+    # 切换选择
     def toggle_selection(self, row_key: str):
         table = self.query_one("#subtitles_table", DataTable)
         if row_key in self.selected_lines:
@@ -240,49 +248,49 @@ class CustomHandlingApp(App):
             self.query_one("#status", Static).update("需要至少选择两行以合并。")
             return
 
-        # Get selected row indices and sort them
+        # 获取选中的行的索引
         selected_indices = sorted([int(rk.split("-")[1]) for rk in self.selected_lines])
 
-        # Check if the selected rows are adjacent
+        # 检查是否相邻
         for i in range(1, len(selected_indices)):
             if selected_indices[i] != selected_indices[i - 1] + 1:
                 self.query_one("#status", Static).update("请选择相邻的行进行合并。")
                 return
 
-        # Determine the target row (first selected row)
+        # 记录被合并的原始索引
+        merged_from_indices = selected_indices.copy()
+
+        # 合并条目
         target_index = selected_indices[0]
         target_row_key = f"row-{target_index}"
-
-        # Merge Original Text
         merged_original_text = " ".join(
             [self.subtitle_entries[i].original_text for i in selected_indices]
         )
+        merged_start_time = self.subtitle_entries[selected_indices[0]].start_time
+        merged_end_time = self.subtitle_entries[selected_indices[-1]].end_time
 
-        # Update target row's Original Text
+        # 更新目标条目
+        target_entry = self.subtitle_entries[target_index]
+        target_entry.start_time = merged_start_time
+        target_entry.end_time = merged_end_time
+        target_entry.original_text = merged_original_text
+        target_entry.translated_text = ""
+        target_entry.needs_retranslation = True
+
+        # 更新表格中的目标条目
         table.update_cell(target_row_key, "original_text", merged_original_text)
-        self.subtitle_entries[target_index].original_text = merged_original_text
-
-        # Clear Translated Text
         table.update_cell(target_row_key, "translated_text", "")
-        self.subtitle_entries[target_index].translated_text = ""
-
-        # Mark as needing retranslation
         table.update_cell(target_row_key, "needs_retranslation", "Yes")
-        self.subtitle_entries[target_index].needs_retranslation = True
-        table.add_class("highlighted", target_row_key)
 
-        # Remove other selected rows from table and subtitle_entries
-        rows_to_remove = selected_indices[1:]
-        for i in reversed(rows_to_remove):
+        # 移除其他被合并的行
+        for i in reversed(selected_indices[1:]):
             row_key = f"row-{i}"
             table.remove_row(row_key)
             del self.subtitle_entries[i]
-            # Update status
             self.query_one("#status", Static).update(f"已合并并移除行: {row_key}")
 
-        # Reassign row_keys and update table
+        # 重新分配行键和索引
         table.clear(columns=True)
-        # Re-add columns
         table.add_column("Selected", key="selected", width=10)
         table.add_column("Index", key="index", width=10)
         table.add_column("Original Text", key="original_text", width=70)
@@ -292,7 +300,7 @@ class CustomHandlingApp(App):
         for i, entry in enumerate(self.subtitle_entries):
             needs_retranslation = "Yes" if entry.needs_retranslation else "No"
             table.add_row(
-                "No",  # Reset 'Selected' column to 'No'
+                "No",
                 f"{i}",
                 entry.original_text,
                 entry.translated_text,
@@ -301,14 +309,17 @@ class CustomHandlingApp(App):
                 height=2,
             )
 
-        # Clear selection
         self.clear_selection()
-
-        # Mark target row and subsequent rows as needing retranslation
         self.update_retranslation_status(target_index, len(self.subtitle_entries), True)
-
-        # Update status
         self.query_one("#status", Static).update("选中的行已合并并标记为需要重新翻译。")
+
+        # 记录合并操作到 merge_map
+        self.merge_map.append(
+            {
+                "merged_index": target_index + 1,
+                "merged_from_indices": [idx + 1 for idx in merged_from_indices],
+            }
+        )
 
     # 4. Helper methods
     def write_data_to_temp_file(self, data: dict):

@@ -28,6 +28,7 @@ class TUIManager:
         tui_input_data = {
             "subtitle_entries": data,
             "tui_completed": False,
+            "merge_map": [],  # 初始化 merge_map
         }
 
         # 序列化数据到临时文件
@@ -110,7 +111,7 @@ class TUIManager:
                     updated_data = json.load(f)
                 if "tui_completed" in updated_data and updated_data["tui_completed"]:
                     logger.info("TUI completed. Retrieving updated data.")
-                    return updated_data["selected_subtitle_entries"]
+                    return updated_data
             except json.JSONDecodeError:
                 # 文件可能正在被写入，等待一段时间后重试
                 time.sleep(0.5)
@@ -119,8 +120,6 @@ class TUIManager:
                     "Temporary file not found. TUI may have encountered an error."
                 )
                 return None
-
-        return None
 
     def find_virtualenv_activate(self, project_root):
         """

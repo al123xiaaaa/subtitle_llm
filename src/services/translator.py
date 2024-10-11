@@ -197,9 +197,9 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
 
     def handle_custom_translation(translation, chunk, local_token_usage):
         try:
-            selected_entries_dicts = tui_manager.open_new_terminal(
-                [entry.to_dict() for entry in chunk]
-            )
+            data = tui_manager.open_new_terminal([entry.to_dict() for entry in chunk])
+            selected_entries_dicts = data["selected_subtitle_entries"]
+            merge_map = data.get("merge_map", [])
 
             if all(
                 not entry_dict.get("needs_retranslation", True)
@@ -210,29 +210,57 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
 
             if selected_entries_dicts:
                 try:
+                    # Apply merge operations to the chunk
+                    for merge_op in merge_map:
+                        merged_index = (
+                            merge_op["merged_index"] - 1
+                        )  # Adjust to 0-based index
+                        merged_from_indices = [
+                            idx - 1 for idx in merge_op["merged_from_indices"]
+                        ]  # Adjust to 0-based index
+
+                        # Create merged entry
+                        merged_text = " ".join(
+                            chunk[i].original_text for i in merged_from_indices
+                        )
+                        merged_start_time = chunk[merged_from_indices[0]].start_time
+                        merged_end_time = chunk[merged_from_indices[-1]].end_time
+                        merged_entry = SubtitleEntry(
+                            index=merged_index + 1,
+                            start_time=merged_start_time,
+                            end_time=merged_end_time,
+                            text=merged_text,
+                        )
+                        chunk[merged_index] = merged_entry
+
+                        # Remove merged entries from chunk
+                        for i in sorted(
+                            merged_from_indices[1:], reverse=True
+                        ):  # Remove from the end to avoid index issues
+                            del chunk[i]
+
+                    # Process selected entries for translation
                     selected_entries = [
                         SubtitleEntry.from_dict(entry_dict).set_needs_retranslation(
                             False
                         )
                         for entry_dict in selected_entries_dicts
                     ]
-
                     selected_chunk_results, selected_token_usage = process_chunk(
                         selected_entries
                     )
 
-                    # 创建一个字典来存储更新后的翻译
+                    # Update translations in the chunk
                     updated_translations = {
                         entry.index: translated_text
                         for entry, translated_text in selected_chunk_results
                     }
+                    for entry in chunk:
+                        if entry.index in updated_translations:
+                            entry.translated_text = updated_translations[entry.index]
 
                     merged_translation = ""
                     for i, chunk_entry in enumerate(chunk):
-                        if chunk_entry.index in updated_translations:
-                            chunk_entry.translated_text = updated_translations[
-                                chunk_entry.index
-                            ]
                         merged_translation += (
                             f"[{i + 1}]\n{chunk_entry.translated_text}\n"
                         )
@@ -337,6 +365,7 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
     translated_entries.sort(key=lambda x: x.index)
 
     subtitle.entries = translated_entries
+    subtitle.reorder_entries()
     FileHandler.write_srt(subtitle, output_file)
     return subtitle
 
