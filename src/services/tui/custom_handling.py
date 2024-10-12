@@ -243,7 +243,6 @@ class CustomHandlingApp(App):
         self.selected_lines.clear()
 
     async def merge_selected_rows(self):
-        table = self.query_one("#subtitles_table", DataTable)
         if len(self.selected_lines) < 2:
             self.query_one("#status", Static).update("需要至少选择两行以合并。")
             return
@@ -262,7 +261,6 @@ class CustomHandlingApp(App):
 
         # 合并条目
         target_index = selected_indices[0]
-        target_row_key = f"row-{target_index}"
         merged_original_text = " ".join(
             [self.subtitle_entries[i].original_text for i in selected_indices]
         )
@@ -287,19 +285,22 @@ class CustomHandlingApp(App):
         target_entry.translated_text = ""
         target_entry.needs_retranslation = True
 
-        # 更新表格中的目标条目
-        table.update_cell(target_row_key, "original_text", merged_original_text)
-        table.update_cell(target_row_key, "translated_text", "")
-        table.update_cell(target_row_key, "needs_retranslation", "Yes")
-
-        # 移除其他被合并的行
+        # 移除其他被合并的条目
         for i in reversed(selected_indices[1:]):
-            row_key = f"row-{i}"
-            table.remove_row(row_key)
             del self.subtitle_entries[i]
-            self.query_one("#status", Static).update(f"已合并并移除行: {row_key}")
 
-        # 重新分配行键和索引
+        # 重建表格
+        self.rebuild_table()
+
+        # 清除选择
+        self.selected_lines.clear()
+
+        # 更新状态
+        self.update_retranslation_status(target_index, len(self.subtitle_entries), True)
+        self.query_one("#status", Static).update("选中的行已合并并标记为需要重新翻译。")
+
+    def rebuild_table(self):
+        table = self.query_one("#subtitles_table", DataTable)
         table.clear(columns=True)
         table.add_column("Selected", key="selected", width=10)
         table.add_column("Index", key="index", width=10)
@@ -318,10 +319,6 @@ class CustomHandlingApp(App):
                 key=f"row-{i}",
                 height=2,
             )
-
-        self.clear_selection()
-        self.update_retranslation_status(target_index, len(self.subtitle_entries), True)
-        self.query_one("#status", Static).update("选中的行已合并并标记为需要重新翻译。")
 
     # 4. Helper methods
     def write_data_to_temp_file(self, data: dict):
