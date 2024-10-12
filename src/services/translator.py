@@ -176,8 +176,11 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                 or (
                     len(entry.translated_text.strip()) - 2
                     < 0.1 * len(entry.original_text)
-                    and len(entry.original_text) > 28
+                    and len(entry.original_text) > 26
                 )
+                # 或者翻译结果仅为标点符号(全角或半角)
+                or all(char in '，。？！：；“”、' for char in entry.translated_text) # 判断是否全为中文标点
+                or all(char in ',.?!:;"\'()-' for char in entry.translated_text) # 判断是否全为英文标点
             ):
                 needs_retranslation = True
 
