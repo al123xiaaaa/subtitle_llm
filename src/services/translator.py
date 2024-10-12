@@ -112,7 +112,7 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
     run_script = os.path.abspath(run_script)
     tui_manager = TUIManager(run_script)
 
-    def process_chunk(chunk):
+    def process_chunk(chunk, subtitle_entries):
         try:
             local_token_usage = {
                 "prompt_tokens": 0,
@@ -146,18 +146,12 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
             )
 
             # 处理缺失的翻译
-            refined_translation, refined_chunk = handle_missing_translations(
-                refined_translation, chunk, local_token_usage
+            refined_translation, chunk = handle_missing_translations(
+                refined_translation, chunk, local_token_usage, subtitle_entries
             )
 
             # 解析翻译结果
-            try:
-                chunk_results = parse_translation_results(refined_translation, refined_chunk)
-            except Exception as e:
-                logger.error(f"Error in parse_translation_results: {e}")
-                logger.error(f"Refined translation: {refined_translation}")
-                logger.error(f"Chunk: {chunk}")
-                raise
+            chunk_results = parse_translation_results(refined_translation, chunk)
 
             return chunk_results, local_token_usage
         except Exception as e:
@@ -165,7 +159,9 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
             logger.error(f"Chunk: {chunk}")
             raise
 
-    def handle_missing_translations(translation, chunk, local_token_usage):
+    def handle_missing_translations(
+        translation, chunk, local_token_usage, subtitle_entries
+    ):
         needs_retranslation = False
         for i, entry in enumerate(chunk):
             if (
@@ -179,8 +175,12 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                     and len(entry.original_text) > 26
                 )
                 # 或者翻译结果仅为标点符号(全角或半角)
-                or all(char in '，。？！：；“”、' for char in entry.translated_text) # 判断是否全为中文标点
-                or all(char in ',.?!:;"\'()-' for char in entry.translated_text) # 判断是否全为英文标点
+                or all(
+                    char in "，。？！：；“”、" for char in entry.translated_text
+                )  # 判断是否全为中文标点
+                or all(
+                    char in ",.?!:;\"'()-" for char in entry.translated_text
+                )  # 判断是否全为英文标点
             ):
                 needs_retranslation = True
 
@@ -191,20 +191,24 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
 
         if any(entry.needs_retranslation for entry in chunk):
             if custom_handling:
-                return handle_custom_translation(translation, chunk, local_token_usage)
+                return handle_custom_translation(
+                    translation, chunk, local_token_usage, subtitle_entries
+                )
             else:
                 return handle_default_translation(
                     translation, chunk, local_token_usage
                 ), chunk
         return translation, chunk
 
-    def handle_custom_translation(translation, chunk, local_token_usage):
+    def handle_custom_translation(
+        translation, chunk, local_token_usage, subtitle_entries
+    ):
         try:
             data = tui_manager.open_new_terminal([entry.to_dict() for entry in chunk])
             selected_entries_dicts = data["selected_subtitle_entries"]
             merge_map = data.get("merge_map", [])
 
-            # Create a mapping from index to SubtitleEntry for easy access
+            # 创建一个基于索引的字幕条目映射
             index_to_entry = {entry.index: entry for entry in chunk}
 
             if all(
@@ -216,12 +220,12 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
 
             if selected_entries_dicts:
                 try:
-                    # Apply merge operations to the chunk
+                    # 应用合并操作到 chunk 和 subtitle_entries
                     for merge_op in merge_map:
                         merged_index = merge_op["merged_index"]
                         merged_from_indices = merge_op["merged_from_indices"]
 
-                        # Ensure all indices exist
+                        # 确保所有索引都存在
                         if merged_index not in index_to_entry:
                             logger.error(
                                 f"Merged index {merged_index} not found in chunk."
@@ -238,7 +242,7 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                             )
                             continue
 
-                        # Create merged entry using index attribute
+                        # 创建合并后的条目
                         merged_text = " ".join(
                             index_to_entry[idx].original_text
                             for idx in merged_from_indices
@@ -258,25 +262,50 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                         )
                         index_to_entry[merged_index] = merged_entry
 
-                        # Remove merged entries from the mapping
-                        for i in sorted(merged_from_indices[1:], reverse=True):
-                            del index_to_entry[i]
+                        # 从 chunk 和 index_to_entry 中删除被合并的条目
+                        for idx in merged_from_indices[1:]:
+                            if idx in index_to_entry:
+                                del index_to_entry[idx]
+                            for entry in chunk:
+                                if entry.index == idx:
+                                    chunk.remove(entry)
+                                    break
 
-                    # Update the chunk list based on the modified mapping
+                        # 替换 merged_index 的条目
+                        for i, entry in enumerate(subtitle_entries):
+                            if entry.index == merged_index:
+                                subtitle_entries[i] = merged_entry
+                                break
+                        # 删除被合并的条目
+                        for idx in merged_from_indices[1:]:
+                            subtitle_entries[:] = [
+                                entry
+                                for entry in subtitle_entries
+                                if entry.index != idx
+                            ]
+
+                    # 更新 chunk 列表
                     chunk = list(index_to_entry.values())
 
-                    # Process selected entries for translation
+                    # 处理选中的需要重新翻译的条目
                     selected_entries = [
                         SubtitleEntry.from_dict(entry_dict).set_needs_retranslation(
                             False
                         )
                         for entry_dict in selected_entries_dicts
+                        if entry_dict.get("needs_retranslation", False)
                     ]
+
+                    # 递归调用 process_chunk 处理选中的条目
                     selected_chunk_results, selected_token_usage = process_chunk(
-                        selected_entries
+                        selected_entries, subtitle_entries
                     )
 
-                    # Update translations in the chunk
+                    # 更新令牌使用量
+                    for key in local_token_usage:
+                        local_token_usage[key] += selected_token_usage.get(key, 0)
+
+                    # 更新翻译结果
                     updated_translations = {
                         entry.index: translated_text
                         for entry, translated_text in selected_chunk_results
@@ -285,6 +314,7 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                         if entry.index in updated_translations:
                             entry.translated_text = updated_translations[entry.index]
 
+                    # 合并翻译文本
                     merged_translation = ""
                     for i, chunk_entry in enumerate(chunk):
                         merged_translation += (
@@ -355,6 +385,7 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                     executor.submit(
                         process_chunk,
                         filtered_chunk,
+                        subtitle.entries,
                     )
                 )
 

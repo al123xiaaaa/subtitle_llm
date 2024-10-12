@@ -26,4 +26,7 @@ venv/
 # Environments
 .env
 
+# macOS
+.DS_Store
+
 data/

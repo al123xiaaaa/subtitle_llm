@@ -5,7 +5,7 @@ class SubtitleEntry:
         self.end_time = end_time
         self.original_text = text
         self.translated_text = ""
-        self.needs_retranslation = False  # New attribute with default value False
+        self.needs_retranslation = False
 
     def set_translated_text(self, translated_text):
         self.translated_text = translated_text
