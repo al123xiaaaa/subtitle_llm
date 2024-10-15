@@ -301,6 +301,17 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                         selected_entries, subtitle_entries
                     )
 
+                    deeper_chunk = [entry for entry, _ in selected_chunk_results]
+                    deeper_chunk_first_index = deeper_chunk[0].index
+                    chunk = (
+                        [
+                            entry
+                            for entry in chunk
+                            if entry.index < deeper_chunk_first_index
+                        ]
+                        + deeper_chunk
+                    )
+
                     # 更新令牌使用量
                     for key in local_token_usage:
                         local_token_usage[key] += selected_token_usage.get(key, 0)
