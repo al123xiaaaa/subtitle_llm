@@ -110,9 +110,10 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
         os.path.dirname(os.path.abspath(__file__)), "run_custom_handling.py"
     )
     run_script = os.path.abspath(run_script)
-    tui_manager = TUIManager(run_script)
+    tui_manager = TUIManager(run_script) # Initialize TUIManager once
 
-    def process_chunk(chunk, subtitle_entries):
+    # process_chunk now needs more parameters because it's called directly
+    def process_chunk(chunk, subtitle_entries, tui_manager_instance, current_config, current_client, current_target_language, current_context):
         try:
             local_token_usage = {
                 "prompt_tokens": 0,
@@ -126,28 +127,30 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
 
             # 初始翻译
             rough_translation = translate_chunk(
-                client,
-                config["translation_model"],
+                current_client,
+                current_config["translation_model"],
                 chunk,
-                context,
-                target_language,
+                current_context,
+                current_target_language,
                 local_token_usage,
             )
 
             # 精炼翻译
             refined_translation = refine_translation(
-                client,
-                config["translation_model"],
+                current_client,
+                current_config["translation_model"],
                 chunk,
                 rough_translation,
-                context,
-                target_language,
+                current_context,
+                current_target_language,
                 local_token_usage,
             )
 
             # 处理缺失的翻译
+            # Pass tui_manager and other necessary params
             refined_translation, chunk = handle_missing_translations(
-                refined_translation, chunk, local_token_usage, subtitle_entries
+                refined_translation, chunk, local_token_usage, subtitle_entries,
+                tui_manager_instance, current_config, current_client, current_target_language, current_context
             )
 
             # 解析翻译结果
@@ -159,8 +162,9 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
             logger.error(f"Chunk: {chunk}")
             raise
 
-    def handle_missing_translations(
-        translation, chunk, local_token_usage, subtitle_entries
+    def handle_missing_translations( # Added params
+        translation, chunk, local_token_usage, subtitle_entries,
+        tui_manager_instance, current_config, current_client, current_target_language, current_context
     ):
         needs_retranslation = False
         for i, entry in enumerate(chunk):
@@ -191,22 +195,61 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
 
         if any(entry.needs_retranslation for entry in chunk):
             if custom_handling:
+                # Pass tui_manager and other necessary params
                 return handle_custom_translation(
-                    translation, chunk, local_token_usage, subtitle_entries
+                    translation, chunk, local_token_usage, subtitle_entries,
+                    tui_manager_instance, current_config, current_client, current_target_language, current_context
                 )
             else:
+                # Pass client, config, target_language to handle_default_translation
                 return handle_default_translation(
-                    translation, chunk, local_token_usage
+                    translation, chunk, local_token_usage, current_client, current_config, current_target_language
                 ), chunk
         return translation, chunk
 
+    # Added tui_manager_instance, current_config, current_client, current_target_language, current_context
     def handle_custom_translation(
-        translation, chunk, local_token_usage, subtitle_entries
+        translation, chunk, local_token_usage, subtitle_entries,
+        tui_manager_instance, current_config, current_client, current_target_language, current_context
     ):
         try:
-            data = tui_manager.open_new_terminal([entry.to_dict() for entry in chunk])
-            selected_entries_dicts = data["selected_subtitle_entries"]
-            merge_map = data.get("merge_map", [])
+            # TUIManager.open_new_terminal is now async and just enqueues.
+            # It returns a status, not the processed data.
+            tui_manager_instance.open_new_terminal([entry.to_dict() for entry in chunk])
+            
+            # Polling logic to get results from the temporary file
+            processed_data_from_tui = None
+            while True:
+                try:
+                    with open(tui_manager_instance.tmpfile_path, "r", encoding="utf-8") as f:
+                        json_data = json.load(f)
+                    if json_data.get("tui_completed", False):
+                        # Check if this completed data corresponds to the current chunk.
+                        # This is tricky if multiple chunks are rapidly enqueued.
+                        # For now, assume sequential processing ensures the file content is for the latest TUI interaction.
+                        # A robust solution might involve chunk identifiers in the JSON.
+                        # For this iteration, we assume the TUI processes one by one and updates the file accordingly.
+                        processed_data_from_tui = json_data
+                        logger.info(f"TUI completed processing chunk. Data retrieved from tmpfile: {tui_manager_instance.tmpfile_path}")
+                        break
+                except json.JSONDecodeError:
+                    logger.debug(f"JSON decode error reading {tui_manager_instance.tmpfile_path}, TUI might be writing.")
+                except FileNotFoundError:
+                    logger.error(f"Temporary file {tui_manager_instance.tmpfile_path} not found. TUI may have failed or file was deleted.")
+                    # This is a critical error, should probably stop or return an error state
+                    raise # Or handle more gracefully
+                except Exception as e:
+                    logger.error(f"Error reading TUI status file {tui_manager_instance.tmpfile_path}: {e}")
+                
+                logger.debug(f"Waiting for TUI to complete chunk... Polling {tui_manager_instance.tmpfile_path}")
+                time.sleep(0.5) # Polling interval
+
+            if not processed_data_from_tui:
+                logger.error("Failed to retrieve processed data from TUI.")
+                return translation, chunk # Or raise an exception
+
+            selected_entries_dicts = processed_data_from_tui["selected_subtitle_entries"]
+            merge_map = processed_data_from_tui.get("merge_map", [])
 
             # 创建一个基于索引的字幕条目映射
             index_to_entry = {entry.index: entry for entry in chunk}
@@ -297,8 +340,10 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                     ]
 
                     # 递归调用 process_chunk 处理选中的条目
+                    # Pass all required parameters for the recursive call
                     selected_chunk_results, selected_token_usage = process_chunk(
-                        selected_entries, subtitle_entries
+                        selected_entries, subtitle_entries,
+                        tui_manager_instance, current_config, current_client, current_target_language, current_context
                     )
 
                     deeper_chunk = [entry for entry, _ in selected_chunk_results]
@@ -341,26 +386,30 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                 return translation, chunk
         except Exception as e:
             logger.error(f"Error in handle_custom_translation: {e}")
+            # Ensure tmpfile_path is available on tui_manager_instance for error reporting if needed
+            if hasattr(tui_manager_instance, 'tmpfile_path'):
+                logger.error(f"Error occurred while TUI was interacting with {tui_manager_instance.tmpfile_path}")
             return translation, chunk
 
-    def handle_default_translation(translation, chunk, local_token_usage):
+    # Added current_client, current_config, current_target_language
+    def handle_default_translation(translation, chunk, local_token_usage, current_client, current_config, current_target_language):
         rough_missing_translation = fix_missing_translations(
-            client,
-            config["translation_model"],
+            current_client,
+            current_config["translation_model"],
             chunk,
             translation,
-            target_language,
+            current_target_language,
             local_token_usage,
         )
         combined_translation = combine_translations_by_index(
             translation, rough_missing_translation
         )
         return re_translate(
-            client,
-            config["translation_model"],
+            current_client,
+            current_config["translation_model"],
             chunk,
             combined_translation,
-            target_language,
+            current_target_language,
             local_token_usage,
         )
 
@@ -380,37 +429,39 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
 
         return chunk_results
 
-    # 使用配置中的线程数进行并行处理
-    max_workers = config.get("threads", 4)  # 默认 4
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
-        for chunk in subtitle_chunks:
-            # 过滤掉非常短的字幕
-            filtered_chunk = [
-                entry
-                for entry in chunk
-                if len(entry.original_text.strip()) > IGNORE_SUBTITLE_LENGTH
-            ]
-            if filtered_chunk:
-                futures.append(
-                    executor.submit(
-                        process_chunk,
-                        filtered_chunk,
-                        subtitle.entries,
-                    )
-                )
-
-        for future in concurrent.futures.as_completed(futures):
+    # Simplified to always process chunks sequentially as per Option A.
+    # The ThreadPoolExecutor and the conditional custom_handling logic for parallelism are removed.
+    logger.info("Processing all subtitle chunks sequentially.")
+    for chunk_item in subtitle_chunks: # Use a different variable name for clarity
+        filtered_chunk = [
+            entry
+            for entry in chunk_item # Iterate over items in the current chunk_item
+            if len(entry.original_text.strip()) > IGNORE_SUBTITLE_LENGTH
+        ]
+        if filtered_chunk:
             try:
-                chunk_results, chunk_token_usage = future.result()
-                # 累积令牌使用量
+                # Call process_chunk with all necessary parameters including the single tui_manager instance
+                chunk_results, chunk_token_usage = process_chunk(
+                    filtered_chunk,
+                    subtitle.entries,
+                    tui_manager, 
+                    config,
+                    client,
+                    target_language,
+                    context
+                )
+                # Accumulate token usage and results
                 for key in total_token_usage:
                     total_token_usage[key] += chunk_token_usage.get(key, 0)
                 for entry, refined_text in chunk_results:
                     entry.set_translated_text(refined_text.strip())
                     translated_entries.append(entry)
             except Exception as e:
-                logger.error(f"An error occurred while processing a chunk: {e}")
+                logger.error(f"An error occurred while processing a chunk sequentially: {e}")
+
+    # Call shutdown on tui_manager after all chunks are processed.
+    # This is done regardless of custom_handling, as tui_manager is always initialized.
+    tui_manager.shutdown()
 
     # 最后，打印总共使用的令牌数量
     logger.info(f"总共使用的令牌数量: {total_token_usage['total_tokens']}")
