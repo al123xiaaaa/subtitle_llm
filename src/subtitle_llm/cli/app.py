@@ -30,8 +30,15 @@ def _load_service(config_path: Path | None) -> TranslationService:
 @app.command()
 def translate(
     input_file: Annotated[str, typer.Option("--input", "-i", help="Input .srt/.json file or video URL.")],
-    output_file: Annotated[str, typer.Option("--output", "-o", help="Output .srt file.")],
     target_language: Annotated[str, typer.Option("--target-language", "-t", help="Target translation language.")],
+    output_file: Annotated[
+        str | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Output .srt file. Defaults to data/output/<title>.<target>.srt.",
+        ),
+    ] = None,
     config: Annotated[Path | None, typer.Option("--config", "-c", help="Config YAML path.")] = None,
     source_language: Annotated[str, typer.Option("--source-language", "-s", help="Source language for URL subtitles/ASR.")] = "en",
     output_format: Annotated[

@@ -23,7 +23,7 @@ from subtitle_llm.settings import AppConfig
 @dataclass
 class TranslationRequest:
     input_file: str
-    output_file: str
+    output_file: str | None
     target_language: str
     source_language: str = "en"
     output_format: str | None = None
@@ -52,12 +52,17 @@ class TranslationService:
 
     def translate(self, request: TranslationRequest) -> TranslationResult:
         input_file = self._resolve_input(request.input_file, request.source_language)
+        output_file = request.output_file or self._default_output_file(
+            input_file,
+            request.target_language,
+            request.source_language,
+        )
         output_format = request.output_format or self.config.default_output_format
-        checkpoint_file = sidecar_path(request.output_file, "_checkpoint.json")
-        context_file = sidecar_path(request.output_file, "_context.txt")
+        checkpoint_file = sidecar_path(output_file, "_checkpoint.json")
+        context_file = sidecar_path(output_file, "_context.txt")
         report = TranslationReport(
             input_file=str(input_file),
-            output_file=request.output_file,
+            output_file=output_file,
             checkpoint_file=str(checkpoint_file),
             context_file=str(context_file),
             output_format=output_format,
@@ -138,7 +143,7 @@ class TranslationService:
         report.stage = "完成"
         report.processed_entries = len(subtitle.entries)
         checkpoint.save(subtitle, report)
-        SubtitleIO.write_srt(subtitle, request.output_file, output_format=output_format)
+        SubtitleIO.write_srt(subtitle, output_file, output_format=output_format)
         stop_review = getattr(review_port, "stop", None)
         if callable(stop_review):
             stop_review()
@@ -335,3 +340,30 @@ class TranslationService:
     def _is_url(self, value: str) -> bool:
         parsed = urlparse(value)
         return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+    def _default_output_file(self, input_file: str, target_language: str, source_language: str) -> str:
+        input_path = Path(input_file)
+        title = input_path.stem
+        source_code = self._language_code(source_language)
+        if title.lower().endswith(f".{source_code}"):
+            title = title[: -(len(source_code) + 1)]
+
+        target_code = self._language_code(target_language)
+        return str(Path("data") / "output" / f"{title}.{target_code}.srt")
+
+    def _language_code(self, language: str) -> str:
+        mapping = {
+            "chinese": "zh",
+            "english": "en",
+            "japanese": "ja",
+            "korean": "ko",
+            "french": "fr",
+            "german": "de",
+            "spanish": "es",
+            "italian": "it",
+            "portuguese": "pt",
+            "russian": "ru",
+            "cantonese": "yue",
+        }
+        normalized = language.strip().lower()
+        return mapping.get(normalized, normalized[:2] or "translated")

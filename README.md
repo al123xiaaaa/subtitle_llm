@@ -19,14 +19,17 @@ export GEMINI_API_KEY="..."
 Translate a local subtitle file:
 
 ```bash
-subtitle-llm translate --input input.srt --output output.srt --target-language Chinese
+subtitle-llm translate --input input.srt --target-language Chinese
 ```
 
 Translate without installing the console script:
 
 ```bash
-python3 main.py translate --input input.srt --output output.srt --target-language Chinese
+python3 main.py translate --input input.srt --target-language Chinese
 ```
+
+By default, translated subtitles are written to `data/output/<title>.<target>.srt`.
+Use `--output` only when you want to override that path.
 
 Other commands:
 

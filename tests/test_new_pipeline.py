@@ -1,4 +1,5 @@
 import sys
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -86,6 +87,37 @@ class TestNewPipeline(unittest.TestCase):
             self.assertEqual(result.report.failed_chunks, [])
             self.assertTrue(Path(result.report.context_file).exists())
             self.assertTrue(Path(result.report.checkpoint_file).exists())
+
+    def test_translation_defaults_output_path_from_input_title(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                input_path = Path(tmp) / "Demo Video.en.srt"
+                input_path.write_text(
+                    "1\n00:00:01,000 --> 00:00:02,000\nHello world.\n\n",
+                    encoding="utf-8",
+                )
+                service = TranslationService(
+                    make_config(),
+                    translation_client=FakeLLMClient(),
+                    summary_client=FakeLLMClient(),
+                )
+
+                result = service.translate(
+                    TranslationRequest(
+                        input_file=str(input_path),
+                        output_file=None,
+                        target_language="Chinese",
+                        source_language="en",
+                    )
+                )
+
+                output_path = Path("data/output/Demo Video.zh.srt")
+                self.assertEqual(result.report.output_file, str(output_path))
+                self.assertTrue(output_path.exists())
+            finally:
+                os.chdir(previous_cwd)
 
     def test_quality_gate_marks_placeholder_translation(self):
         from subtitle_llm.domain import SubtitleEntry

@@ -49,6 +49,37 @@ class TestNewCLI(unittest.TestCase):
         self.assertIn("翻译完成", result.output)
         fake_service.translate.assert_called_once()
 
+    def test_translate_command_allows_omitting_output(self):
+        runner = CliRunner()
+        report = TranslationReport(
+            input_file="input.srt",
+            output_file="data/output/input.zh.srt",
+            checkpoint_file="data/output/input.zh_checkpoint.json",
+            context_file="data/output/input.zh_context.txt",
+            total_entries=1,
+            processed_entries=1,
+            total_chunks=1,
+            completed_chunks=1,
+        )
+        fake_service = Mock()
+        fake_service.translate.return_value = Mock(report=report)
+
+        with patch("subtitle_llm.cli.app._load_service", return_value=fake_service):
+            result = runner.invoke(
+                app,
+                [
+                    "translate",
+                    "--input",
+                    "input.srt",
+                    "--target-language",
+                    "Chinese",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        request = fake_service.translate.call_args.args[0]
+        self.assertIsNone(request.output_file)
+
     def test_help_shows_commands(self):
         runner = CliRunner()
         result = runner.invoke(app, ["--help"])

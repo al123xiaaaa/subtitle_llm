@@ -16,13 +16,13 @@ pip install -e .
 export GEMINI_API_KEY="..."
 
 # Run translation
-subtitle-llm translate --input <input.srt|input.json> --output <output.srt> --target-language <target_language>
+subtitle-llm translate --input <input.srt|input.json> --target-language <target_language>
 
 # Run with TUI review
-subtitle-llm translate --input ./data/input/input_1.json --output ./data/output/output_1.srt --target-language Chinese --review
+subtitle-llm translate --input ./data/input/input_1.json --target-language Chinese --review
 
 # Run without installing console script
-python3 main.py translate --input ./data/input/input_1.json --output ./data/output/output_1.srt --target-language Chinese
+python3 main.py translate --input ./data/input/input_1.json --target-language Chinese
 
 # Run tests
 python -m unittest discover tests
