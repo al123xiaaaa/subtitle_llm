@@ -43,7 +43,7 @@ pyright
 2. `ContextService` generates summary and terminology context.
 3. `ChunkPlanner` splits subtitles and builds readonly boundary context.
 4. `ChunkTranslator` performs rough translation, refinement, repair, and re-translation.
-5. `QualityGate` marks suspicious or missing translations.
+5. `QualityGate` performs deterministic quality diagnosis, groups repeated/cascading failures, and generates compact reports for re-translation.
 6. `CheckpointStore` persists resumable progress with input/config metadata.
 7. `ReviewPort` routes suspicious chunks to auto repair or TUI review.
 

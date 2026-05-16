@@ -94,7 +94,8 @@ subtitle-llm translate --config ./my-config.yaml --input input.srt --output outp
 3. For each chunk:
    - Perform a rough translation into the target language.
    - Refine the translation using the original subtitle, rough translation, and context.
-   - Fix suspicious or missing translations automatically, or send them to TUI review with `--review`.
+   - Run deterministic quality diagnosis on the refined output.
+   - Automatically re-translate suspicious chunks with a compact quality report, or send them to TUI review with `--review`.
 
 4. Combine the refined translations with the original subtitles to form the final bilingual .srt file.
 
@@ -105,6 +106,7 @@ Key features:
 - Handles subtitle chunks in parallel for improved performance
 - Preserves subtitle timing and formatting
 - Ensures accurate translation of technical terms and proper nouns
-- Fixes missing translations automatically
+- Detects observable translation failures such as missing lines, placeholders, punctuation-only output, abnormal length, duplicated translations, source text copied into the output, language mismatch, lost numbers, and lost URL/command/code-like tokens
+- Aggregates repeated or cascading failures into a short chunk-level diagnosis before re-translation, so the repair prompt receives the useful failure pattern without listing every bad line
 
 Note: The translation process uses multiple LLM calls to ensure high-quality results while maintaining the original subtitle structure and timing.
