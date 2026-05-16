@@ -68,14 +68,38 @@ class FileHandler:
         return subtitle
 
     @staticmethod
-    def write_srt(subtitle, output_file):
+    def write_srt(subtitle, output_file, output_format="source-first"):
+        FileHandler.ensure_directory(output_file)
+        output_format = {
+            "bilingual": "source-first",
+            "source-first": "source-first",
+            "target-first": "target-first",
+            "target-only": "target-only",
+            "source-only": "source-only",
+        }.get(output_format, output_format)
+
         with open(output_file, "w", encoding="utf-8") as file:
             for entry in subtitle.entries:
-                file.write(str(entry) + "\n\n")
+                if output_format == "source-first":
+                    text = f"{entry.original_text}\n{entry.translated_text}"
+                elif output_format == "target-first":
+                    text = f"{entry.translated_text}\n{entry.original_text}"
+                elif output_format == "target-only":
+                    text = entry.translated_text
+                elif output_format == "source-only":
+                    text = entry.original_text
+                else:
+                    raise ValueError(f"Unsupported output format: {output_format}")
+
+                file.write(
+                    f"{entry.index}\n"
+                    f"{entry.start_time} --> {entry.end_time}\n"
+                    f"{text}\n\n"
+                )
 
     @staticmethod
     def ensure_directory(file_path: str):
         # 确保文件路径的目录存在，如果不存在则创建
         directory = os.path.dirname(file_path)
-        if not os.path.exists(directory):
+        if directory and not os.path.exists(directory):
             os.makedirs(directory)

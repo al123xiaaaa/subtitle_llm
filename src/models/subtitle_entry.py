@@ -10,6 +10,14 @@ class SubtitleEntry:
     def set_translated_text(self, translated_text):
         self.translated_text = translated_text
 
+    @property
+    def text(self):
+        return self.original_text
+
+    @text.setter
+    def text(self, value):
+        self.original_text = value
+
     def get_bilingual_text(self):
         return f"{self.original_text}\n{self.translated_text}"
 

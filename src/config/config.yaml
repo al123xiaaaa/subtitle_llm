@@ -1,8 +1,8 @@
 # LLM Endpoint Settings
 
 chunk_size: 34
-threads: 10 # Number of threads for parallel processing
-rate_limit: 20 # requests per minute
+threads: 5 # Number of threads for parallel processing
+rate_limit: 30 # requests per minute
 max_chars: 132
 max_duration: 10.0
 
@@ -40,7 +40,7 @@ translation_model:
   top_k: 12
   frequency_penalty: 0.0
   presence_penalty: 0.0
-  rate_limit: 10 # requests per minute
+  rate_limit: 15 # requests per minute
 
 asr:
   model: "Qwen/Qwen3-ASR-1.7B"

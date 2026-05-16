@@ -1,22 +1,22 @@
 1
 00:00:00,080 --> 00:00:03,600
 Hey everybody, welcome back to New Video
-大家好，欢迎回到我们的频道
+大家好，欢迎回到我的频道
 
 2
 00:00:01,760 --> 00:00:05,839
 channel and today we look into how you
-今天我们要探讨的是你可能
+今天我们来看看大家可能
 
 3
 00:00:03,600 --> 00:00:07,680
 might overuse reactivity of you. Yeah,
-过度使用 Vue 响应式系统的情况。没错，
+过度使用 Vue 响应式系统的情况
 
 4
 00:00:05,839 --> 00:00:09,410
 that's possible and you shouldn't. Here
-这确实可能发生，而且你不该这样做。开始了。
+没错，这确实会发生，而且你不该这样做。来吧
 
 5
 00:00:07,680 --> 00:00:13,080
@@ -36,67 +36,67 @@ go. Use reactivity system is both quite
 8
 00:00:16,240 --> 00:00:20,320
 simple to get started with and also very
-简单上手，同时也非常
+简单上手，功能也十分
 
 9
 00:00:18,560 --> 00:00:22,080
 powerful. You can abstract a lot of
-强大。你可以抽象化很多
+强大。你可以抽象出很多
 
 10
 00:00:20,320 --> 00:00:24,240
 things away. But of course, as view
-东西。但当然，作为 Vue
+逻辑。但当然，作为 Vue
 
 11
 00:00:22,080 --> 00:00:26,519
 developers, we like to sprinkle a little
-开发者，我们喜欢在组件里
+开发者，我们喜欢随处撒一点
 
 12
 00:00:24,240 --> 00:00:28,880
 bit of ref and maybe even reactive
-到处撒一点 ref，甚至 reactive
+ref，甚至 reactive
 
 13
 00:00:26,519 --> 00:00:30,640
 computed watch everywhere in our
-computed 和 watch。
+computed 和 watch 在我们的
 
 14
 00:00:28,880 --> 00:00:32,239
 components. This is not necessary
-其实这并不必要。
+组件里。但这其实没必要
 
 15
 00:00:30,640 --> 00:00:34,480
 though. In a few examples, I want to
-通过几个示例，我想向你展示
+通过几个示例，我想向你们展示
 
 16
 00:00:32,239 --> 00:00:37,360
 show you where you can replace ref
-在哪些地方可以用其他方式替代 ref
+在哪些场景中，你可以用其他方式来替代 ref
 
 17
 00:00:34,480 --> 00:00:38,800
 reactive or watchers with other things.
-reactive 或侦听器。
+reactive 或侦听器
 
 18
 00:00:37,360 --> 00:00:40,719
 All right, to get started, we are in the
-好了，开始之前，我们现在在
+好了，开始吧，我们现在在
 
 19
 00:00:38,800 --> 00:00:42,320
 view sfc playground. As usual, link to
-Vue SFC 演练场中。像往常一样，
+Vue SFC Playground 中。像往常一样，所有链接
 
 20
 00:00:40,719 --> 00:00:43,680
 all of these are also in the description
-所有链接都在视频描述里
+都在视频简介里
 
 21
 00:00:42,320 --> 00:00:45,280
@@ -111,47 +111,47 @@ start with a very simple setup. We have
 23
 00:00:45,280 --> 00:00:50,719
 a button. We have an H1 message that is
-按钮。我们有一个 H1 消息，它会在
+按钮。我们有一个 H1 消息，当
 
 24
 00:00:47,280 --> 00:00:52,640
 shown when show message is set to true.
-show message 被设为 true 时显示。
+show message 为 true 时显示
 
 25
 00:00:50,719 --> 00:00:54,320
 And then we have an uncclick function
-接着我们有一个 onClick 函数
+接下来我们有一个 onClick 函数
 
 26
 00:00:52,640 --> 00:00:56,399
 here. And this uncclick function we want
-在这里。我们想要完善这个
+在这里。我们想要填充这个
 
 27
 00:00:54,320 --> 00:00:58,719
 to fill. So here we can say show message
-onClick 函数。所以这里我们可以设置 showMessage
+onClick 函数。所以在这里我们可以设置 showMessage
 
 28
 00:00:56,399 --> 00:01:00,480
 value equals true. We can set the whole
-的 value 等于 true。我们可以设置整个
+的 value 为 true。我们可以设置好
 
 29
 00:00:58,719 --> 00:01:02,000
 thing. And we're good. That works. But
-状态。这样就行了。没问题。但
+整个流程。这样就可以了。没问题。但
 
 30
 00:01:00,480 --> 00:01:03,840
 we want to do a bit more. We also want
-我们还想做更多。我们还想
+我们想再多做一点。我们还想
 
 31
 00:01:02,000 --> 00:01:06,320
 to make sure that this actually sets
-确保它确实会在一段时间后
+确保它确实能在一段时间后
 
 32
 00:01:03,840 --> 00:01:08,320
@@ -161,132 +161,132 @@ back to false after a certain amount of
 33
 00:01:06,320 --> 00:01:10,560
 time. So how do you do that? Well, we
-使用 setTimeout。所以我们将整个
+使用定时器。我们将整个
 
 34
 00:01:08,320 --> 00:01:12,479
 use set timeout. So we wrap the whole
-调用，也就是 showMessage 的 value 等于
+调用包裹起来，即设置 show message 为
 
 35
 00:01:10,560 --> 00:01:16,000
 call to say show mastered value equals
-false，包裹在一个
+false，放入定时器函数中。所以
 
 36
 00:01:12,479 --> 00:01:18,960
 to false in a set timeout function. So
-setTimeout 函数中。所以
+我们就在这里调用它，然后设定
 
 37
 00:01:16,000 --> 00:01:21,680
 we just call this here and we say okay
-我们在这里调用它，并设置
+比如 5 秒。也就是 5,000
 
 38
 00:01:18,960 --> 00:01:23,360
 after I know 5 seconds. So 5,000
-比如 5 秒。也就是 5000
+毫秒后，它应该发生改变。并且
 
 39
 00:01:21,680 --> 00:01:25,119
 milliseconds this should be changed. And
-毫秒后它应该被改变。而且
+如果你现在点击它，几秒钟后
 
 40
 00:01:23,360 --> 00:01:26,960
 if you click that now, after a few
-如果你现在点击它，几秒钟后
+我们会看到 show message
 
 41
 00:01:25,119 --> 00:01:29,119
 seconds, we will see that show message
-我们会看到 showMessage
+被切换回 false。就这样
 
 42
 00:01:26,960 --> 00:01:30,960
 will be toggled back to false. And here
-会被切换回 false。就是这样
+实现了。但现在我们遇到了一个问题，因为
 
 43
 00:01:29,119 --> 00:01:32,400
 we go. But now we have a problem because
-。但现在我们遇到了一个问题，因为
+如果用户多次点击按钮会怎样？嗯，看起来
 
 44
 00:01:30,960 --> 00:01:34,799
 what if the user clicks the button
-如果用户多次点击按钮
+一切运行正常，特别是在它
 
 45
 00:01:32,400 --> 00:01:36,159
 multiple times? Well, it seems like
-会怎么样？看起来
+消失之后。但现在当我再次点击它时，
 
 46
 00:01:34,799 --> 00:01:38,400
 things work fine, especially when it's
-一切正常，尤其是在它
+它消失得快多了。这是因为
 
 47
 00:01:36,159 --> 00:01:41,600
 gone. But now when I click it up again,
-消失的时候。但现在当我再次点击它时
+我们并没有真正清除定时器。所以
 
 48
 00:01:38,400 --> 00:01:44,159
 it disappears way faster. That's because
-它消失得快多了。这是因为
+虽然对于这个非常简单的例子来说
 
 49
 00:01:41,600 --> 00:01:45,840
 we don't really clear the timeout. So
-我们没有清除定时器。所以
+问题不大，但在你的实际
 
 50
 00:01:44,159 --> 00:01:47,600
 while for this very simple example
-虽然对于这个非常简单的例子来说
+应用中，这可能会导致一些
 
 51
 00:01:45,840 --> 00:01:49,280
 doesn't matter too much, in your actual
-关系不大，但在你的实际
+问题。所以让我们修复它并清除
 
 52
 00:01:47,600 --> 00:01:51,040
 application, that can cause quite some
-应用中，这可能会导致相当多的
+定时器吧。好的。为了确保
 
 53
 00:01:49,280 --> 00:01:52,799
 issues. So let's fix that and clear the
-问题。所以让我们修复它并清除
+消息不会频繁出现故障，我们
 
 54
 00:01:51,040 --> 00:01:55,040
 timeout. Okay. And to make sure the
-定时器。好的。为了确保
+想要清除定时器。所以通常
 
 55
 00:01:52,799 --> 00:01:56,640
 message is not glitching that often, we
-消息不会频繁闪烁，我们
+我们直接说，在这里引入一个 timeout
 
 56
 00:01:55,040 --> 00:01:58,479
 want to clear the timeout. So commonly
-想要清除定时器。通常
+变量。我们可以让它保持在
 
 57
 00:01:56,640 --> 00:01:59,840
 we just say let's introduce a timeout
-我们直接说，让我们在这里引入一个
+
 
 58
 00:01:58,479 --> 00:02:01,840
 variable here. We can leave it at
-定时器变量。我们可以把它留作
+[Translation missing line - 29]
 
 59
 00:01:59,840 --> 00:02:04,240
@@ -301,17 +301,17 @@ we could define it to be undefined or a
 61
 00:02:04,240 --> 00:02:09,360
 NodeJS timeout. And then we say okay,
-NodeJS 定时器。然后我们说好的，
+NodeJS 的定时器。然后我们说，好，
 
 62
 00:02:06,520 --> 00:02:10,800
 let's actually assign the timeout value
-让我们实际将定时器的值
+让我们把定时器的值
 
 63
 00:02:09,360 --> 00:02:13,520
 to that set timeout. And last but not
-分配给那个 setTimeout。最后，
+赋值给那个 setTimeout。最后，
 
 64
 00:02:10,800 --> 00:02:16,160
@@ -326,12 +326,12 @@ available here, we want to clear that by
 66
 00:02:16,160 --> 00:02:21,840
 calling clear timeout with the timeout
-clearTimeout 并传入该定时器
+clearTimeout 来清除它，并传入
 
 67
 00:02:18,720 --> 00:02:24,560
 value. So far so good. And we can even
-值来清除它。目前为止一切顺利。甚至我们可以
+那个定时器值。目前为止一切顺利。甚至我们可以
 
 68
 00:02:21,840 --> 00:02:26,000
@@ -341,17 +341,17 @@ say, all right, uh, timeout value, we
 69
 00:02:24,560 --> 00:02:28,080
 can unset it, but that doesn't matter
-可以取消设置它，但这并不重要，
+可以取消设置它，但这其实并不
 
 70
 00:02:26,000 --> 00:02:30,720
 too much because down here we set it up
-因为在下面我们无论如何都会
+太重要，因为在下面我们无论如何
 
 71
 00:02:28,080 --> 00:02:32,480
 anyway. So, we're fine on that side. And
-设置它。所以，在那方面我们没问题。而且
+都会重新设置它。所以，这方面没问题。而且
 
 72
 00:02:30,720 --> 00:02:34,239
@@ -361,7 +361,7 @@ if we now click the show button and also
 73
 00:02:32,480 --> 00:02:36,239
 hammer it, smash a bit more, we'll see,
-疯狂点击，多按几下，我们会看到，
+狂点它，多点几下，我们会看到，
 
 74
 00:02:34,239 --> 00:02:37,720
@@ -386,37 +386,37 @@ it will eventually disappear. And now,
 78
 00:02:42,319 --> 00:02:47,280
 if we trigger it again, things work as
-如果我们再次触发它，事情会按
+如果我们再次触发它，一切如
 
 79
 00:02:44,480 --> 00:02:48,720
 expected. Nothing breaks. But there's
-预期工作。什么都不会坏。但
+预期般工作。没有任何崩溃。但这里
 
 80
 00:02:47,280 --> 00:02:50,800
 still something wrong here in that
-在这个例子中仍然有一些
+仍然有些问题，在这个
 
 81
 00:02:48,720 --> 00:02:52,959
 example. I mean functionalitywise it
-不对劲的地方。我的意思是功能上它
+例子中。我的意思是，从功能上讲它
 
 82
 00:02:50,800 --> 00:02:54,959
 works right so we could leave the code
-工作正常，所以我们可以保持代码
+是工作的，所以我们可以保持代码
 
 83
 00:02:52,959 --> 00:02:57,120
 as is but there is a bit of activity
-原样，但这里有一点响应式
+原样，但这里有一点
 
 84
 00:02:54,959 --> 00:02:59,599
 here that's unnecessary let's check out
-行为是不必要的。让我们看看
+不必要的活动，让我们看看
 
 85
 00:02:57,120 --> 00:03:01,200
@@ -426,27 +426,27 @@ which part maybe some of you spotted a
 86
 00:02:59,599 --> 00:03:03,360
 problem already and the problem is
-一个问题，这个问题
+一个问题，而这个问题
 
 87
 00:03:01,200 --> 00:03:05,760
 actually this timeout part well I said
-实际上就是这个定时器部分。嗯，我之前说
+其实就是这个定时器部分，嗯，我
 
 88
 00:03:03,360 --> 00:03:08,720
 before it works but it doesn't need to
-过它能工作，但它不需要
+之前说过它能用，但它不需要
 
 89
 00:03:05,760 --> 00:03:11,280
 be reactive because all we do is we set
-具备响应性，因为我们所做的只是
+是响应式的，因为我们要做的只是设置
 
 90
 00:03:08,720 --> 00:03:12,959
 it and in here we also clear it we don't
-设置它，在这里我们也清除它，我们并没有
+它，在这里我们也清除了它，我们没有
 
 91
 00:03:11,280 --> 00:03:14,159
@@ -456,37 +456,37 @@ use in the template we didn't use it as
 92
 00:03:12,959 --> 00:03:16,879
 reference somewhere else so what we can
-把它当作引用使用，所以我们可以
+将它作为引用使用，所以我们可以
 
 93
 00:03:14,159 --> 00:03:19,120
 do is we can just say let timeout and
-做的是，我们只需要说 let timeout，
+做的是，我们只需说 let timeout 并且
 
 94
 00:03:16,879 --> 00:03:21,760
 set it by to undefined by default
-并默认将其设置为 undefined。
+默认将其设为 undefined
 
 95
 00:03:19,120 --> 00:03:24,000
 And here we just say if timeout exists
-在这里我们只需说，如果 timeout 存在，
+在这里我们只需说如果 timeout 存在
 
 96
 00:03:21,760 --> 00:03:26,480
 clear timeout and timeout equals set
-清除定时器，并将 timeout 等于 set
+clearTimeout，然后 timeout 等于
 
 97
 00:03:24,000 --> 00:03:28,239
 timeout. And now we actually get the
-timeout。现在我们实际上得到了
+setTimeout。现在我们实际上得到了
 
 98
 00:03:26,480 --> 00:03:30,319
 same functionality. So I'll click a bit
-相同的功能。所以我多点
+同样的功能。所以我再多点
 
 99
 00:03:28,239 --> 00:03:32,239
@@ -496,7 +496,7 @@ more. Then we see now after 5 seconds
 100
 00:03:30,319 --> 00:03:33,680
 this is resolved. So that's all fine. It
-它被解析了。所以这完全没问题。它
+它被解析了。所以这很好。它
 
 101
 00:03:32,239 --> 00:03:35,840
@@ -511,7 +511,7 @@ click re-triggers the timeout and
 103
 00:03:35,840 --> 00:03:39,599
 nothing messy is happening. So
-没有发生任何混乱的情况。所以
+没有发生任何混乱。所以
 
 104
 00:03:37,840 --> 00:03:41,760
@@ -521,72 +521,72 @@ everything here related to timeouts.
 105
 00:03:39,599 --> 00:03:44,879
 Very often it is totally fine to just
-很多时候，直接使用一个简单的
+通常情况下，直接
 
 106
 00:03:41,760 --> 00:03:46,560
 use a simple plain JavaScript variable
-原生 JavaScript 变量
+使用一个普通的 JavaScript 变量
 
 107
 00:03:44,879 --> 00:03:48,000
 that we can override because this
-并对其进行覆盖是完全没问题的，因为这
+来覆盖是完全没问题的，因为这
 
 108
 00:03:46,560 --> 00:03:49,360
 doesn't need to be reactive. there's
-并不需要具备响应性。并没有
+并不需要响应式。并没有
 
 109
 00:03:48,000 --> 00:03:51,120
 nothing else that needs to be reacting
-其他地方需要对它做出响应。
+其他地方需要对其做出响应。
 
 110
 00:03:49,360 --> 00:03:53,040
 on. There might be some cases where you
-当然，在某些情况下你可能
+在某些情况下，你可能
 
 111
 00:03:51,120 --> 00:03:55,760
 want to have reactivity on that. Then
-确实需要响应性。那么
+确实希望它具备响应式。那么
 
 112
 00:03:53,040 --> 00:03:58,080
 you can resort to using a ref. But by
-你可以选择使用 Ref。但默认
+你可以选择使用 Ref。但默认情况下，
 
 113
 00:03:55,760 --> 00:03:59,840
 default, you really don't have to. And
-情况下，其实并不需要这样做。同样
+你真的没必要这样做。实际上
 
 114
 00:03:58,080 --> 00:04:01,680
 the same actually applies to our second
-的情况也适用于我们的第二个
+同样的道理也适用于我们的第二个
 
 115
 00:03:59,840 --> 00:04:04,400
 example where we just have some static
-示例，即数组中存放了一些静态
+例子，我们这里有一些静态
 
 116
 00:04:01,680 --> 00:04:06,480
 data in an array. We set it up here.
-数据。我们在这里进行设置。
+数据存储在一个数组中。我们在这里定义它。
 
 117
 00:04:04,400 --> 00:04:07,840
 Then we set a default right ref to say
-然后设置一个默认的 Ref 指向
+然后我们设置一个默认的 ref 来指向
 
 118
 00:04:06,480 --> 00:04:10,239
 just the first element. Then we have a
-第一个元素。接着有一个
+数组的第一个元素。接着我们有一个
 
 119
 00:04:07,840 --> 00:04:13,120
@@ -596,17 +596,17 @@ little shuffle function. Also, please
 120
 00:04:10,239 --> 00:04:16,000
 for the sake of it, don't do it like
-为了代码质量，不要像这样
+为了演示起见，千万不要像
 
 121
 00:04:13,120 --> 00:04:18,720
 this. Don't shuffle the whole array like
-操作。不要像这样洗牌整个数组，
+这样写。不要像这样
 
 122
 00:04:16,000 --> 00:04:20,239
 this because this is not really random,
-因为这并非真正的随机，
+打乱整个数组，因为这并不是真正的随机，
 
 123
 00:04:18,720 --> 00:04:23,360
@@ -616,47 +616,47 @@ right? There are better algorithms. This
 124
 00:04:20,239 --> 00:04:25,440
 is just for an example in the video.
-只是视频里的一个示例。
+只是为了视频中的一个示例。
 
 125
 00:04:23,360 --> 00:04:28,320
 Don't do it. Nevertheless, when we hit
-不要这样做。尽管如此，当我们点击
+不要那样做。尽管如此，当我们点击
 
 126
 00:04:25,440 --> 00:04:30,400
 shuffle here, we get some static data,
-这里的洗牌时，得到了一些静态数据，
+这里的洗牌时，我们得到了一些静态数据，
 
 127
 00:04:28,320 --> 00:04:32,400
 mostly sum and data and static
-大部分是求和数据和静态
+大部分是数据以及静态
 
 128
 00:04:30,400 --> 00:04:34,479
 sometimes. So you see it's not entirely
-数据。所以你可以看到它并不完全
+内容。所以你看它并不完全是
 
 129
 00:04:32,400 --> 00:04:36,320
 random, but nevertheless, that works.
-随机，但尽管如此，它还是能运行。
+随机的，但尽管如此，它还是能运行。
 
 130
 00:04:34,479 --> 00:04:38,800
 And also here there is a bit more
-而且在这里，响应性也比
+而且在这里也存在比实际需要
 
 131
 00:04:36,320 --> 00:04:41,040
 reactivity than needed because well, I
-实际需要的要多，因为嗯，我
+更多的响应式，因为正如我
 
 132
 00:04:38,800 --> 00:04:42,720
 said before this up here is just static
-之前说过上面的这些只是静态
+之前所说，上面的这些只是静态
 
 133
 00:04:41,040 --> 00:04:44,960
@@ -666,52 +666,52 @@ data. If this will never change, then
 134
 00:04:42,720 --> 00:04:46,720
 just treat it as static data. It's fine.
-就把它当作静态数据处理。没问题。
+就把它当作静态数据处理。这样就行了。
 
 135
 00:04:44,960 --> 00:04:48,479
 The changeable part still needs to be a
-可变的部分仍然需要是
+可变的部分仍然需要定义为
 
 136
 00:04:46,720 --> 00:04:49,919
 ref because we want to change that. But
-Ref，因为我们需要修改它。但
+Ref，因为我们需要对其进行更改。但
 
 137
 00:04:48,479 --> 00:04:52,240
 now we can replace the dot value
-现在我们可以去掉 .value
+现在我们可以去掉各处的
 
 138
 00:04:49,919 --> 00:04:54,080
 everywhere and we don't have to save it,
-到处都是，且不必保存它，
+.value，且不必将其保存，
 
 139
 00:04:52,240 --> 00:04:56,320
 which well also clears up a bit of
-这也能为你清理一点
+这也能为你节省出一点
 
 140
 00:04:54,080 --> 00:04:57,680
 memory for you. Um, that doesn't hurt
-内存。嗯，这不会有坏处，
+内存。嗯，这没有任何坏处，
 
 141
 00:04:56,320 --> 00:05:00,000
 and the garbage collector can do its
-而且垃圾回收机制也可以
+垃圾回收器也能正常
 
 142
 00:04:57,680 --> 00:05:02,400
 thing too. So all good, especially with
-发挥作用。所以一切都好，尤其是对于
+运作。所以一切都好，尤其是处理
 
 143
 00:05:00,000 --> 00:05:04,800
 a large chunk of structured static data.
-一大块结构化的静态数据。
+一大块结构化的静态数据时。
 
 144
 00:05:02,400 --> 00:05:08,000
@@ -721,102 +721,102 @@ It is never a bad idea to not use a ref
 145
 00:05:04,800 --> 00:05:09,600
 for that and only use refs or reactive
-永远不是坏主意，只有当你需要
+从来都不是坏主意，只有当你需要
 
 146
 00:05:08,000 --> 00:05:11,840
 for whenever you need to be something
-真正具备响应性时，才使用 Ref 或 Reactive。
+真正实现响应式时，才使用 Ref 或 Reactive。
 
 147
 00:05:09,600 --> 00:05:13,759
 actually reactive. And that's the data
-而这些数据
+而这并不适用于这里的数据。下一个
 
 148
 00:05:11,840 --> 00:05:15,280
 that doesn't apply here. The next
-并不属于这种情况。下一个
+出现的例子实际上是
 
 149
 00:05:13,759 --> 00:05:16,960
 example that comes up is actually a
-出现的例子实际上是我的
+我的最爱，因为它不仅
 
 150
 00:05:15,280 --> 00:05:18,960
 favorite of mine because it not only
-最爱，因为它不仅
+教你如何以某种方式避免使用响应式，
 
 151
 00:05:16,960 --> 00:05:21,120
 teaches you how to not use reactivity in
-教会你如何以某种方式避免使用响应式，
+而且还展示了 Vue.js 的其他特性，
 
 152
 00:05:18,960 --> 00:05:23,039
 a certain way, but also other features
-还涉及 Vue.js 的其他功能
+以及它们在何时非常
 
 153
 00:05:21,120 --> 00:05:25,759
 of Vue.js and when they are quite
-以及它们在何时非常
+有用，没错，这是一个经典案例。我们有
 
 154
 00:05:23,039 --> 00:05:27,360
 helpful and yes, it's a classic. We have
-有用，是的，这是一个经典案例。我们有
+两个输入框，分别用于名字和
 
 155
 00:05:25,759 --> 00:05:28,800
 two input fields for the first name and
-两个分别用于名和
+姓氏，我们想要在下方显示
 
 156
 00:05:27,360 --> 00:05:31,360
 the last name and we want to show the
-姓的输入框，我们想要在下方显示
+全名。所以我们应用了两个数据
 
 157
 00:05:28,800 --> 00:05:33,520
 full name down here. So we have two data
-全名。所以我们应用了两个数据
+绑定，但目前还没有任何输出，
 
 158
 00:05:31,360 --> 00:05:35,120
 binding applied but nothing is written
-绑定，但目前还没有写下任何东西，
+因为在脚本块中
 
 159
 00:05:33,520 --> 00:05:36,960
 down yet because well nothing's
-因为，嗯，脚本块中
+什么逻辑都没有写。而且
 
 160
 00:05:35,120 --> 00:05:38,160
 happening in the script block. And
-什么都没有发生。而且
+通常情况下，特别是如果你了解
 
 161
 00:05:36,960 --> 00:05:39,680
 commonly especially if you know the
-通常情况下，特别是如果你了解
+Watch 特性，你可能会说，好吧，
 
 162
 00:05:38,160 --> 00:05:42,080
 watch feature you could say okay you
-Watch 功能，你可能会说好吧，你
+太棒了，我们有一个侦听器，我们可以
 
 163
 00:05:39,680 --> 00:05:44,639
 know what great we have a watcher we can
-知道吗，太棒了，我们有一个侦听器，我们可以
+使用它来侦听名字和姓氏。
 
 164
 00:05:42,080 --> 00:05:47,120
 use it watch first name and last name.
-用它来侦听名和姓。
+[Translation missing line - 30]
 
 165
 00:05:44,639 --> 00:05:49,280
@@ -826,7 +826,7 @@ So actually watch both at the same time
 166
 00:05:47,120 --> 00:05:52,000
 and whenever something changes here then
-每当这里有任何变化时
+每当这里发生变化时
 
 167
 00:05:49,280 --> 00:05:54,400
@@ -836,22 +836,22 @@ we can do the following. We have first
 168
 00:05:52,000 --> 00:05:56,560
 and last here we can also make sure we
-姓和名，我们也可以确保我们
+名和姓，我们也可以确保我们
 
 169
 00:05:54,400 --> 00:05:58,720
 can treat it as a as a single array as
-能将其视为一个单一的数组来
+可以将它视为一个单一的数组
 
 170
 00:05:56,560 --> 00:06:01,840
 well. We can say I know name array and
-处理。我们可以定义一个 name 数组，然后
+也是可以的。我们可以说 name array
 
 171
 00:05:58,720 --> 00:06:03,800
 then we could say full name dot value
-我们可以让 full name 点 value
+然后我们可以说 full name 的 value
 
 172
 00:06:01,840 --> 00:06:07,520
@@ -861,67 +861,67 @@ equals name
 173
 00:06:03,800 --> 00:06:09,840
 array dot join with a space and every
-数组点 join 并加上空格，每次
+数组用空格连接，并且每次
 
 174
 00:06:07,520 --> 00:06:12,160
 time we change something now that works
-我们更改某些内容时，现在这样就
+我们更改某些内容时，现在它就能
 
 175
 00:06:09,840 --> 00:06:14,880
 as expected. So we have first and last
-能按预期工作了。所以我们有姓和名
+如预期般工作。所以我们有 first 和 last
 
 176
 00:06:12,160 --> 00:06:16,960
 name here and now if we say okay this
-在这里，现在如果我们说好吧，这
+name 在这里，现在如果我们说好的这
 
 177
 00:06:14,880 --> 00:06:18,759
 should be filled that might be like has
-应该被填充，这可能就像拥有
+应该被填充，那可能就像有
 
 178
 00:06:16,960 --> 00:06:21,280
 some initial value we can also run
-一些初始值，我们也可以运行
+一些初始值，我们也可以
 
 179
 00:06:18,759 --> 00:06:23,440
 immediately. So we have an immediate
-立即执行。所以我们在这里也有一个
+运行它。所以我们这里也有一个
 
 180
 00:06:21,280 --> 00:06:24,560
 true value here as well. Actually, let
-immediate 为 true 的值。实际上，让
+immediate 为 true 的值。实际上，让我
 
 181
 00:06:23,440 --> 00:06:27,199
 me quickly show you what happens
-我快速向你展示会发生什么
+快速向你们展示一下会发生什么
 
 182
 00:06:24,560 --> 00:06:31,440
 without. And we say first name is John
-如果不这样做。我们说名字是 John
+如果没有它。当我们说 first name 是 John
 
 183
 00:06:27,199 --> 00:06:35,440
 and last name is Snow. I know how to do
-姓氏是 Snow。我知道怎么做
+而 last name 是 Snow。我知道该怎么做
 
 184
 00:06:31,440 --> 00:06:37,680
 it. You know nothing, Jon Snow. Right.
-你什么都不知道，琼恩·雪诺。对吧。
+你什么都不知道，Jon Snow。对吧。
 
 185
 00:06:35,440 --> 00:06:39,039
 Then here we go. We the watcher doesn't
-然后就开始了。侦听器并不会
+然后就这样。我们的侦听器不会
 
 186
 00:06:37,680 --> 00:06:40,560
@@ -931,1019 +931,914 @@ trigger automatically. So, we don't have
 187
 00:06:39,039 --> 00:06:42,720
 anything reflected. If we type something
-内容反映出来。如果我们现在输入一些
+内容被反映出来。如果我们输入一些
 
 188
 00:06:40,560 --> 00:06:44,639
 now that works, and we don't want that.
-内容，它就生效了，而我们不希望那样。
+内容，现在它能工作了，但我们不希望那样。
 
 189
 00:06:42,720 --> 00:06:47,360
 So, commonly you want to have the good
-所以，通常你想要拥有那个
+所以，通常你想要拥有好的
 
 190
 00:06:44,639 --> 00:06:48,720
 old immediate true here. So, it triggers
-好用的 immediate true。这样它就会
+老朋友 immediate true。这样它就会
 
 191
 00:06:47,360 --> 00:06:51,600
 straight away in the beginning. And here
-在开始时立即触发。然后在这里
+在开始时立即触发。在这里
 
 192
 00:06:48,720 --> 00:06:54,479
 we see this works. Quick example again.
-我们看到这生效了。再次快速举例。
+我们看到这起作用了。再次快速演示一下。
 
 193
-00:06:51,600 --> 00:06:57,520
-False. Nothing's in there. True. Here we
-不对。里面什么都没有。没错。我们现在
-
-194
-00:06:54,479 --> 00:06:59,280
-go. And yes, that looks weird because
-开始。确实，这看起来很奇怪，因为
-
-195
-00:06:57,520 --> 00:07:01,039
-most of you know what to do instead of
-你们大多数人都知道在这里不应该
-
-196
-00:06:59,280 --> 00:07:02,960
-using a watcher here. Watches are great
-使用侦听器。侦听器非常适合
-
-197
-00:07:01,039 --> 00:07:04,240
-for side effects and it's great to rely
-处理副作用，如果你想要，比方说
-
-198
-00:07:02,960 --> 00:07:06,479
-on them if you, I don't know, want to do
-进行 API 调用、处理日期、做一些
-
-199
-00:07:04,240 --> 00:07:09,280
-an API call, work with dates, do some
-随机操作等等，那么依赖它们是很棒的。但对于
-
-200
-00:07:06,479 --> 00:07:11,520
-randomness, and so on so on. But for a
-像合并两个值、过滤列表这样简单的
-
-201
-00:07:09,280 --> 00:07:14,000
-simple scenario like combining two
-场景，以此类推，使用侦听器
-
-202
-00:07:11,520 --> 00:07:16,319
-values, filtering a list, and so on so
-会产生更多的样板代码
-
-203
-00:07:14,000 --> 00:07:17,759
-on, watchers are a bit more boilerplate
-且显得大材小用。这并不是说它们
-
-204
-00:07:16,319 --> 00:07:19,680
-and overkill. That doesn't mean they
-无法工作。实际上，它们确实能工作，
-
-205
-00:07:17,759 --> 00:07:23,280
-don't work. Well, actually they do work,
-但它们的性能以及直观和可读性
-
-206
-00:07:19,680 --> 00:07:25,680
-but they are not as performant and as
-都不如其他方案，
-
-207
-00:07:23,280 --> 00:07:28,000
-obvious and readable as something else
-也就是计算属性。所以让我们
-
-208
-00:07:25,680 --> 00:07:29,599
-computed properties obviously. So let's
-重构整个代码，因为
-
-209
-00:07:28,000 --> 00:07:31,039
-refactor the whole thing because
-实际上我们这里已经有
-
-210
-00:07:29,599 --> 00:07:34,080
-actually we have a big part here
-很大一部分了。我们有这个，意味着好的
-
-211
-00:07:31,039 --> 00:07:36,240
-already. We have this which means okay
-我们依赖于 name 数组。所以名字
-
-212
-00:07:34,080 --> 00:07:39,199
-we rely on the name array. So first name
-和姓氏，我们将它们
-
-213
-00:07:36,240 --> 00:07:41,280
-and last name and we join them together.
-拼接在一起。
-
-214
 00:07:39,199 --> 00:07:43,120
 This we can do in a computer property by
-我们可以通过计算属性来实现，
+我们可以通过计算属性来实现这一点，
 
-215
+194
 00:07:41,280 --> 00:07:45,919
 saying okay full name is just to comput
-定义一个 full name 并通过计算得出，
+只需声明全名是计算得出的，
 
-216
+195
 00:07:43,120 --> 00:07:50,880
 it and in here we can say let's return
-在这里我们可以直接返回
+在这里我们可以返回
 
-217
+196
 00:07:45,919 --> 00:07:52,880
 first name plus this plus last name and
-first name 加上空格再加上 last name，
+名字加上空格再加上姓氏，当然
 
-218
+197
 00:07:50,880 --> 00:07:54,800
 of course we need to attach the values
-当然我们需要绑定这些值，
+我们需要绑定这些值，
 
-219
+198
 00:07:52,880 --> 00:07:56,639
 otherwise things wouldn't work. We need
-否则代码无法正常工作。我们还需要
+否则程序无法运行。我们需要
 
-220
+199
 00:07:54,800 --> 00:07:59,120
 to also import computed if we don't use
 导入 computed，如果我们没有使用
 
-221
+200
 00:07:56,639 --> 00:08:01,759
 autoimp imports over here and things
-自动导入功能，那么一切
+这里的自动导入功能，那么一切
 
-222
+201
 00:07:59,120 --> 00:08:04,560
 work automatically without even setting
-都会自动运行，甚至不需要设置
+都会自动运行，甚至无需设置
 
-223
+202
 00:08:01,759 --> 00:08:06,319
 anything regarding immediate or or
 任何关于 immediate 或
 
-224
+203
 00:08:04,560 --> 00:08:07,680
 anything around that. Also, of course,
-其他相关的参数。当然，
+类似的内容。当然，你也可以
 
-225
+204
 00:08:06,319 --> 00:08:09,360
 you can refactor this to a template
-你也可以将其重构为模板
+为了本视频演示的目的，将其重构为
 
-226
+205
 00:08:07,680 --> 00:08:12,240
 string just for the sake of this video,
-字符串，为了视频演示起见，
+模板字符串，
 
-227
+206
 00:08:09,360 --> 00:08:14,479
 that's fine like that. More importantly,
-这样写是可以的。更重要的是，
+这样写也没问题。更重要的是，
 
-228
+207
 00:08:12,240 --> 00:08:16,080
 this will also be lazily evaluated. So,
-这也会进行惰性求值。所以，
+它还会进行惰性求值。所以，
 
-229
+208
 00:08:14,479 --> 00:08:18,400
 if you don't need it in a template or
-如果你在模板或其他地方不需要它，
+如果你在模板中或其他地方不需要它，
 
-230
+209
 00:08:16,080 --> 00:08:20,639
 something else, the function in here is
 这里的函数甚至
 
-231
+210
 00:08:18,400 --> 00:08:22,400
 not even executed, which can be very
-不会被执行，这对于你有业务逻辑
+都不会执行，这在你有业务逻辑或
 
-232
+211
 00:08:20,639 --> 00:08:24,479
 helpful if you have business logic or
-或需要运行高开销的操作时
+开销较大的操作需要运行时，
 
-233
+212
 00:08:22,400 --> 00:08:26,000
 costly operations to be running.
-非常有用。
+会非常有帮助。
 
-234
+213
 00:08:24,479 --> 00:08:27,759
 Contrary to watchers though, in
-然而与侦听器不同的是，在
+但与侦听器不同的是，在
 
-235
+214
 00:08:26,000 --> 00:08:29,599
 computers, you should never do side
-计算属性中，你绝不应该执行副作用。
+计算属性中，你绝不应该产生副作用。
 
-236
+215
 00:08:27,759 --> 00:08:31,759
 effects. So, don't set I don't know
-所以，不要去修改，比如
+所以，不要把比如
 
-237
+216
 00:08:29,599 --> 00:08:34,719
 first name value to something else.
-把 first name 的值改为其他内容。
+名字的值设置为其他东西。
 
-238
+217
 00:08:31,759 --> 00:08:36,959
 let's say first name value plus one or
 比如名字的值加一或者
 
-239
+218
 00:08:34,719 --> 00:08:39,560
 something like that because well not
 类似这样的操作，因为不仅
 
-240
+219
 00:08:36,959 --> 00:08:42,719
 only that you can cause some funny
-如此，你还可能引发一些奇怪的
+那样，你可能会引发一些奇怪的
 
-241
+220
 00:08:39,560 --> 00:08:45,279
 loops. Computers are never guaranteed to
-循环。计算属性无法保证
+循环。计算属性并不保证在
 
-242
+221
 00:08:42,719 --> 00:08:46,640
 run a certain amount of time. So you
-会在特定时间内运行。所以你
+特定时间内运行。所以你
 
-243
+222
 00:08:45,279 --> 00:08:48,640
 also get some effects that you don't
-还会得到一些你并不
+也会得到一些你并不
 
-244
+223
 00:08:46,640 --> 00:08:50,080
 really want to. Instead you should
 真正想要的效果。相反，你应该
 
-245
+224
 00:08:48,640 --> 00:08:51,760
 really use watchers for that. And you
-确实为此使用侦听器。并且你
+真正使用侦听器来处理。而且你
 
-246
+225
 00:08:50,080 --> 00:08:54,800
 can also use a watcher on a computer
-也可以在一个计算
+也可以在计算属性上使用
 
-247
+226
 00:08:51,760 --> 00:08:56,480
 property. That's also fully fine. So
-属性上使用侦听器。这完全没问题。所以
+侦听器。这完全没问题。所以
 
-248
+227
 00:08:54,800 --> 00:08:58,560
 don't forget to split out when you use
-别忘了在使用
+别忘了在使用侦听器或
 
-249
+228
 00:08:56,480 --> 00:09:00,399
 watchers or computers. I would always
-侦听器或计算属性时进行拆分。我总是
+计算属性时进行拆分。我总是
 
-250
+229
 00:08:58,560 --> 00:09:02,320
 try to solve it with a computer first
-尝试先用计算属性解决问题
+建议先尝试用计算属性解决
 
-251
+230
 00:09:00,399 --> 00:09:05,200
 without using side effects and without
-而不使用副作用，也不
+在不使用副作用和不
 
-252
+231
 00:09:02,320 --> 00:09:08,480
 using async operations and so on so on
-使用异步操作等等等等
+使用异步操作等等的情况下
 
-253
+232
 00:09:05,200 --> 00:09:10,240
 but if that's enough go for it and
-但如果那样足够了，就用它吧，并且
+但如果那样足够了就去用吧，而且
 
-254
+233
 00:09:08,480 --> 00:09:12,080
 talking about computer properties well
 说到计算属性，嗯
 
-255
+234
 00:09:10,240 --> 00:09:14,720
 I've seen a lot of antiatterns on that
-我也见过很多关于它的反模式
+我见过很多关于它的反模式
 
-256
+235
 00:09:12,080 --> 00:09:16,320
 one as well and one is described here
-其中一个就在这里描述
+这里就描述了一个
 
-257
+236
 00:09:14,720 --> 00:09:18,000
 this is a bit more code so let me
 这里的代码稍微多一点，所以让我
 
-258
+237
 00:09:16,320 --> 00:09:19,760
 quickly walk you through that here are
 快速带你过一遍，这里有
 
-259
+238
 00:09:18,000 --> 00:09:21,440
 some reps defined for like a price
-一些定义好的引用对象，比如价格
+一些定义的 Ref，比如价格
 
-260
+239
 00:09:19,760 --> 00:09:23,040
 quantity discount code and shipping this
 数量、折扣码和运费，这
 
-261
+240
 00:09:21,440 --> 00:09:25,440
 is like a very simple order management
 是一个非常简单的订单管理
 
-262
+241
 00:09:23,040 --> 00:09:28,320
 system in the view single file component
-系统，再次在 Vue 单文件组件
+系统，在 Vue 单文件组件
 
-263
+242
 00:09:25,440 --> 00:09:30,160
 playground again and the big part of
-演练场中。而大部分
+演练场里，而大部分
 
-264
+243
 00:09:28,320 --> 00:09:34,080
 code is actually hidden in here. We see
 代码实际上隐藏在这里。我们看到
 
-265
+244
 00:09:30,160 --> 00:09:37,360
 from like 9 to 47. So in here in that
-从第 9 行到 47 行。所以在这里的
+从第 9 行到 47 行。所以在这里
 
-266
+245
 00:09:34,080 --> 00:09:38,800
 summary we have well some errors, some
-摘要中，我们有一些错误，一些
+在这个总结中，我们有错误，一些
 
-267
+246
 00:09:37,360 --> 00:09:41,120
 price calculations, some discount
 价格计算，一些折扣
 
-268
+247
 00:09:38,800 --> 00:09:43,200
 calculations, shipping, taxing, get the
 计算，运费，税费，获取
 
-269
+248
 00:09:41,120 --> 00:09:46,000
 total and then we return all of that
-总额，然后我们返回所有这些
+总计，然后我们返回所有这些
 
-270
+249
 00:09:43,200 --> 00:09:48,880
 together to then use it well step by
-组合在一起，以便之后使用，嗯，一步
+组合在一起，以便后续使用
 
-271
+250
 00:09:46,000 --> 00:09:50,720
 step for like a V model or in this case
-一步地用于 v-model，或者在这种情况下
+比如 v-model，或者在这种情况下
 
-272
+251
 00:09:48,880 --> 00:09:53,279
 just rendering the whole thing down
-只是把整个东西渲染在
+只是把整个内容渲染在
 
-273
+252
 00:09:50,720 --> 00:09:56,240
 here. And when you look at the code, you
-下面。当你查看这段代码时，你
+这里。当你查看这段代码时，你
 
-274
+253
 00:09:53,279 --> 00:09:58,480
 might think, do we need that all of it
 可能会想，我们需要把所有这些
 
-275
+254
 00:09:56,240 --> 00:10:00,959
 in a computer property? And well, the
 都放在一个计算属性里吗？嗯，
 
-276
+255
 00:09:58,480 --> 00:10:03,519
 answer is no. Of course not. Actually,
 答案是不。当然不需要。实际上，
 
-277
+256
 00:10:00,959 --> 00:10:04,640
 it's even a problem because I just
 这甚至是个问题，因为我刚才
 
-278
+257
 00:10:03,519 --> 00:10:07,279
 explained to you, okay, computer
-向你解释过，好的，计算
+跟你解释过，好吧，计算
 
-279
+258
 00:10:04,640 --> 00:10:08,880
 properties are lazily evaluated. So if
 属性是惰性求值的。所以如果
 
-280
+259
 00:10:07,279 --> 00:10:10,839
 you don't need a certain value, it's
-你不需要某个特定值，这
+你不需要某个特定的值，那没
 
-281
+260
 00:10:08,880 --> 00:10:13,920
 fine. It won't be triggered the whole
-没关系。它不会触发整个
+关系。它不会触发整个
 
-282
+261
 00:10:10,839 --> 00:10:16,240
 calculation. But now we actually have
-计算过程。但现在我们实际上有了
+计算过程。但现在我们实际上有
 
-283
+262
 00:10:13,920 --> 00:10:17,839
 kind of the opposite effect. So whenever
 一种相反的效果。所以每当
 
-284
+263
 00:10:16,240 --> 00:10:19,760
 dependency of this computer property
 这个计算属性的依赖
 
-285
+264
 00:10:17,839 --> 00:10:22,160
 changes, no matter if it's the price,
-发生变化时，无论是价格、
+发生变化时，无论它是价格、
 
-286
+265
 00:10:19,760 --> 00:10:24,079
 the quantity, the discount code, the
 数量、折扣码、
 
-287
+266
 00:10:22,160 --> 00:10:25,760
 shipping, all of this will be
 运费，所有这些都会
 
-288
+267
 00:10:24,079 --> 00:10:27,839
 recalculated. And now, of course, this
-被重新计算。而现在，当然，
+重新计算。当然，现在
 
-289
+268
 00:10:25,760 --> 00:10:29,360
 is rather easy functionalitywise, but
 从功能上讲这比较简单，但
 
-290
+269
 00:10:27,839 --> 00:10:31,519
 sometimes the business logic can be
 有时业务逻辑可能会
 
-291
+270
 00:10:29,360 --> 00:10:33,360
 quite expensive. So you definitely don't
-相当昂贵。所以你绝对不
+非常昂贵。所以你绝对不
 
-292
+271
 00:10:31,519 --> 00:10:35,440
 want to reexecute everything that's
-想因为一个小东西改变
+想因为一点点小变动就重新执行
 
-293
+272
 00:10:33,360 --> 00:10:37,440
 calculated here just because a tiny
-就重新执行这里计算的
+这里计算的所有内容。所以，你应该
 
-294
+273
 00:10:35,440 --> 00:10:39,600
 thing changes. So instead, you would
-所有内容。所以，你应该
+把它拆分成不同的计算属性。
 
-295
+274
 00:10:37,440 --> 00:10:41,680
 split it up into different computers.
-将其拆分为不同的计算属性。
+把它拆分成不同的计算属性。
 
-296
+275
 00:10:39,600 --> 00:10:44,000
 And I would also advocate to split it up
 我还建议将其拆分
 
-297
+276
 00:10:41,680 --> 00:10:46,560
 into different functions because right
-成不同的函数，因为现在
+成不同的函数，因为目前
 
-298
+277
 00:10:44,000 --> 00:10:48,880
 now the business logic is quite tightly
 业务逻辑与框架
 
-299
+278
 00:10:46,560 --> 00:10:51,040
 coupled to the framework and that
 耦合得过于紧密，这
 
-300
+279
 00:10:48,880 --> 00:10:53,519
 doesn't only make it harder to test or
 不仅让测试或
 
-301
+280
 00:10:51,040 --> 00:10:55,360
 to change. It's also not very readable.
-修改变得困难，可读性也很差。
+修改变得困难。可读性也很差。
 
-302
+281
 00:10:53,519 --> 00:10:57,519
 So having your business logic like
-因此，将业务逻辑（例如
+将业务逻辑（例如
 
-303
+282
 00:10:55,360 --> 00:11:00,160
 calculating the price, the discount and
-计算价格、折扣以及
+计算价格、折扣等）
 
-304
+283
 00:10:57,519 --> 00:11:02,560
 so on so on separate makes it easily
-等等）分离开来，会使其更易于
+进行拆分，会使其更易于
 
-305
+284
 00:11:00,160 --> 00:11:05,200
 testable. I I hope you write tests,
-测试。我希望你们会写测试，
+测试。我希望你编写测试，
 
-306
+285
 00:11:02,560 --> 00:11:06,880
 right? You better should. And of course
-对吧？你们最好要写。当然，
+对吧？你最好写一下。当然，
 
-307
+286
 00:11:05,200 --> 00:11:08,720
 it makes it also easier to use because
 这也让使用变得更简单，因为
 
-308
+287
 00:11:06,880 --> 00:11:10,640
 then in your computer property or
-在你的计算属性或
+在你的计算属性（computed）或
 
-309
+288
 00:11:08,720 --> 00:11:12,320
 properties in this case you just have a
-本例中的多个属性里，你只需要调用
+本例中的多个计算属性中，你只需要
 
-310
+289
 00:11:10,640 --> 00:11:15,040
 tiny function call with all the
-一个包含所有
+一个微小的函数调用，包含所有
 
-311
+290
 00:11:12,320 --> 00:11:17,120
 reactivity parts and that's quite
-响应式逻辑的小函数，这在
+响应式部分，如果我们要开始重构
 
-312
+291
 00:11:15,040 --> 00:11:18,959
 helpful if we would start refactoring
-我们要开始重构时
+那部分代码，这会非常有帮助，
 
-313
+292
 00:11:17,120 --> 00:11:21,680
 that and don't worry the video is not
-非常有帮助。别担心，视频并不
+别担心，视频并不
 
-314
+293
 00:11:18,959 --> 00:11:23,519
 that long so we uh skip most of the part
 那么长，所以我们跳过大部分内容，
 
-315
+294
 00:11:21,680 --> 00:11:25,200
 I would probably start taking each of
 我可能会开始把每一部分
 
-316
+295
 00:11:23,519 --> 00:11:26,880
 these parts out and say okay you know
-提取出来，然后说，好吧，你知道吗，
+都拆分出来，说，好吧，你知道
 
-317
+296
 00:11:25,200 --> 00:11:28,560
 what let's take the discard out put it
-让我们把折扣提取出来，放到
+吗，让我们把折扣拿出来，放进
 
-318
+297
 00:11:26,880 --> 00:11:30,399
 in their own computed and then even
 它们各自的计算属性中，甚至
 
-319
+298
 00:11:28,560 --> 00:11:33,120
 abstract the function out of that and
-把函数抽象出来，然后
+把函数从其中抽象出来，
 
-320
+299
 00:11:30,399 --> 00:11:34,640
 then continue and eventually we can also
-继续下去。最终我们也可以
+然后继续，最终我们也可以
 
-321
+300
 00:11:33,120 --> 00:11:36,480
 to make sure things will work. We can
-确保一切正常运行。我们
+确保一切正常运行。我们也可以
 
-322
+301
 00:11:34,640 --> 00:11:38,240
 also put it back in the big computed,
-也可以把它放回那个大的计算属性中，
+把它放回那个大的计算属性中，
 
-323
+302
 00:11:36,480 --> 00:11:39,760
 but I would probably just get rid of the
-但我可能会直接舍弃
+但我可能会直接去掉
 
-324
+303
 00:11:38,240 --> 00:11:41,519
 whole big computed because it's quite
 整个大的计算属性，因为它完全
 
-325
+304
 00:11:39,760 --> 00:11:43,200
 unnecessary. If we take a look where
-没有必要。如果我们看看除了
+没必要。如果我们看看这里除了
 
-326
+305
 00:11:41,519 --> 00:11:45,360
 summary is used here besides the word
-订单摘要这个词之外，summary 在哪里
+订单摘要之外，summary 在哪里被使用，
 
-327
+306
 00:11:43,200 --> 00:11:47,279
 order summary, well, we just say, okay,
-被使用，好吧，我们只需说，如果
+嗯，我们只需要说，好吧，
 
-328
+307
 00:11:45,360 --> 00:11:49,440
 if there is an error, well, that can be
-有错误，那可以
+如果存在错误，嗯，那可以是
 
-329
+308
 00:11:47,279 --> 00:11:50,640
 a separate one, right? Just render all
-作为一个单独的项，对吧？只需渲染所有
+一个独立的属性，对吧？直接渲染所有
 
-330
+309
 00:11:49,440 --> 00:11:52,640
 of these and these are all separate
-这些内容，它们都是独立的
+这些内容，它们都是相互独立的
 
-331
+310
 00:11:50,640 --> 00:11:55,200
 things. They're not necessarily related
 事物。它们之间不一定相关，
 
-332
+311
 00:11:52,640 --> 00:11:56,959
 except the total which can be computed
-除了总计，它可以根据
+除了总计（total），它可以基于
 
-333
+312
 00:11:55,200 --> 00:11:59,360
 based on the other things. And that's
 其他部分计算得出。这
 
-334
+313
 00:11:56,959 --> 00:12:01,120
 totally fine. But then only the total
 完全没问题。但这样只有总计
 
-335
+314
 00:11:59,360 --> 00:12:02,240
 will change if one of these parts will
-会在其中一个部分
+会在其中某一部分发生变化时
 
-336
+315
 00:12:01,120 --> 00:12:05,440
 change, but not each of the
-发生变化时才更新，而不是每一个
+才改变，而不是每一项
 
-337
+316
 00:12:02,240 --> 00:12:07,200
 calculations. So step by step is a good
-计算都会更新。所以循序渐进是
+计算都重新执行。所以逐步进行是个好
 
-338
+317
 00:12:05,440 --> 00:12:08,880
 idea here. By the way, the same idea
-一个好主意。顺便说一句，同样的思路
+主意。顺便说一下，同样的思路
 
-339
+318
 00:12:07,200 --> 00:12:10,880
 also applies when you send an object
 也适用于当你将一个对象
 
-340
+319
 00:12:08,880 --> 00:12:12,480
 down to a child component as a prop.
 作为 prop 传递给子组件时。
 
-341
+320
 00:12:10,880 --> 00:12:14,720
 It's called prop stability. So instead
-这被称为属性稳定性。所以与其
+这被称为 Props 稳定性。所以与其
 
-342
+321
 00:12:12,480 --> 00:12:17,120
 of sending one big object, only send the
-传递一个巨大的对象，不如只传递
+发送一个巨大的对象，不如只发送
 
-343
+322
 00:12:14,720 --> 00:12:18,720
 things that are actually relevant for
-对组件真正相关的内容。
+对该组件真正相关的内容。而且你还可以
 
-344
+323
 00:12:17,120 --> 00:12:20,320
 the component. And also you can abstract
-而且你还可以对其进行抽象。
+对它们进行抽象。所以与其发送一个 ID，你
 
-345
+324
 00:12:18,720 --> 00:12:22,000
 them. So instead of sending an ID, you
-所以与其传递一个 ID，你
+可能只需要发送它是否为偶数或
 
-346
+325
 00:12:20,320 --> 00:12:24,240
 might just want to send if it's even or
-可能只需要传递它是奇数还是
+奇数用于配色。这样组件就
 
-347
+326
 00:12:22,000 --> 00:12:26,399
 odd for coloring. So the component will
-偶数来决定颜色。这样组件就
+不必在每次 ID 变化时都重新评估
 
-348
+327
 00:12:24,240 --> 00:12:28,320
 not have to re-evaluate the prop every
-不必在每次 ID 变化时都重新
+该 Prop，而只需在它是偶数或
 
-349
+328
 00:12:26,399 --> 00:12:31,600
 time the ID changes, but just if it's
-评估属性，而只需在它是
+奇数时处理，这只是一个例子。所以思考
 
-350
+329
 00:12:28,320 --> 00:12:33,680
 even or odd, as an example. So thinking
-奇数或偶数时才评估，这只是一个例子。所以要思考
+Props 稳定性以及该传递什么内容。
 
-351
+330
 00:12:31,600 --> 00:12:35,720
 about prop stability and what to pass.
-属性稳定性以及该传递什么。
+这对计算属性也很有帮助。
 
-352
+331
 00:12:33,680 --> 00:12:38,240
 Same for computers is actually quite
-计算属性其实也相当
+这里的最后一个例子看起来
 
-353
+332
 00:12:35,720 --> 00:12:39,920
 helpful. So the last example here seems
-有帮助。所以这里的最后一个例子看起来
+非常基础。只有五行
 
-354
+333
 00:12:38,240 --> 00:12:41,360
 like a very plain one. Just five lines
-非常简单。只有五行
-
-355
-00:12:39,920 --> 00:12:42,639
-of code. We can actually fully zoom in
 代码。我们其实可以完全放大
 
-356
+334
+00:12:39,920 --> 00:12:42,639
+of code. We can actually fully zoom in
+因为右侧没有什么可展示的。
+
+335
 00:12:41,360 --> 00:12:44,399
 because there was nothing to show on the
-因为右侧没有什么可展示的
+但它依然相当
 
-357
+336
 00:12:42,639 --> 00:12:46,720
 right side. But it's still quite
-内容。但这仍然是一个
+重要。这里的问题在于
 
-358
+337
 00:12:44,399 --> 00:12:48,560
 important one. And what's wrong here is
-相当重要的例子。这里的问题
+其实并没有什么大问题，因为我们设置的
 
-359
+338
 00:12:46,720 --> 00:12:50,320
 actually not much because we set the
-其实并不大，因为我们设置的
+是一个可以 resolve 或 reject 的 Promise。
 
-360
+339
 00:12:48,560 --> 00:12:52,480
 value that's a promise that can resolve
-是一个可以成功或失败的 Promise 值
+这没问题。但实际上如果你
 
-361
+340
 00:12:50,320 --> 00:12:54,880
 or reject. It's fine. But actually if
-没问题。但实际上如果你
+在这里使用响应式系统仅用于数据
 
-362
+341
 00:12:52,480 --> 00:12:56,880
 you use a response here only for data
-在这里仅将响应式用于数据
+获取，却一直重写它。
 
-363
+342
 00:12:54,880 --> 00:12:58,560
 fetching only override it all the time.
-获取，却一直覆盖它。
+这就不太好了。
 
-364
+343
 00:12:56,880 --> 00:13:00,240
 Then this doesn't have to be a ref. This
-那么它就不必是一个 ref。这个
+那么它就不必是 Ref。这
 
-365
+344
 00:12:58,560 --> 00:13:03,440
 can be a shallow ref. And the shallow
-可以是 shallow ref。而 shallow
+可以是 Shallow Ref。而 Shallow
 
-366
+345
 00:13:00,240 --> 00:13:05,839
 ref is only reactive when you actually
-ref 仅在你实际
+Ref 仅在你实际
 
-367
+346
 00:13:03,440 --> 00:13:08,079
 replace the value. So for data fetching,
-替换值时才具有响应性。所以对于数据获取，
+替换其值时才响应。所以对于数据获取，
 
-368
+347
 00:13:05,839 --> 00:13:10,399
 if a new result comes in, perfectly
-如果有了新的结果，那就非常
+如果有了新结果，那再好不过了
 
-369
+348
 00:13:08,079 --> 00:13:11,760
 fine. Also great use case for state
-完美了。这也是使用状态
+当你想要从状态管理库中
 
-370
+349
 00:13:10,399 --> 00:13:14,000
 management libraries when you want to
-管理库时，想要
+提取状态时，这也是极好的应用场景
 
-371
+350
 00:13:11,760 --> 00:13:15,440
 get the state out of it. But if you want
-从中提取状态的绝佳场景。但如果你想
+如果你想了解更多相关内容
 
-372
+351
 00:13:14,000 --> 00:13:17,200
 to know more about it, I made a whole
-了解更多相关内容，我专门做过一期
+我专门为此制作了一个完整
 
-373
+352
 00:13:15,440 --> 00:13:18,639
 video on that link. You know where to
-视频，链接就在那儿。你知道去哪里
+视频，链接就在那里。如果你感到好奇
 
-374
+353
 00:13:17,200 --> 00:13:20,480
 find it if you're curious and have never
-找它，如果你以前从未
+且从未听说过 shallowRef 的话，你知道去哪里
 
-375
+354
 00:13:18,639 --> 00:13:21,920
 heard of shell refri before. It can
-听说过 shallow ref。它确实
+找到它。它确实可以
 
-376
+355
 00:13:20,480 --> 00:13:23,360
 definitely be an improvement for
-能再次提升
+再次带来性能上的提升，尤其是对于
 
-377
+356
 00:13:21,920 --> 00:13:25,920
 performance once again, especially for
-性能，尤其是在处理
+海量数据而言。但我知道你们
 
-378
+357
 00:13:23,360 --> 00:13:28,000
 huge amounts of data. But I know how
-海量数据时。但我知道
+有多喜欢数据获取
 
-379
+358
 00:13:25,920 --> 00:13:30,399
 much you love data fetching out there.
-你们有多喜欢进行数据获取。
+所以那可能是一个不错的场景。好了，这就是
 
-380
+359
 00:13:28,000 --> 00:13:32,240
 So that might be a good case. And that's
-所以那可能是一个不错的应用场景。好了，这就是
+我关于在 Vue.js 中不要过度使用响应式系统的全部内容。所以
 
-381
+360
 00:13:30,399 --> 00:13:35,519
 it. That's uh all I can tell you about
-我关于在 Vue.js 中
+一定要检查你的代码。如果你有任何问题或建议
 
-382
+361
 00:13:32,240 --> 00:13:37,200
 not overusing reactivity in Vue.js. So
-不要过度使用响应式系统的全部内容了。所以
+请写在评论区里。我会
 
-383
+362
 00:13:35,519 --> 00:13:39,440
 definitely check your code. Make sure if
-一定要检查一下你的代码。如果你有任何
+阅读每一条。希望在下个
 
-384
+363
 00:13:37,200 --> 00:13:40,880
 you have any questions or suggestions to
-问题或建议，请务必
+视频见到大家。祝编程愉快
 
-385
+364
 00:13:39,440 --> 00:13:43,160
 write them down in the comments. I will
-写在评论区里。我
-
-386
-00:13:40,880 --> 00:13:47,480
-read them all. Hope to see you all next
-会全部阅读。期待在下个
-
-387
-00:13:43,160 --> 00:13:47,480
-video. Happy hacking.
-视频中见到大家。祝编码愉快。
-
-388
-00:13:47,940 --> 00:13:59,399
-[Music]
 音乐
 
-389
+365
+00:13:40,880 --> 00:13:47,480
+read them all. Hope to see you all next
+你好。你好。
+
+366
+00:13:43,160 --> 00:13:47,480
+video. Happy hacking.
+
+
+367
+00:13:47,940 --> 00:13:59,399
+[Music]
+
+
+368
 00:13:55,399 --> 00:13:59,399
 Hello. Hello.
-哈喽。哈喽。
+[Translation missing line - 22]
 
-390
+369
 00:14:02,610 --> 00:14:05,690
 [Music]
 音乐

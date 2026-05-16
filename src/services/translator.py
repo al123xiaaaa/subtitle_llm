@@ -21,6 +21,7 @@ from src.utils.prompts import (
 from src.models.subtitle_entry import SubtitleEntry
 
 import concurrent.futures
+import json
 import re
 import threading
 import sys
@@ -54,6 +55,64 @@ logger = logging.getLogger(__name__)
 IGNORE_SUBTITLE_LENGTH = 4
 
 
+def _sidecar_path(output_file, suffix):
+    base, _ = os.path.splitext(output_file)
+    return f"{base}{suffix}"
+
+
+def _create_report(input_file, output_file, checkpoint_file, context_file):
+    return {
+        "input_file": input_file,
+        "output_file": output_file,
+        "checkpoint_file": checkpoint_file,
+        "context_file": context_file,
+        "stage": "初始化",
+        "total_entries": 0,
+        "processed_entries": 0,
+        "short_entries": 0,
+        "total_chunks": 0,
+        "completed_chunks": 0,
+        "resumed_entries": 0,
+        "failed_chunks": [],
+        "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
+
+
+def _load_checkpoint(checkpoint_file):
+    if not os.path.exists(checkpoint_file):
+        return {}
+
+    try:
+        with open(checkpoint_file, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning(f"断点文件读取失败，将从头开始：{exc}")
+        return {}
+
+
+def _save_checkpoint(checkpoint_file, subtitle, report):
+    FileHandler.ensure_directory(checkpoint_file)
+    data = {
+        "input_file": report["input_file"],
+        "output_file": report["output_file"],
+        "stage": report["stage"],
+        "total_entries": report["total_entries"],
+        "processed_entries": report["processed_entries"],
+        "completed_chunks": report["completed_chunks"],
+        "failed_chunks": report["failed_chunks"],
+        "token_usage": report["token_usage"],
+        "entries": {
+            str(entry.index): entry.to_dict()
+            for entry in subtitle.entries
+            if entry.translated_text.strip()
+        },
+    }
+    tmp_path = f"{checkpoint_file}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, checkpoint_file)
+
+
 class InputWithTimeout:
     """辅助类，用于在指定时间内获取用户输入。"""
 
@@ -82,13 +141,25 @@ class InputWithTimeout:
             return None
 
 
-def translate_subtitles(input_file, output_file, target_language, custom_handling=True):
+def translate_subtitles(
+    input_file,
+    output_file,
+    target_language,
+    custom_handling=True,
+    output_format="source-first",
+    resume=False,
+    return_report=False,
+):
     config = load_yaml_config()
     client = LLMClientFactory.create_client(config["translation_model"])
     client_summary = LLMClientFactory.create_client(config["summary_model"])
+    checkpoint_file_path = _sidecar_path(output_file, "_checkpoint.json")
+    context_file_path = _sidecar_path(output_file, "_context.txt")
+    report = _create_report(input_file, output_file, checkpoint_file_path, context_file_path)
 
     input_format = input_file.split(".")[-1].lower()
 
+    report["stage"] = "读取输入"
     if input_format == "srt":
         subtitle = FileHandler.read_srt(input_file)
     elif input_format == "json":
@@ -100,8 +171,34 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
     else:
         raise ValueError(f"Unsupported input format: {input_format}")
 
+    report["total_entries"] = len(subtitle.entries)
+
+    resumed_indices = set()
+    if resume:
+        checkpoint_data = _load_checkpoint(checkpoint_file_path)
+        checkpoint_entries = checkpoint_data.get("entries", {})
+        failed_entry_indices = {
+            int(index)
+            for failed in checkpoint_data.get("failed_chunks", [])
+            for index in failed.get("entry_indices", [])
+        }
+        for entry in subtitle.entries:
+            if entry.index in failed_entry_indices:
+                continue
+            saved = checkpoint_entries.get(str(entry.index))
+            if not saved:
+                continue
+            entry.set_translated_text(saved.get("translated_text", ""))
+            entry.needs_retranslation = saved.get("needs_retranslation", False)
+            if entry.translated_text.strip():
+                resumed_indices.add(entry.index)
+        report["resumed_entries"] = len(resumed_indices)
+        if resumed_indices:
+            logger.info(f"从断点恢复 {len(resumed_indices)} 条已翻译字幕")
+
     subtitle_chunks = chunk_list(subtitle.entries, config["chunk_size"])
 
+    report["stage"] = "生成上下文"
     subtitle_text_for_summary = "\n".join(
         [
             entry.original_text
@@ -119,13 +216,17 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
 
     context = review_context_in_console(context)
     # Save context to a file
-    context_file_path = output_file.rsplit(".", 1)[0] + "_context.txt"
+    FileHandler.ensure_directory(context_file_path)
     with open(context_file_path, "w", encoding="utf-8") as context_file:
         context_file.write(context)
     logger.info(f"Context saved to: {context_file_path}")
 
     total_token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    translated_entries = []
+    report["token_usage"] = total_token_usage
+    report["output_format"] = output_format
+    translated_entries = [
+        entry for entry in subtitle.entries if entry.index in resumed_indices
+    ]
 
     # 初始化 TUIManager
     run_script = os.path.join(
@@ -364,17 +465,34 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
     # ===== 并行翻译 + 即时 TUI 处理 =====
     max_workers = config.get("threads", 4)
 
+    report["stage"] = "准备 chunk"
     filtered_chunks = []
     for chunk in subtitle_chunks:
         filtered_chunk = [
             entry
             for entry in chunk
             if len(entry.original_text.strip()) > IGNORE_SUBTITLE_LENGTH
+            and entry.index not in resumed_indices
         ]
         if filtered_chunk:
             filtered_chunks.append(filtered_chunk)
 
-    logger.info(f"开始翻译：共 {len(filtered_chunks)} 个 chunk，{len(subtitle.entries)} 条字幕，{max_workers} 线程并行")
+    report["total_chunks"] = len(filtered_chunks)
+    report["short_entries"] = len(
+        [
+            entry
+            for entry in subtitle.entries
+            if len(entry.original_text.strip()) <= IGNORE_SUBTITLE_LENGTH
+            and entry.index not in resumed_indices
+        ]
+    )
+
+    logger.info(
+        f"开始翻译：共 {len(filtered_chunks)} 个 chunk，"
+        f"{len(subtitle.entries)} 条字幕，{max_workers} 线程并行"
+    )
+    if report["resumed_entries"]:
+        logger.info(f"断点续跑：跳过 {report['resumed_entries']} 条已完成字幕")
 
     pending_tui = []
     done_futures = set()
@@ -399,15 +517,16 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
             while len(done_futures) < len(all_futures) or pending_tui:
                 # 等待至少一个翻译完成
                 if len(done_futures) < len(all_futures):
+                    report["stage"] = "翻译中"
                     newly_done, _ = concurrent.futures.wait(
                         all_futures - done_futures,
                         return_when=concurrent.futures.FIRST_COMPLETED,
                     )
                     for future in newly_done:
                         done_futures.add(future)
+                        fc, fc_idx = future_to_chunk[future]
                         try:
                             chunk, refined_translation, chunk_token_usage = future.result()
-                            fc, fc_idx = future_to_chunk[future]
                             total_chunks = len(filtered_chunks)
                             for key in total_token_usage:
                                 total_token_usage[key] += chunk_token_usage.get(key, 0)
@@ -416,13 +535,24 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                             has_missing = check_missing_translations(chunk)
 
                             if has_missing and not custom_handling:
+                                before_fix_usage = chunk_token_usage.copy()
                                 fixed_translation, chunk = handle_default_translation(
                                     refined_translation, chunk, chunk_token_usage
                                 )
+                                for key in total_token_usage:
+                                    total_token_usage[key] += (
+                                        chunk_token_usage.get(key, 0)
+                                        - before_fix_usage.get(key, 0)
+                                    )
                                 chunk_results = parse_translation_results(fixed_translation, chunk)
                                 for entry, refined_text in chunk_results:
                                     entry.set_translated_text(refined_text.strip())
                                     translated_entries.append(entry)
+                                report["completed_chunks"] += 1
+                                report["processed_entries"] = len(
+                                    {entry.index for entry in translated_entries}
+                                )
+                                _save_checkpoint(checkpoint_file_path, subtitle, report)
                                 progress.advance(task_id, 1)
                             elif has_missing and custom_handling:
                                 pending_tui.append((chunk, refined_translation, chunk_token_usage, fc_idx, total_chunks))
@@ -430,20 +560,48 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                                 for entry, refined_text in chunk_results:
                                     entry.set_translated_text(refined_text.strip())
                                     translated_entries.append(entry)
+                                report["completed_chunks"] += 1
+                                report["processed_entries"] = len(
+                                    {entry.index for entry in translated_entries}
+                                )
+                                _save_checkpoint(checkpoint_file_path, subtitle, report)
                                 progress.advance(task_id, 1)
                         except Exception as e:
-                            logger.error(f"An error occurred while processing a chunk: {e}")
+                            logger.error(f"Chunk {fc_idx + 1} 处理失败：{e}")
+                            report["failed_chunks"].append(
+                                {
+                                    "chunk_index": fc_idx,
+                                    "entry_indices": [entry.index for entry in fc],
+                                    "error": str(e),
+                                }
+                            )
+                            for entry in fc:
+                                if not entry.translated_text.strip():
+                                    entry.set_translated_text(entry.original_text.strip())
+                                translated_entries.append(entry)
+                            report["completed_chunks"] += 1
+                            report["processed_entries"] = len(
+                                {entry.index for entry in translated_entries}
+                            )
+                            _save_checkpoint(checkpoint_file_path, subtitle, report)
                             progress.advance(task_id, 1)
 
                 # 有待处理的 TUI 就立即弹出（其他翻译在后台继续）
                 if pending_tui:
                     chunk, translation, chunk_token_usage, fc_idx, total_chunks = pending_tui.pop(0)
+                    report["stage"] = f"TUI 审核 Chunk {fc_idx + 1}/{total_chunks}"
                     progress.update(task_id, description=f"TUI 审核 Chunk {fc_idx + 1}/{total_chunks}")
                     try:
+                        before_tui_usage = chunk_token_usage.copy()
                         fixed_translation, chunk = handle_custom_translation(
                             translation, chunk, chunk_token_usage, subtitle.entries,
                             chunk_idx=fc_idx, total=total_chunks,
                         )
+                        for key in total_token_usage:
+                            total_token_usage[key] += (
+                                chunk_token_usage.get(key, 0)
+                                - before_tui_usage.get(key, 0)
+                            )
                         logger.debug(f"TUI 审核完成 Chunk {fc_idx + 1}，共 {len(chunk)} 条")
                         chunk_results = parse_translation_results(fixed_translation, chunk)
                         for entry, refined_text in chunk_results:
@@ -451,8 +609,24 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                             translated_entries.append(entry)
                     except Exception as e:
                         import traceback
-                        logger.error(f"An error occurred while processing a chunk in TUI: {e}")
+                        logger.error(f"Chunk {fc_idx + 1} TUI 审核失败：{e}")
                         traceback.print_exc()
+                        report["failed_chunks"].append(
+                            {
+                                "chunk_index": fc_idx,
+                                "entry_indices": [entry.index for entry in chunk],
+                                "error": f"TUI 审核失败：{e}",
+                            }
+                        )
+                        for entry in chunk:
+                            if not entry.translated_text.strip():
+                                entry.set_translated_text(entry.original_text.strip())
+                            translated_entries.append(entry)
+                    report["completed_chunks"] += 1
+                    report["processed_entries"] = len(
+                        {entry.index for entry in translated_entries}
+                    )
+                    _save_checkpoint(checkpoint_file_path, subtitle, report)
                     progress.update(task_id, description="翻译中")
                     progress.advance(task_id, 1)
 
@@ -460,15 +634,22 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
     if custom_handling:
         tui_manager.stop()
 
-    logger.info(f"翻译完成：共处理 {len(translated_entries)} 条，"
-                f"消耗 token {total_token_usage['total_tokens']} "
-                f"(prompt={total_token_usage['prompt_tokens']}, completion={total_token_usage['completion_tokens']})")
+    logger.info(
+        f"翻译完成：共处理 {len({entry.index for entry in translated_entries})} 条，"
+        f"消耗 token {total_token_usage['total_tokens']} "
+        f"(prompt={total_token_usage['prompt_tokens']}, completion={total_token_usage['completion_tokens']})"
+    )
 
     # 对于非常短的字幕行，由于之前没有翻译，所以这里增添进去
+    translated_by_index = {entry.index: entry for entry in translated_entries}
     for entry in subtitle.entries:
+        if entry.index in translated_by_index:
+            continue
         if len(entry.original_text.strip()) <= IGNORE_SUBTITLE_LENGTH:
             entry.set_translated_text(entry.original_text.strip())
-            translated_entries.append(entry)
+        elif not entry.translated_text.strip():
+            entry.set_translated_text(entry.original_text.strip())
+        translated_by_index[entry.index] = entry
 
     # 对于翻译后的字幕，前后有[]的，去掉。[]可能有多个，就像[[xxx]]，要全部去掉。
     # for entry in translated_entries:
@@ -477,11 +658,16 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
     #     )
 
     # 根据原始顺序对翻译后的条目进行排序
-    translated_entries.sort(key=lambda x: x.index)
+    translated_entries = sorted(translated_by_index.values(), key=lambda x: x.index)
 
     subtitle.entries = translated_entries
     subtitle.reorder_entries()
-    FileHandler.write_srt(subtitle, output_file)
+    report["stage"] = "完成"
+    report["processed_entries"] = len(subtitle.entries)
+    _save_checkpoint(checkpoint_file_path, subtitle, report)
+
+    if return_report:
+        return subtitle, report
     return subtitle
 
 
