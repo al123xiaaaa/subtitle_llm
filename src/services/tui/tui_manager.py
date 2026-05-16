@@ -9,54 +9,39 @@ import shlex
 
 logger = logging.getLogger(__name__)
 
+INPUT_FILE = "input.json"
+OUTPUT_FILE = "output.json"
+INPUT_READY = "input.ready"
+OUTPUT_READY = "output.ready"
+DONE_FILE = "done"
+
 
 class TUIManager:
-    def __init__(self, run_script_path, width=300, height=52):
-        self.run_script_path = run_script_path
+    def __init__(self, run_script_path=None, width=300, height=52):
         self.width = width
         self.height = height
-
-    def open_new_terminal(self, data):
-        """
-        启动新的终端并运行 TUI 应用，传递数据并获取更新后的结果。
-        """
-        system = platform.system()
-        project_root = os.path.abspath(
-            os.path.join(os.path.dirname(self.run_script_path), "..", "..")
+        self.worker_script = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "tui_worker.py"
         )
+        self.comm_dir = None
+        self.worker_started = False
 
-        tui_input_data = {
-            "subtitle_entries": data,
-            "tui_completed": False,
-            "merge_map": [],  # 初始化 merge_map
-        }
+    def _ensure_worker(self):
+        """确保 Worker Terminal 已启动。只启动一次。"""
+        if self.worker_started:
+            return
 
-        # 序列化数据到临时文件
-        with tempfile.NamedTemporaryFile(
-            mode="w+", delete=False, suffix=".json"
-        ) as tmpfile:
-            json.dump(tui_input_data, tmpfile, ensure_ascii=False, indent=4)
-            tmpfile_path = tmpfile.name
-            logger.info(f"Temporary file created at: {tmpfile_path}")
+        self.comm_dir = tempfile.mkdtemp(prefix="tui_comm_")
+        worker_script = self.worker_script
+        project_root = os.path.abspath(
+            os.path.join(os.path.dirname(self.worker_script), "..", "..", "..")
+        )
+        venv_activate = self._find_virtualenv_activate(project_root)
 
-        # 查找虚拟环境的激活脚本
-        venv_activate = self.find_virtualenv_activate(project_root)
+        system = platform.system()
+        command = f"python {worker_script} {self.comm_dir}"
 
-        # 构建运行命令，确保在 project_root 目录下运行并激活虚拟环境
-        command = f"python {self.run_script_path} {tmpfile_path}"
-        full_command = ""
-
-        # 下面是根据不同操作系统构建命令，单引号不可变更，因为它们用于包裹整个命令字符串。
-        # 在Windows中，单引号用于确保整个命令被正确传递给cmd。
-        # 在macOS中，单引号用于AppleScript中的字符串定界。
-        # 在Linux中，单引号用于确保命令中的特殊字符不被shell解释。
-        # 更改这些单引号可能会导致命令解析错误或执行失败。
-        if system == "Windows":
-            if venv_activate:
-                full_command = f'start cmd /k "mode con: cols={self.width} lines={self.height} && cd /d "{project_root}" && "{venv_activate}" && {command}"'
-            else:
-                full_command = f'start cmd /k "mode con: cols={self.width} lines={self.height} && cd /d "{project_root}" && {command}"'
-        elif system == "Darwin":  # macOS
+        if system == "Darwin":
             if venv_activate:
                 apple_script = f"""
                 tell application "Terminal"
@@ -71,79 +56,102 @@ class TUIManager:
                     activate
                 end tell
                 """
-            full_command = ["osascript", "-e", apple_script]
+            subprocess.run(["osascript", "-e", apple_script], check=True)
         elif system == "Linux":
-            terminal_command = (
-                f"x-terminal-emulator -geometry {self.width}x{self.height}"
-            )
+            cmd = f"cd {shlex.quote(project_root)} && {command}; exec bash"
             if venv_activate:
-                full_command = [
-                    "bash",
-                    "-c",
-                    f"{terminal_command} -e 'bash -c \"source {shlex.quote(venv_activate)} && cd {shlex.quote(project_root)} && {command}; exec bash\"'",
-                ]
-            else:
-                full_command = [
-                    "bash",
-                    "-c",
-                    f"{terminal_command} -e 'bash -c \"cd {shlex.quote(project_root)} && {command}; exec bash\"'",
-                ]
-        else:
-            raise OSError(f"Unsupported operating system: {system}")
+                cmd = f"source {shlex.quote(venv_activate)} && " + cmd
+            subprocess.Popen(
+                ["x-terminal-emulator", "-e", "bash", "-c", cmd],
+                shell=False,
+            )
+        elif system == "Windows":
+            cmd = f'cd /d "{project_root}" && {command}'
+            if venv_activate:
+                cmd = f'"{venv_activate}" && ' + cmd
+            subprocess.run(f'start cmd /k "{cmd}"', shell=True, check=True)
 
-        # 启动新的终端
-        try:
-            if system == "Windows":
-                subprocess.run(full_command, shell=True, check=True)
-            elif system == "Darwin":
-                subprocess.run(full_command, check=True)
-            else:
-                subprocess.Popen(full_command, shell=False)
-            logger.info("TUI launched successfully.")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to launch TUI: {e}")
-            raise
+        self.worker_started = True
+        logger.info(f"TUI Worker 启动，通信目录: {self.comm_dir}")
 
-        # 等待 TUI 应用完成并更新临时文件
-        while True:
-            try:
-                with open(tmpfile_path, "r", encoding="utf-8") as f:
-                    updated_data = json.load(f)
-                if "tui_completed" in updated_data and updated_data["tui_completed"]:
-                    logger.info("TUI completed. Retrieving updated data.")
-                    return updated_data
-            except json.JSONDecodeError:
-                # 文件可能正在被写入，等待一段时间后重试
-                time.sleep(0.5)
-            except FileNotFoundError:
-                logger.error(
-                    "Temporary file not found. TUI may have encountered an error."
-                )
+    def submit_chunk(self, data, chunk_index=0, total_chunks=1):
+        """
+        提交一个 chunk 到 Worker 处理，等待结果返回。
+        所有 chunk 在同一个 Terminal 中排队处理。
+        """
+        self._ensure_worker()
+
+        input_path = os.path.join(self.comm_dir, INPUT_FILE)
+        input_ready = os.path.join(self.comm_dir, INPUT_READY)
+        output_path = os.path.join(self.comm_dir, OUTPUT_FILE)
+        output_ready = os.path.join(self.comm_dir, OUTPUT_READY)
+
+        # 清理上一次的输出标记
+        if os.path.exists(output_ready):
+            os.remove(output_ready)
+        if os.path.exists(output_path):
+            os.remove(output_path)
+
+        # 写入输入数据
+        payload = {
+            "subtitle_entries": data,
+            "chunk_index": chunk_index,
+            "total_chunks": total_chunks,
+        }
+        with open(input_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=4)
+
+        # 通知 Worker 读取
+        with open(input_ready, "w") as f:
+            f.write("ready")
+
+        logger.info(f"Chunk {chunk_index + 1}/{total_chunks} 已提交到 TUI Worker")
+
+        # 等待 Worker 处理完成
+        while not os.path.exists(output_ready):
+            if not self.worker_started:
                 return None
+            time.sleep(0.5)
 
-    def find_virtualenv_activate(self, project_root):
-        """
-        查找虚拟环境的激活脚本路径。如果找到，则返回路径；否则返回 None。
-        """
-        possible_venv_locations = [
+        # 读取结果
+        try:
+            with open(output_path, "r", encoding="utf-8") as f:
+                result = json.load(f)
+            return result
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            logger.error(f"读取 TUI 结果失败: {e}")
+            return None
+
+    def stop(self):
+        """通知 Worker 退出。"""
+        if not self.worker_started or not self.comm_dir:
+            return
+
+        done_path = os.path.join(self.comm_dir, DONE_FILE)
+        with open(done_path, "w") as f:
+            f.write("done")
+
+        logger.info("已发送结束信号到 TUI Worker")
+        self.worker_started = False
+
+    # 保留旧接口兼容性
+    def open_new_terminal(self, data):
+        return self.submit_chunk(data)
+
+    def _find_virtualenv_activate(self, project_root):
+        possible = [
             os.path.join(project_root, "venv"),
             os.path.join(project_root, ".venv"),
-            os.path.expanduser(
-                "~/.virtualenvs/subtitle_llm"
-            ),  # 如果使用 virtualenvwrapper
+            os.path.expanduser("~/.virtualenvs/subtitle_llm"),
         ]
-
-        for location in possible_venv_locations:
+        for loc in possible:
             if platform.system() == "Windows":
-                activate_script = os.path.join(location, "Scripts", "activate.bat")
-                activate_ps1 = os.path.join(location, "Scripts", "Activate.ps1")
-                if os.path.exists(activate_script):
-                    return activate_script
-                elif os.path.exists(activate_ps1):
-                    return activate_ps1
+                for name in ("activate.bat", "Activate.ps1"):
+                    p = os.path.join(loc, "Scripts", name)
+                    if os.path.exists(p):
+                        return p
             else:
-                activate_script = os.path.join(location, "bin", "activate")
-                if os.path.exists(activate_script):
-                    return activate_script
-        logger.warning("Virtual environment activate script not found.")
+                p = os.path.join(loc, "bin", "activate")
+                if os.path.exists(p):
+                    return p
         return None

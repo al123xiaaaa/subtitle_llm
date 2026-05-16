@@ -1,3 +1,6 @@
+import os
+os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "0"
+
 from src.services.file_handler import FileHandler
 from src.services.factories.llm_client_factory import LLMClientFactory
 from src.services.json_handler import JSONSubtitleHandler
@@ -21,12 +24,31 @@ import concurrent.futures
 import re
 import threading
 import sys
-import os
 
-# 配置日志
+from rich.logging import RichHandler
+from rich.console import Console
+from rich.progress import (
+    Progress,
+    BarColumn,
+    TextColumn,
+    MofNCompleteColumn,
+    TimeElapsedColumn,
+    SpinnerColumn,
+)
+
+console = Console()
+
 import logging
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+    handlers=[RichHandler(console=console, show_time=True, show_path=False, markup=True)],
+)
+# Suppress noisy third-party loggers
+for _name in ("grpc", "google", "google_generativeai", "urllib3", "filelock"):
+    logging.getLogger(_name).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 IGNORE_SUBTITLE_LENGTH = 4
@@ -112,56 +134,30 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
     run_script = os.path.abspath(run_script)
     tui_manager = TUIManager(run_script)
 
-    def process_chunk(chunk, subtitle_entries):
-        try:
-            local_token_usage = {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-            }
+    def translate_and_refine(chunk):
+        """Phase 1: 粗翻译 + 精翻译（纯并行，不涉及 TUI）"""
+        local_token_usage = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+        if not chunk:
+            return chunk, "", local_token_usage
 
-            if not chunk:
-                logger.warning("Empty chunk received in process_chunk")
-                return [], local_token_usage
+        logger.debug(f"Translating chunk ({len(chunk)} entries)...")
+        rough_translation = translate_chunk(
+            client, config["translation_model"], chunk,
+            context, target_language, local_token_usage,
+        )
+        refined_translation = refine_translation(
+            client, config["translation_model"], chunk,
+            rough_translation, context, target_language, local_token_usage,
+        )
+        logger.debug(f"Chunk translation done ({len(chunk)} entries)")
+        return chunk, refined_translation, local_token_usage
 
-            # 初始翻译
-            rough_translation = translate_chunk(
-                client,
-                config["translation_model"],
-                chunk,
-                context,
-                target_language,
-                local_token_usage,
-            )
-
-            # 精炼翻译
-            refined_translation = refine_translation(
-                client,
-                config["translation_model"],
-                chunk,
-                rough_translation,
-                context,
-                target_language,
-                local_token_usage,
-            )
-
-            # 处理缺失的翻译
-            refined_translation, chunk = handle_missing_translations(
-                refined_translation, chunk, local_token_usage, subtitle_entries
-            )
-
-            # 解析翻译结果
-            chunk_results = parse_translation_results(refined_translation, chunk)
-
-            return chunk_results, local_token_usage
-        except Exception as e:
-            logger.error(f"Error in process_chunk: {e}")
-            logger.error(f"Chunk: {chunk}")
-            raise
-
-    def handle_missing_translations(
-        translation, chunk, local_token_usage, subtitle_entries
-    ):
+    def check_missing_translations(chunk):
+        """检测哪些条目需要重新翻译，返回是否需要处理"""
         needs_retranslation = False
         for i, entry in enumerate(chunk):
             if (
@@ -174,58 +170,55 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                     < 0.1 * len(entry.original_text)
                     and len(entry.original_text) > 26
                 )
-                # 或者翻译结果仅为标点符号(全角或半角)
+                or (
+                    len(entry.translated_text.strip()) < 0.19 * len(entry.original_text)
+                    and len(entry.original_text) > 100
+                )
+                or (
+                    len(entry.translated_text.strip()) > 0.65 * len(entry.original_text)
+                    and len(entry.original_text) > 26
+                )
                 or all(
-                    char in "，。？！：；“”、" for char in entry.translated_text
-                )  # 判断是否全为中文标点
+                    char in "，。？！：；""、" for char in entry.translated_text
+                )
                 or all(
                     char in ",.?!:;\"'()-" for char in entry.translated_text
-                )  # 判断是否全为英文标点
+                )
             ):
                 needs_retranslation = True
 
-            if (
-                needs_retranslation
-            ):  # 从第一条被认为需要重新翻译的条目开始，后续的都需要重新翻译
+            if needs_retranslation:
                 entry.needs_retranslation = True
 
-        if any(entry.needs_retranslation for entry in chunk):
-            if custom_handling:
-                return handle_custom_translation(
-                    translation, chunk, local_token_usage, subtitle_entries
-                )
-            else:
-                return handle_default_translation(
-                    translation, chunk, local_token_usage
-                ), chunk
-        return translation, chunk
+        return any(entry.needs_retranslation for entry in chunk)
 
-    def handle_custom_translation(
-        translation, chunk, local_token_usage, subtitle_entries
-    ):
+    def handle_custom_translation(translation, chunk, local_token_usage, subtitle_entries, chunk_idx=0, total=1):
         try:
-            data = tui_manager.open_new_terminal([entry.to_dict() for entry in chunk])
-            selected_entries_dicts = data["selected_subtitle_entries"]
+            data = tui_manager.submit_chunk(
+                [entry.to_dict() for entry in chunk],
+                chunk_index=chunk_idx,
+                total_chunks=total,
+            )
+            if data is None:
+                logger.error("TUI returned None (temp file lost). Skipping.")
+                return translation, chunk
+            selected_entries_dicts = data.get("selected_subtitle_entries", [])
             merge_map = data.get("merge_map", [])
+            needs_retranslate = [d for d in selected_entries_dicts if d.get("needs_retranslation", False)]
+            logger.info(f"TUI 返回 {len(selected_entries_dicts)} 条，其中 {len(needs_retranslate)} 条需要重新翻译")
 
-            # 创建一个基于索引的字幕条目映射
             index_to_entry = {entry.index: entry for entry in chunk}
 
-            if all(
-                not entry_dict.get("needs_retranslation", True)
-                for entry_dict in selected_entries_dicts
-            ):
+            if not needs_retranslate:
                 logger.info("All translations accepted. Skipping re-translation.")
                 return translation, chunk
 
             if selected_entries_dicts:
                 try:
-                    # 应用合并操作到 chunk 和 subtitle_entries
                     for merge_op in merge_map:
                         merged_index = merge_op["merged_index"]
                         merged_from_indices = merge_op["merged_from_indices"]
 
-                        # 确保所有索引都存在
                         if merged_index not in index_to_entry:
                             logger.error(
                                 f"Merged index {merged_index} not found in chunk."
@@ -242,7 +235,6 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                             )
                             continue
 
-                        # 创建合并后的条目
                         merged_text = " ".join(
                             index_to_entry[idx].original_text
                             for idx in merged_from_indices
@@ -262,7 +254,6 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                         )
                         index_to_entry[merged_index] = merged_entry
 
-                        # 从 chunk 和 index_to_entry 中删除被合并的条目
                         for idx in merged_from_indices[1:]:
                             if idx in index_to_entry:
                                 del index_to_entry[idx]
@@ -271,12 +262,10 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                                     chunk.remove(entry)
                                     break
 
-                        # 替换 merged_index 的条目
                         for i, entry in enumerate(subtitle_entries):
                             if entry.index == merged_index:
                                 subtitle_entries[i] = merged_entry
                                 break
-                        # 删除被合并的条目
                         for idx in merged_from_indices[1:]:
                             subtitle_entries[:] = [
                                 entry
@@ -284,10 +273,8 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                                 if entry.index != idx
                             ]
 
-                    # 更新 chunk 列表
                     chunk = list(index_to_entry.values())
 
-                    # 处理选中的需要重新翻译的条目
                     selected_entries = [
                         SubtitleEntry.from_dict(entry_dict).set_needs_retranslation(
                             False
@@ -296,36 +283,31 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
                         if entry_dict.get("needs_retranslation", False)
                     ]
 
-                    # 递归调用 process_chunk 处理选中的条目
-                    selected_chunk_results, selected_token_usage = process_chunk(
-                        selected_entries, subtitle_entries
+                    # 递归：翻译选中的条目
+                    selected_chunk, selected_refined, selected_token_usage = translate_and_refine(
+                        selected_entries
+                    )
+                    for key in local_token_usage:
+                        local_token_usage[key] += selected_token_usage.get(key, 0)
+
+                    # 解析递归翻译结果
+                    selected_chunk_results = parse_translation_results(
+                        selected_refined, selected_chunk
                     )
 
-                    deeper_chunk = [entry for entry, _ in selected_chunk_results]
-                    deeper_chunk_first_index = deeper_chunk[0].index
+                    deeper_chunk_first_index = selected_chunk[0].index
                     chunk = (
                         [
                             entry
                             for entry in chunk
                             if entry.index < deeper_chunk_first_index
                         ]
-                        + deeper_chunk
+                        + selected_chunk
                     )
 
-                    # 更新令牌使用量
-                    for key in local_token_usage:
-                        local_token_usage[key] += selected_token_usage.get(key, 0)
+                    for entry, text in selected_chunk_results:
+                        entry.set_translated_text(text.strip())
 
-                    # 更新翻译结果
-                    updated_translations = {
-                        entry.index: translated_text
-                        for entry, translated_text in selected_chunk_results
-                    }
-                    for entry in chunk:
-                        if entry.index in updated_translations:
-                            entry.translated_text = updated_translations[entry.index]
-
-                    # 合并翻译文本
                     merged_translation = ""
                     for i, chunk_entry in enumerate(chunk):
                         merged_translation += (
@@ -334,88 +316,153 @@ def translate_subtitles(input_file, output_file, target_language, custom_handlin
 
                     return merged_translation, chunk
                 except Exception as e:
+                    import traceback
                     logger.error(f"Error processing selected entries: {e}")
+                    traceback.print_exc()
                     return translation, chunk
             else:
                 logger.info("No entries selected for re-translation.")
                 return translation, chunk
         except Exception as e:
+            import traceback
             logger.error(f"Error in handle_custom_translation: {e}")
+            traceback.print_exc()
             return translation, chunk
 
     def handle_default_translation(translation, chunk, local_token_usage):
         rough_missing_translation = fix_missing_translations(
-            client,
-            config["translation_model"],
-            chunk,
-            translation,
-            target_language,
-            local_token_usage,
+            client, config["translation_model"], chunk,
+            translation, target_language, local_token_usage,
         )
         combined_translation = combine_translations_by_index(
             translation, rough_missing_translation
         )
         return re_translate(
-            client,
-            config["translation_model"],
-            chunk,
-            combined_translation,
-            target_language,
-            local_token_usage,
+            client, config["translation_model"], chunk,
+            combined_translation, target_language, local_token_usage,
         )
 
     def parse_translation_results(translation, chunk):
         translated_lines = translation.strip().split("\n")
+        expected_lines = len(chunk) * 2
+        if len(translated_lines) < expected_lines:
+            logger.warning(
+                f"LLM 返回行数({len(translated_lines)})少于预期({expected_lines})，"
+                f"chunk 共 {len(chunk)} 条"
+            )
         chunk_results = []
         for i in range(len(chunk)):
-            translation_line = translated_lines[2 * i + 1].strip()
-
-            try:
-                # 将翻译结果与对应的条目配对
-                chunk_results.append((chunk[i], translation_line))
-            except Exception as e:
-                logger.error(f"Unexpected error while parsing translation results: {e}")
-                logger.error(f"Translated lines: {translated_lines}")
-                raise
-
+            line_idx = 2 * i + 1
+            if line_idx < len(translated_lines):
+                translation_line = translated_lines[line_idx].strip()
+            else:
+                translation_line = ""
+                logger.warning(f"第 {i+1} 条翻译缺失，使用空字符串")
+            chunk_results.append((chunk[i], translation_line))
         return chunk_results
 
-    # 使用配置中的线程数进行并行处理
-    max_workers = config.get("threads", 4)  # 默认 4
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
-        for chunk in subtitle_chunks:
-            # 过滤掉非常短的字幕
-            filtered_chunk = [
-                entry
-                for entry in chunk
-                if len(entry.original_text.strip()) > IGNORE_SUBTITLE_LENGTH
-            ]
-            if filtered_chunk:
-                futures.append(
-                    executor.submit(
-                        process_chunk,
-                        filtered_chunk,
-                        subtitle.entries,
+    # ===== 并行翻译 + 即时 TUI 处理 =====
+    max_workers = config.get("threads", 4)
+
+    filtered_chunks = []
+    for chunk in subtitle_chunks:
+        filtered_chunk = [
+            entry
+            for entry in chunk
+            if len(entry.original_text.strip()) > IGNORE_SUBTITLE_LENGTH
+        ]
+        if filtered_chunk:
+            filtered_chunks.append(filtered_chunk)
+
+    logger.info(f"开始翻译：共 {len(filtered_chunks)} 个 chunk，{len(subtitle.entries)} 条字幕，{max_workers} 线程并行")
+
+    pending_tui = []
+    done_futures = set()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(bar_width=None),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task_id = progress.add_task("翻译中", total=len(filtered_chunks))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_chunk = {
+                executor.submit(translate_and_refine, fc): (fc, idx)
+                for idx, fc in enumerate(filtered_chunks)
+            }
+            all_futures = set(future_to_chunk.keys())
+
+            while len(done_futures) < len(all_futures) or pending_tui:
+                # 等待至少一个翻译完成
+                if len(done_futures) < len(all_futures):
+                    newly_done, _ = concurrent.futures.wait(
+                        all_futures - done_futures,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
                     )
-                )
+                    for future in newly_done:
+                        done_futures.add(future)
+                        try:
+                            chunk, refined_translation, chunk_token_usage = future.result()
+                            fc, fc_idx = future_to_chunk[future]
+                            total_chunks = len(filtered_chunks)
+                            for key in total_token_usage:
+                                total_token_usage[key] += chunk_token_usage.get(key, 0)
 
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                chunk_results, chunk_token_usage = future.result()
-                # 累积令牌使用量
-                for key in total_token_usage:
-                    total_token_usage[key] += chunk_token_usage.get(key, 0)
-                for entry, refined_text in chunk_results:
-                    entry.set_translated_text(refined_text.strip())
-                    translated_entries.append(entry)
-            except Exception as e:
-                logger.error(f"An error occurred while processing a chunk: {e}")
+                            chunk_results = parse_translation_results(refined_translation, chunk)
+                            has_missing = check_missing_translations(chunk)
 
-    # 最后，打印总共使用的令牌数量
-    logger.info(f"总共使用的令牌数量: {total_token_usage['total_tokens']}")
-    logger.info(f"  提示令牌: {total_token_usage['prompt_tokens']}")
-    logger.info(f"  完成令牌: {total_token_usage['completion_tokens']}")
+                            if has_missing and not custom_handling:
+                                fixed_translation, chunk = handle_default_translation(
+                                    refined_translation, chunk, chunk_token_usage
+                                )
+                                chunk_results = parse_translation_results(fixed_translation, chunk)
+                                for entry, refined_text in chunk_results:
+                                    entry.set_translated_text(refined_text.strip())
+                                    translated_entries.append(entry)
+                                progress.advance(task_id, 1)
+                            elif has_missing and custom_handling:
+                                pending_tui.append((chunk, refined_translation, chunk_token_usage, fc_idx, total_chunks))
+                            else:
+                                for entry, refined_text in chunk_results:
+                                    entry.set_translated_text(refined_text.strip())
+                                    translated_entries.append(entry)
+                                progress.advance(task_id, 1)
+                        except Exception as e:
+                            logger.error(f"An error occurred while processing a chunk: {e}")
+                            progress.advance(task_id, 1)
+
+                # 有待处理的 TUI 就立即弹出（其他翻译在后台继续）
+                if pending_tui:
+                    chunk, translation, chunk_token_usage, fc_idx, total_chunks = pending_tui.pop(0)
+                    progress.update(task_id, description=f"TUI 审核 Chunk {fc_idx + 1}/{total_chunks}")
+                    try:
+                        fixed_translation, chunk = handle_custom_translation(
+                            translation, chunk, chunk_token_usage, subtitle.entries,
+                            chunk_idx=fc_idx, total=total_chunks,
+                        )
+                        logger.debug(f"TUI 审核完成 Chunk {fc_idx + 1}，共 {len(chunk)} 条")
+                        chunk_results = parse_translation_results(fixed_translation, chunk)
+                        for entry, refined_text in chunk_results:
+                            entry.set_translated_text(refined_text.strip())
+                            translated_entries.append(entry)
+                    except Exception as e:
+                        import traceback
+                        logger.error(f"An error occurred while processing a chunk in TUI: {e}")
+                        traceback.print_exc()
+                    progress.update(task_id, description="翻译中")
+                    progress.advance(task_id, 1)
+
+    # 所有处理完成，关闭 TUI Worker
+    if custom_handling:
+        tui_manager.stop()
+
+    logger.info(f"翻译完成：共处理 {len(translated_entries)} 条，"
+                f"消耗 token {total_token_usage['total_tokens']} "
+                f"(prompt={total_token_usage['prompt_tokens']}, completion={total_token_usage['completion_tokens']})")
 
     # 对于非常短的字幕行，由于之前没有翻译，所以这里增添进去
     for entry in subtitle.entries:

@@ -22,7 +22,7 @@ class GeminiClient(LLMClient):
     def create_completion(
         self, config: Dict[str, Any], messages: List[Dict[str, str]]
     ) -> Dict[str, Any]:
-        logger.info("Starting create_completion in GeminiClient")
+        logger.debug("Starting create_completion in GeminiClient")
         if self.rate_limiter:
             logger.debug("Acquiring rate limiter")
             self.rate_limiter.acquire()
@@ -77,7 +77,7 @@ class GeminiClient(LLMClient):
                     "completion_tokens": completion_tokens,
                     "total_tokens": prompt_tokens + completion_tokens,
                 }
-                logger.info("Successfully completed create_completion")
+                logger.debug("Successfully completed create_completion")
                 return {"content": content, "usage": usage}
             except (exceptions.ResourceExhausted, Exception) as e:
                 if attempt < max_retries - 1:

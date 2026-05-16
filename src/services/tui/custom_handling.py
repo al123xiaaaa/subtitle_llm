@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class CustomHandlingApp(App):
     CSS_PATH = "custom_handling.css"
     BINDINGS = [
-        ("q", "quit", "退出"),
+        ("q", "quit", "确认并继续"),
         ("space", "select_line", "选择行并翻译"),
         ("s", "skip", "跳过"),
         ("a", "toggle_select", "选择多行"),

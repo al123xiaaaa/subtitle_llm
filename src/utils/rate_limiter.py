@@ -50,8 +50,8 @@ class RateLimiter:
                 else:
                     # Calculate the time to wait until the earliest call exits the window
                     wait_time = self.call_interval - time_since_last_call
-                    self.logger.warning(
-                        f"Rate limit reached. Sleeping for {wait_time:.2f} seconds."
+                    self.logger.debug(
+                        f"Rate limit reached. Sleeping for {wait_time:.2f}s."
                     )
 
             # Sleep outside the lock to allow other threads to proceed
