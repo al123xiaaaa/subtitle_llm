@@ -219,8 +219,13 @@ class TranslationService:
         for entry, refined_text in parse_translation_results(translation, planned.entries):
             entry.set_translated_text(refined_text.strip())
 
-        needs_repair = quality_gate.mark_entries_for_retranslation(planned.entries)
-        if needs_repair:
+        diagnosis = quality_gate.diagnose_chunk(
+            planned.entries,
+            translation=translation,
+            target_language=target_language,
+        )
+        quality_gate.apply_diagnosis(planned.entries, diagnosis)
+        if diagnosis.has_issues:
             if isinstance(review_port, AutoReviewPort):
                 repair_usage = CompletionUsage()
                 repaired = translator.repair_translation(
@@ -228,10 +233,18 @@ class TranslationService:
                     translation,
                     target_language,
                     usage=repair_usage,
+                    quality_report=diagnosis.to_prompt_report(),
                 )
                 report.token_usage.add_usage(repair_usage.to_dict())
                 for entry, refined_text in parse_translation_results(repaired, planned.entries):
+                    entry.needs_retranslation = False
                     entry.set_translated_text(refined_text.strip())
+                repaired_diagnosis = quality_gate.diagnose_chunk(
+                    planned.entries,
+                    translation=repaired,
+                    target_language=target_language,
+                )
+                quality_gate.apply_diagnosis(planned.entries, repaired_diagnosis)
             else:
                 review_result = review_port.review(planned.entries, planned.index, report.total_chunks)
                 planned.entries = review_result.chunk
@@ -245,6 +258,7 @@ class TranslationService:
                     )
                     report.token_usage.add_usage(selected_result.usage.to_dict())
                     for entry, refined_text in parse_translation_results(selected_result.translation, selected_result.chunk):
+                        entry.needs_retranslation = False
                         entry.set_translated_text(refined_text.strip())
 
         for entry in planned.entries:

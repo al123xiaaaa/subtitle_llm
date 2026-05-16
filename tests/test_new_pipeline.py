@@ -14,6 +14,7 @@ from typing import Any, cast
 from subtitle_llm.llm.types import CompletionResult, CompletionUsage
 from subtitle_llm.pipeline import TranslationRequest, TranslationService
 from subtitle_llm.pipeline.checkpoint import CheckpointMismatch, CheckpointStore, file_fingerprint
+from subtitle_llm.pipeline.chunk_translator import ChunkTranslator
 from subtitle_llm.pipeline.quality import QualityGate
 from subtitle_llm.review.tui import TuiReviewPort
 from subtitle_llm.settings import AppConfig, ModelConfig, ModelProvider, PipelineConfig
@@ -45,6 +46,15 @@ class FakeLLMClient:
             if match:
                 return int(match.group(1))
         return 1
+
+
+class RecordingLLMClient(FakeLLMClient):
+    def __init__(self):
+        self.prompts = []
+
+    def create_completion(self, config, messages):
+        self.prompts.append(messages[-1]["content"])
+        return super().create_completion(config, messages)
 
 
 def make_config():
@@ -125,6 +135,82 @@ class TestNewPipeline(unittest.TestCase):
         entry = SubtitleEntry(1, "00:00:00,000", "00:00:01,000", "This is a long enough subtitle line.", "Translated text")
         self.assertTrue(QualityGate().mark_entries_for_retranslation([entry]))
         self.assertTrue(entry.needs_retranslation)
+
+    def test_quality_gate_aggregates_cascade_report(self):
+        from subtitle_llm.domain import SubtitleEntry
+
+        entries = [
+            SubtitleEntry(index, "00:00:00,000", "00:00:01,000", "Original subtitle line.", "正常翻译")
+            for index in range(1, 9)
+        ]
+        for index in range(3, 9):
+            entries[index - 1].translated_text = f"Translation missing line - {index}"
+
+        diagnosis = QualityGate().diagnose_chunk(entries, target_language="Chinese")
+        report = diagnosis.to_prompt_report()
+
+        self.assertEqual(diagnosis.reliability, "very_low")
+        self.assertIn("[3]-[8] are consecutive flagged entries", report)
+        self.assertIn("previous translation is broadly unreliable", report)
+        self.assertIn("Ignore the previous translation", report)
+
+    def test_quality_gate_detects_programmatic_issue_types(self):
+        from subtitle_llm.domain import SubtitleEntry
+
+        entries = [
+            SubtitleEntry(1, "a", "b", "This is a source line for missing translation.", ""),
+            SubtitleEntry(2, "a", "b", "This is a source line for placeholder translation.", "Translation missing line - 2"),
+            SubtitleEntry(3, "a", "b", "I don't know.", "。？！"),
+            SubtitleEntry(
+                4,
+                "a",
+                "b",
+                "This model is designed to handle long-context reasoning across multiple tool calls.",
+                "模型",
+            ),
+            SubtitleEntry(5, "a", "b", "This source line should not produce a huge explanatory translation.", "很长" * 50),
+            SubtitleEntry(6, "a", "b", "Let's deploy it now.", "Let's deploy it now."),
+            SubtitleEntry(7, "a", "b", "Use version 2.1.0 in 2026.", "使用这个版本。"),
+            SubtitleEntry(8, "a", "b", "Run `npm install` before starting app.", "启动前运行安装。"),
+            SubtitleEntry(9, "a", "b", "First unique source about alpha.", "相同的翻译内容"),
+            SubtitleEntry(10, "a", "b", "Second unique source about beta.", "相同的翻译内容"),
+            SubtitleEntry(11, "a", "b", "Third unique source about gamma.", "相同的翻译内容"),
+        ]
+
+        diagnosis = QualityGate().diagnose_chunk(entries, target_language="Chinese")
+        issue_types = {issue.issue_type for issue in diagnosis.issues}
+
+        self.assertIn("missing_translation", issue_types)
+        self.assertIn("placeholder_translation", issue_types)
+        self.assertIn("punctuation_only", issue_types)
+        self.assertIn("too_short", issue_types)
+        self.assertIn("too_long", issue_types)
+        self.assertIn("source_copied", issue_types)
+        self.assertIn("target_language_mismatch", issue_types)
+        self.assertIn("number_mismatch", issue_types)
+        self.assertIn("url_or_code_loss", issue_types)
+        self.assertIn("duplicate_translation", issue_types)
+
+    def test_retranslate_prompt_includes_quality_report(self):
+        from subtitle_llm.domain import SubtitleEntry
+
+        client = RecordingLLMClient()
+        translator = ChunkTranslator(client, make_config().translation_model)
+        usage = CompletionUsage()
+        quality_report = "Chunk reliability: low. [1] contains placeholder text."
+
+        translator.re_translate(
+            [SubtitleEntry(1, "00:00:00,000", "00:00:01,000", "Hello world.", "Translation missing line - 1")],
+            "[1]\nTranslation missing line - 1",
+            "Chinese",
+            usage,
+            quality_report=quality_report,
+        )
+
+        prompt = client.prompts[-1]
+        self.assertIn("Previous flawed translation", prompt)
+        self.assertIn("Quality diagnosis of the previous translation", prompt)
+        self.assertIn(quality_report, prompt)
 
     def test_checkpoint_rejects_mismatched_fingerprint(self):
         with tempfile.TemporaryDirectory() as tmp:

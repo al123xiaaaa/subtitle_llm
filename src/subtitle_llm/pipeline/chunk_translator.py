@@ -11,7 +11,6 @@ from subtitle_llm.pipeline.prompts import (
     TRANSLATE_CHUNK_PROMPT,
 )
 from subtitle_llm.pipeline.text import (
-    combine_translations_by_index,
     extract_translation_block,
     format_chunk,
     process_translation,
@@ -91,10 +90,9 @@ class ChunkTranslator:
         translation: str,
         target_language: str,
         usage: CompletionUsage,
+        quality_report: str = "",
     ) -> str:
-        fixed = self.fix_missing_translations(chunk, translation, target_language, usage)
-        combined = combine_translations_by_index(translation, fixed)
-        return self.re_translate(chunk, combined, target_language, usage)
+        return self.re_translate(chunk, translation, target_language, usage, quality_report=quality_report)
 
     def fix_missing_translations(
         self,
@@ -148,12 +146,14 @@ class ChunkTranslator:
         translation: str,
         target_language: str,
         usage: CompletionUsage,
+        quality_report: str = "",
     ) -> str:
         original_text = format_chunk(chunk)
         prompt = RE_TRANSLATE_PROMPT.format(
             target_language=target_language,
             original_text=original_text,
             translation=translation,
+            quality_report=quality_report or "No structured quality report was provided.",
             chunk_size=len(chunk),
         )
         result = self.client.create_completion(self.model_config, [{"role": "user", "content": prompt}])

@@ -94,21 +94,31 @@ Instructions:
 Now, provide the translation following this format:
 """
 
-RE_TRANSLATE_PROMPT = """You are a professional translator specializing in {target_language}. Your task is to totally re-translate the following subtitle chunk in order to eliminate the repeated translated lines.
+RE_TRANSLATE_PROMPT = """You are a senior subtitle translator specializing in {target_language}.
+
+The previous translation failed deterministic quality checks. Your task is to produce a clean full re-translation of the entire subtitle chunk from the Original text.
 
 Original text:
 {original_text}
 
-Intermediate translation:
+Previous flawed translation, provided only to show what to avoid:
 {translation}
 
-Instructions:
-1. Retranslate the entire subtitle chunk, ensure all {chunk_size} lines are translated.
-2. Maintain the exact format and number of entries.
-3. Do not include any additional text, explanations, or original text.
-4. Ensure the total number of translated entries is exactly {chunk_size}.
+Quality diagnosis of the previous translation:
+{quality_report}
 
-Example of the required xml format:
+Instructions:
+1. Translate from the Original text, not from the previous flawed translation.
+2. Use the quality diagnosis only to understand what failed and avoid repeating those failures.
+3. Output exactly {chunk_size} translated entries, numbered [1] through [{chunk_size}] in order.
+4. Preserve one-entry-in, one-entry-out alignment. Do not merge, split, skip, reorder, or renumber entries.
+5. Each translated entry must be natural {target_language}, concise enough for subtitles, and faithful to the corresponding original entry.
+6. Do not output placeholders, empty entries, source text, punctuation-only entries, explanations, or markdown.
+7. If adjacent original entries are similar or repetitive, translate each entry according to its own meaning and context; do not blindly copy the same translated line unless the original meaning is truly identical.
+8. Preserve names, terminology, numbers, URLs, commands, paths, code-like tokens, and speaker intent.
+9. Output only the XML block below.
+
+Required XML format:
 <response>
 <translation>
 [1]
@@ -121,5 +131,10 @@ Example of the required xml format:
 </translation>
 </response>
 
-Now, provide the fixed re-translation following this format:
+Before answering, silently verify:
+- there are exactly {chunk_size} entries;
+- every index from [1] to [{chunk_size}] appears once;
+- no entry is empty, placeholder text, source text, or punctuation-only.
+
+Now provide the corrected re-translation:
 """
