@@ -52,6 +52,15 @@ class TestNewConfig(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 config.summary_model.require_api_key()
 
+    def test_bundled_default_config_uses_schema_defaults(self):
+        config = load_config()
+
+        self.assertEqual(config.config_version, "2")
+        self.assertEqual(config.default_output_format, "source-first")
+        self.assertEqual(config.pipeline.chunk_size, 34)
+        self.assertEqual(config.asr.max_audio_length, 300)
+        self.assertTrue(config.asr.prefer_local_cache)
+
 
 if __name__ == "__main__":
     unittest.main()

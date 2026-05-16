@@ -38,6 +38,10 @@ subtitle-llm download "https://example.com/video" --output-dir data/input --sour
 subtitle-llm transcribe data/input/audio.wav --output data/input/audio.srt --language English
 ```
 
+ASR models are resolved through the Hugging Face cache. After the first successful download,
+later runs prefer the local cached snapshot; set `asr.cache_dir` in your config if you want
+to keep these model files somewhere other than the default Hugging Face cache directory.
+
 ## Project structure
 
 ```
@@ -69,6 +73,8 @@ summary_model:
   api_key_env: "GEMINI_API_KEY"
   model: "gemini-3.1-flash-lite-preview"
 ```
+
+Most fallback defaults live in `src/subtitle_llm/settings.py`; `default.yaml` only declares required model settings and project-specific overrides.
 
 Use a custom config with:
 

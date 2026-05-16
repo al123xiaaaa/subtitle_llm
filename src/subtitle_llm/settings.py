@@ -50,8 +50,7 @@ class ModelConfig(BaseModel):
         value = os.getenv(self.api_key_env)
         if not value:
             raise ConfigError(
-                f"缺少 API key 环境变量：{self.api_key_env} "
-                f"(model={self.model}, provider={self.provider.value})"
+                f"缺少 API key 环境变量：{self.api_key_env} (model={self.model}, provider={self.provider.value})"
             )
         return value
 
@@ -78,8 +77,10 @@ class PipelineConfig(BaseModel):
 class ASRConfig(BaseModel):
     model: str = "Qwen/Qwen3-ASR-1.7B"
     forced_aligner: str = "Qwen/Qwen3-ForcedAligner-0.6B"
-    max_audio_length: int = 300
+    max_audio_length: int = 180
     device: str | None = "cpu"
+    cache_dir: str | None = None
+    prefer_local_cache: bool = True
 
 
 class AppConfig(BaseModel):

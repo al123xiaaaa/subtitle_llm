@@ -202,14 +202,16 @@ def transcribe(
     config = config or ASRConfig()
     kwargs = {"device_map": config.device} if config.device else {}
     asr_language = normalize_asr_language(language)
+    model_path = _resolve_model_path(config.model, config.cache_dir, config.prefer_local_cache)
+    forced_aligner_path = _resolve_model_path(config.forced_aligner, config.cache_dir, config.prefer_local_cache)
     if asr_language != language:
         display_language = "自动识别" if asr_language is None else asr_language
         print(f"ASR 语言：{display_language}（来自 {language}）")
 
     print(f"正在加载 Qwen3-ASR 模型 ({config.model})...")
     model = Qwen3ASRModel.from_pretrained(
-        config.model,
-        forced_aligner=config.forced_aligner,
+        model_path,
+        forced_aligner=forced_aligner_path,
         forced_aligner_kwargs=kwargs,
         **kwargs,
     )
@@ -251,6 +253,30 @@ def transcribe(
     SubtitleIO.write_srt(subtitle, output_path, output_format="source-only")
     print(f"字幕已生成：{output_path}")
     return str(output_path)
+
+
+def _resolve_model_path(model: str, cache_dir: str | None, prefer_local_cache: bool) -> str:
+    model_path = Path(model).expanduser()
+    if model_path.exists():
+        return str(model_path)
+
+    expanded_cache_dir = str(Path(cache_dir).expanduser()) if cache_dir else None
+    if prefer_local_cache:
+        try:
+            cached_path = _download_model_snapshot(model, expanded_cache_dir, local_files_only=True)
+            print(f"使用本地模型缓存：{model}")
+            return cached_path
+        except Exception:
+            pass
+
+    print(f"本地缓存未命中，准备下载模型：{model}")
+    return _download_model_snapshot(model, expanded_cache_dir, local_files_only=False)
+
+
+def _download_model_snapshot(model: str, cache_dir: str | None, local_files_only: bool) -> str:
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(repo_id=model, cache_dir=cache_dir, local_files_only=local_files_only)
 
 
 def _split_audio(audio: AudioSegment, audio_path: Path, max_length: int):
