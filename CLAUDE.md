@@ -9,55 +9,66 @@ A CLI tool that translates `.srt` subtitle files (or word-level `.json` transcri
 ## Commands
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Install package in editable mode
+pip install -e .
+
+# Set API keys used by config
+export GEMINI_API_KEY="..."
 
 # Run translation
-python3 main.py -i <input.srt|input.json> -o <output.srt> -to <target_language>
+subtitle-llm translate --input <input.srt|input.json> --output <output.srt> --target-language <target_language>
 
-# Run with custom TUI review (default behavior)
-python3 main.py -i ./data/input/input_1.json -o ./data/output/output_1.srt -to "Chinese"
+# Run with TUI review
+subtitle-llm translate --input ./data/input/input_1.json --output ./data/output/output_1.srt --target-language Chinese --review
 
-# Run without TUI (auto-fix missing translations)
-python3 main.py -i ./data/input/input_1.json -o ./data/output/output_1.srt -to "Chinese" -ch False
+# Run without installing console script
+python3 main.py translate --input ./data/input/input_1.json --output ./data/output/output_1.srt --target-language Chinese
 
 # Run tests
 python -m unittest discover tests
-```
 
-No build system, linter, or formatter is configured.
+# Static checks
+ruff check .
+pyright
+```
 
 ## Architecture
 
-**Entry point:** `main.py` — parses CLI args, calls `translate_subtitles()`.
+**Package root:** `src/subtitle_llm/` — the only application package. The old `src/services`, `src/models`, and `src/utils` modules have been removed.
 
-**Translation pipeline** (`src/services/translator.py`):
-1. Parse input via `FileHandler` (.srt) or `JSONSubtitleHandler` (.json)
-2. Generate context summary via LLM (`generate_summary_and_terms()`)
-3. Split subtitles into chunks (~34 entries each), translate in parallel (`ThreadPoolExecutor`, 10 threads)
-4. Per chunk: rough translate → refine → detect missing translations → fix or open TUI for manual review
-5. Write bilingual output `.srt`
+**Entry point:** `main.py` — thin compatibility launcher for the Typer app. Installed CLI entry point is `subtitle-llm`.
 
-**LLM client architecture** (Factory + Strategy):
-- `src/services/llm_clients/llm_client.py` — abstract base class
-- `openai_client.py` — OpenAI SDK (works with any compatible endpoint, e.g. DeepSeek)
-- `gemini_client.py` — Google Gemini SDK with built-in retry
-- `custom_llm_client.py` — raw HTTP via `requests`
-- `src/services/factories/llm_client_factory.py` — creates the right client from config, wraps with `RateLimiter` if configured
+**Translation pipeline** (`src/subtitle_llm/pipeline/`):
+1. `TranslationService` resolves local files or video URLs, reads subtitles, and orchestrates the flow.
+2. `ContextService` generates summary and terminology context.
+3. `ChunkPlanner` splits subtitles and builds readonly boundary context.
+4. `ChunkTranslator` performs rough translation, refinement, repair, and re-translation.
+5. `QualityGate` marks suspicious or missing translations.
+6. `CheckpointStore` persists resumable progress with input/config metadata.
+7. `ReviewPort` routes suspicious chunks to auto repair or TUI review.
 
-**TUI review system** (`src/services/tui/`):
-- `tui_manager.py` — opens a new terminal window for the TUI app
-- `custom_handling.py` — Textual-based TUI for reviewing/editing translations (merge, re-translate, skip)
+**LLM client architecture** (`src/subtitle_llm/llm/`):
+- `types.py` — `ChatClient`, `CompletionResult`, and normalized usage models
+- `clients.py` — OpenAI, Gemini, and custom HTTP provider adapters
+- `factory.py` — creates provider clients from typed config
+- `rate_limiter.py` and `token_counter.py` — shared client utilities
+
+**TUI review system** (`src/subtitle_llm/review/`):
+- `tui_manager.py` — opens a terminal worker
+- `tui_worker.py` — handles file-based IPC queue
+- `custom_handling.py` — Textual app for review, merge, re-translate, and skip
 - Data passed between main process and TUI via temp JSON files
 
-**Prompt templates:** `src/utils/prompts.py` — all LLM prompts (summary, translate, refine, fix, re-translate).
+**Prompt templates:** `src/subtitle_llm/pipeline/prompts.py`.
 
-**Configuration:** `src/config/config.yaml` — chunk size, thread count, rate limits, LLM model configs. `config.yaml` contains hardcoded API keys.
+**Configuration:** `src/subtitle_llm/config/default.yaml` plus optional `--config`. Config is validated by Pydantic in `settings.py`. API keys are referenced by environment variable names such as `GEMINI_API_KEY`; do not hardcode secrets.
 
-**Key models:** `SubtitleEntry` (single subtitle with index/timing/original/translated), `Subtitle` (list container), `Word`/`Segment`/`Transcript` (JSON transcript parsing).
+**Key models:** `SubtitleEntry`, `Subtitle`, `Word`, `Segment`, and `Transcript` live in `src/subtitle_llm/domain/`.
 
 ## Key Dependencies
 
+- `typer` — CLI framework
+- `pydantic` — config validation
 - `openai` — OpenAI SDK (also used for DeepSeek)
 - `google-generativeai` — Gemini SDK
 - `textual` — TUI framework for interactive review

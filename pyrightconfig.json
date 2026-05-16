@@ -3,10 +3,7 @@
   "exclude": [
     "**/__pycache__",
     ".venv",
-    "data",
-    "src/services",
-    "src/models",
-    "src/utils"
+    "data"
   ],
   "pythonVersion": "3.10",
   "typeCheckingMode": "basic",

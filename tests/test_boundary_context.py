@@ -1,8 +1,15 @@
+import sys
 import unittest
+from pathlib import Path
 
-from src.models.subtitle_entry import SubtitleEntry
-from src.utils.prompts import TRANSLATE_CHUNK_PROMPT
-from src.utils.utility_functions import (
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from subtitle_llm.domain import SubtitleEntry
+from subtitle_llm.pipeline.prompts import TRANSLATE_CHUNK_PROMPT
+from subtitle_llm.pipeline.text import (
     build_boundary_context,
     detect_boundary_risk,
     is_likely_continuation,
@@ -15,7 +22,7 @@ def make_entry(index, text):
         index=index,
         start_time="00:00:00,000",
         end_time="00:00:01,000",
-        text=text,
+        original_text=text,
     )
 
 
@@ -78,7 +85,7 @@ class TestBoundaryContext(unittest.TestCase):
 
         self.assertIn("Readonly Boundary Context", prompt)
         self.assertIn("Ensure your translation contains exactly 2 entries", prompt)
-        self.assertIn("Do not translate or output readonly context entries", prompt)
+        self.assertIn("output readonly boundary context entries", prompt)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,6 @@ from subtitle_llm.review.ports import ReviewResult
 class TuiReviewPort:
     """Textual review adapter.
 
-    The current TUI implementation lives in the legacy module during migration.
     The translation pipeline only depends on this adapter and remains unaware of
     terminal spawning or temp-file IPC.
     """

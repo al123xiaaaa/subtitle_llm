@@ -51,7 +51,6 @@ subtitle_llm/
 │   │   ├── media/        # download/transcribe adapters
 │   │   ├── pipeline/     # translation orchestration services
 │   │   └── review/       # auto/TUI review ports
-│   └── config/           # legacy config path retained for migration
 ├── tests/
 ├── data/
 └── requirements.txt
