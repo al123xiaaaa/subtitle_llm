@@ -93,6 +93,7 @@ def main(
     print(f"字幕条数：{report['total_entries']}，已处理：{report['processed_entries']}，短句保留：{report['short_entries']}")
     successful_chunks = report["completed_chunks"] - len(report["failed_chunks"])
     print(f"Chunk：成功 {successful_chunks} / {report['total_chunks']}，失败 {len(report['failed_chunks'])}")
+    print(f"疑似跨 Chunk 断句边界：{report.get('boundary_risk_count', 0)}")
     print(
         "Token："
         f"{report['token_usage']['total_tokens']} "

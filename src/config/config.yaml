@@ -1,6 +1,7 @@
 # LLM Endpoint Settings
 
 chunk_size: 34
+context_window_size: 4
 threads: 5 # Number of threads for parallel processing
 rate_limit: 30 # requests per minute
 max_chars: 132

@@ -9,6 +9,7 @@ from src.utils.utility_functions import (
     process_translation,
     chunk_list,
     combine_translations_by_index,
+    build_boundary_context,
 )
 from src.services.tui.tui_manager import TUIManager
 from src.utils.prompts import (
@@ -74,6 +75,8 @@ def _create_report(input_file, output_file, checkpoint_file, context_file):
         "completed_chunks": 0,
         "resumed_entries": 0,
         "failed_chunks": [],
+        "boundary_risk_count": 0,
+        "boundary_risks": [],
         "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
 
@@ -100,6 +103,8 @@ def _save_checkpoint(checkpoint_file, subtitle, report):
         "processed_entries": report["processed_entries"],
         "completed_chunks": report["completed_chunks"],
         "failed_chunks": report["failed_chunks"],
+        "boundary_risk_count": report["boundary_risk_count"],
+        "boundary_risks": report["boundary_risks"],
         "token_usage": report["token_usage"],
         "entries": {
             str(entry.index): entry.to_dict()
@@ -227,6 +232,7 @@ def translate_subtitles(
     translated_entries = [
         entry for entry in subtitle.entries if entry.index in resumed_indices
     ]
+    context_window_size = int(config.get("context_window_size", 4))
 
     # 初始化 TUIManager
     run_script = os.path.join(
@@ -234,6 +240,13 @@ def translate_subtitles(
     )
     run_script = os.path.abspath(run_script)
     tui_manager = TUIManager(run_script)
+
+    def get_boundary_context_for_chunk(chunk):
+        return build_boundary_context(
+            subtitle.entries,
+            chunk,
+            window_size=context_window_size,
+        )["text"]
 
     def translate_and_refine(chunk):
         """Phase 1: 粗翻译 + 精翻译（纯并行，不涉及 TUI）"""
@@ -246,13 +259,15 @@ def translate_subtitles(
             return chunk, "", local_token_usage
 
         logger.debug(f"Translating chunk ({len(chunk)} entries)...")
+        boundary_context = get_boundary_context_for_chunk(chunk)
         rough_translation = translate_chunk(
             client, config["translation_model"], chunk,
-            context, target_language, local_token_usage,
+            context, target_language, local_token_usage, boundary_context,
         )
         refined_translation = refine_translation(
             client, config["translation_model"], chunk,
             rough_translation, context, target_language, local_token_usage,
+            boundary_context,
         )
         logger.debug(f"Chunk translation done ({len(chunk)} entries)")
         return chunk, refined_translation, local_token_usage
@@ -486,10 +501,27 @@ def translate_subtitles(
             and entry.index not in resumed_indices
         ]
     )
+    boundary_risks_by_key = {}
+    for chunk in filtered_chunks:
+        context_data = build_boundary_context(
+            subtitle.entries,
+            chunk,
+            window_size=context_window_size,
+        )
+        for risk in context_data["risks"]:
+            boundary_risks_by_key[
+                (risk["before_index"], risk["after_index"])
+            ] = risk
+    report["boundary_risks"] = list(boundary_risks_by_key.values())
+    report["boundary_risk_count"] = len(report["boundary_risks"])
 
     logger.info(
         f"开始翻译：共 {len(filtered_chunks)} 个 chunk，"
         f"{len(subtitle.entries)} 条字幕，{max_workers} 线程并行"
+    )
+    logger.info(
+        f"检测到 {report['boundary_risk_count']} 个疑似跨 chunk 断句边界，"
+        f"上下文窗口：前后各 {context_window_size} 条"
     )
     if report["resumed_entries"]:
         logger.info(f"断点续跑：跳过 {report['resumed_entries']} 条已完成字幕")
@@ -757,7 +789,15 @@ def update_token_usage(token_usage, usage):
             token_usage[key] += getattr(usage, key, 0)
 
 
-def translate_chunk(client, config, chunk, context, target_language, token_usage):
+def translate_chunk(
+    client,
+    config,
+    chunk,
+    context,
+    target_language,
+    token_usage,
+    boundary_context="No readonly boundary context.",
+):
     chunk_size = len(chunk)
     chunk_text = "\n".join(
         [f"[{i+1}]\n[{entry.original_text}]" for i, entry in enumerate(chunk)]
@@ -765,6 +805,7 @@ def translate_chunk(client, config, chunk, context, target_language, token_usage
     prompt = TRANSLATE_CHUNK_PROMPT.format(
         target_language=target_language,
         context=context,
+        boundary_context=boundary_context,
         chunk_text=chunk_text,
         chunk_size=chunk_size,
     )
@@ -777,7 +818,14 @@ def translate_chunk(client, config, chunk, context, target_language, token_usage
 
 
 def refine_translation(
-    client, config, chunk, rough_translation, context, target_language, token_usage
+    client,
+    config,
+    chunk,
+    rough_translation,
+    context,
+    target_language,
+    token_usage,
+    boundary_context="No readonly boundary context.",
 ):
     chunk_size = len(chunk)
     original_text = "\n".join(
@@ -786,6 +834,7 @@ def refine_translation(
     prompt = REFINE_TRANSLATION_PROMPT.format(
         target_language=target_language,
         context=context,
+        boundary_context=boundary_context,
         original_text=original_text,
         rough_translation=rough_translation,
         chunk_size=chunk_size,

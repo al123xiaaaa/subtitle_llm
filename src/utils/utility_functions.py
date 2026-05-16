@@ -4,6 +4,29 @@ from typing import List, Dict, Any
 from src.models.subtitle_entry import SubtitleEntry
 
 
+STRONG_SENTENCE_ENDINGS = {".", "!", "?", "。", "！", "？", "…"}
+TRAILING_CLOSERS = set("\"'”’)]}）】》」』〉")
+LEADING_OPENERS = set("\"'“‘([{（【《「『〈")
+CONTINUATION_WORDS = {
+    "and",
+    "but",
+    "or",
+    "so",
+    "because",
+    "that",
+    "which",
+    "who",
+    "when",
+    "while",
+    "if",
+    "to",
+    "of",
+    "with",
+    "for",
+    "as",
+}
+
+
 def seconds_to_srt_time(seconds: float) -> str:
     """Convert seconds to SRT time format (HH:MM:SS,mmm)"""
     millis = int(round((seconds - math.floor(seconds)) * 1000))
@@ -17,6 +40,113 @@ def count_words(text: str) -> int:
     """Count the number of words in a text, excluding standalone punctuation."""
     words = re.findall(r"\b\w+\b", text)
     return len(words)
+
+
+def _strip_trailing_closers(text: str) -> str:
+    stripped = text.strip()
+    while stripped and stripped[-1] in TRAILING_CLOSERS:
+        stripped = stripped[:-1].rstrip()
+    return stripped
+
+
+def _strip_leading_openers(text: str) -> str:
+    stripped = text.strip()
+    while stripped and stripped[0] in LEADING_OPENERS:
+        stripped = stripped[1:].lstrip()
+    return stripped
+
+
+def is_sentence_complete(text: str) -> bool:
+    stripped = _strip_trailing_closers(text)
+    return bool(stripped) and stripped[-1] in STRONG_SENTENCE_ENDINGS
+
+
+def is_likely_continuation(text: str) -> bool:
+    stripped = _strip_leading_openers(text)
+    if not stripped:
+        return False
+
+    first_alpha = re.search(r"[A-Za-z]", stripped)
+    if first_alpha and first_alpha.group(0).islower():
+        return True
+
+    first_word = re.match(r"[A-Za-z]+", stripped)
+    return bool(first_word and first_word.group(0).lower() in CONTINUATION_WORDS)
+
+
+def detect_boundary_risk(left_entry: SubtitleEntry, right_entry: SubtitleEntry):
+    reasons = []
+    if not is_sentence_complete(left_entry.original_text):
+        reasons.append("previous entry does not end with strong sentence punctuation")
+    if is_likely_continuation(right_entry.original_text):
+        reasons.append("next entry looks like a sentence continuation")
+
+    if not reasons:
+        return None
+
+    return {
+        "before_index": left_entry.index,
+        "after_index": right_entry.index,
+        "reason": "; ".join(reasons),
+    }
+
+
+def format_boundary_entries(entries: List[SubtitleEntry]) -> str:
+    if not entries:
+        return "(none)"
+    return "\n".join(f"[global {entry.index}]\n[{entry.original_text}]" for entry in entries)
+
+
+def build_boundary_context(
+    all_entries: List[SubtitleEntry],
+    chunk: List[SubtitleEntry],
+    window_size: int = 4,
+) -> Dict[str, Any]:
+    if not all_entries or not chunk or window_size <= 0:
+        return {"text": "No readonly boundary context.", "risks": []}
+
+    index_to_position = {entry.index: i for i, entry in enumerate(all_entries)}
+    positions = [
+        index_to_position[entry.index]
+        for entry in chunk
+        if entry.index in index_to_position
+    ]
+    if not positions:
+        return {"text": "No readonly boundary context.", "risks": []}
+
+    start = min(positions)
+    end = max(positions)
+    previous_entries = all_entries[max(0, start - window_size):start]
+    next_entries = all_entries[end + 1:end + 1 + window_size]
+
+    risks = []
+    if start > 0:
+        risk = detect_boundary_risk(all_entries[start - 1], all_entries[start])
+        if risk:
+            risks.append(risk)
+    if end < len(all_entries) - 1:
+        risk = detect_boundary_risk(all_entries[end], all_entries[end + 1])
+        if risk:
+            risks.append(risk)
+
+    risk_text = "\n".join(
+        f"- Boundary [{risk['before_index']}] -> [{risk['after_index']}]: {risk['reason']}"
+        for risk in risks
+    ) or "- No suspected cross-chunk sentence boundary."
+
+    text = (
+        "Readonly Boundary Context (do not translate or output these context entries):\n"
+        "Previous context:\n"
+        f"{format_boundary_entries(previous_entries)}\n\n"
+        "Next context:\n"
+        f"{format_boundary_entries(next_entries)}\n\n"
+        "Boundary risk notes:\n"
+        f"{risk_text}\n\n"
+        "Use this readonly context only to understand sentence continuation, pronouns, tone, and terminology. "
+        "The current chunk may begin in the middle of a sentence from the previous context or continue into the next context. "
+        "Translate only the current chunk entries and never output readonly context entries."
+    )
+    return {"text": text, "risks": risks}
 
 
 def process_translation(

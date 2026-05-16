@@ -20,6 +20,9 @@ TRANSLATE_CHUNK_PROMPT = """You are a professional translator tasked with transl
 **Context:**
 {context}
 
+**Readonly Boundary Context:**
+{boundary_context}
+
 **Original Subtitle Chunk ({chunk_size} entries):**
 {chunk_text}
 
@@ -43,6 +46,11 @@ TRANSLATE_CHUNK_PROMPT = """You are a professional translator tasked with transl
    - Preserve the tone and style appropriate for subtitles.
 7. **Total Entries**:
    - **Ensure your translation contains exactly {chunk_size} entries**, matching the original number.
+8. **Boundary Context**:
+   - The readonly boundary context may show the previous and next subtitle entries around this chunk.
+   - Use it only to understand sentence continuation, pronouns, tone, and terminology.
+   - **Do not translate or output readonly context entries.**
+   - If this chunk starts or ends in the middle of a sentence, make the translated entries read naturally while preserving the one-entry-in, one-entry-out structure.
 
 **Example Format (for indices [1] to [{chunk_size}]):**
 [1]
@@ -60,6 +68,9 @@ REFINE_TRANSLATION_PROMPT = """You are a professional translator specializing in
 
 **Context:**
 {context}
+
+**Readonly Boundary Context:**
+{boundary_context}
 
 **Original Text ({chunk_size} entries):**
 {original_text}
@@ -91,6 +102,11 @@ REFINE_TRANSLATION_PROMPT = """You are a professional translator specializing in
    - **Match the length of each translated text to the original text length**.
 8. **Total Entries**:
    - **Ensure your refined translation contains exactly {chunk_size} entries**, matching the original number.
+9. **Boundary Context**:
+   - The readonly boundary context may show the previous and next subtitle entries around this chunk.
+   - Use it only to understand sentence continuation, pronouns, tone, and terminology.
+   - **Do not translate or output readonly context entries.**
+   - If this chunk starts or ends in the middle of a sentence, make the refined entries read naturally while preserving the one-entry-in, one-entry-out structure.
 
 **Example Format (for indices [1] to [{chunk_size}]):**
 [1]
