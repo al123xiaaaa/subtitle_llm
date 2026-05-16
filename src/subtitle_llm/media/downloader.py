@@ -42,6 +42,7 @@ def download(url: str, output_dir: str | Path, source_language: str = "en"):
     ydl_opts = {
         "format": "bestvideo+bestaudio/best",
         "outtmpl": outtmpl,
+        "keepvideo": True,
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}],
     }
     with YoutubeDL(cast(Any, ydl_opts)) as ydl:

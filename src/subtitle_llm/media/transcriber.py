@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, cast
 
@@ -12,6 +14,8 @@ from subtitle_llm.io import SubtitleIO, seconds_to_srt_time
 from subtitle_llm.settings import ASRConfig
 
 
+SENTENCE_ENDINGS: Final[tuple[str, ...]] = (".", "!", "?", "。", "！", "？")
+CJK_ASR_LANGUAGES: Final[set[str]] = {"Chinese", "Japanese", "Cantonese"}
 SUPPORTED_ASR_LANGUAGES: Final[set[str]] = {
     "Chinese",
     "English",
@@ -166,6 +170,13 @@ ASR_LANGUAGE_ALIASES: Final[dict[str, str | None]] = {
 }
 
 
+@dataclass(frozen=True)
+class ASRTimeSpan:
+    text: str
+    start_time: float
+    end_time: float
+
+
 def normalize_asr_language(language: str | None) -> str | None:
     if language is None:
         return None
@@ -236,16 +247,17 @@ def transcribe(
         for result in results:
             if not result.time_stamps:
                 continue
-            for timestamp in result.time_stamps:
-                subtitle.add_entry(
-                    SubtitleEntry(
-                        index=entry_index,
-                        start_time=seconds_to_srt_time(timestamp.start_time + offset),
-                        end_time=seconds_to_srt_time(timestamp.end_time + offset),
-                        original_text=timestamp.text.strip(),
-                    )
-                )
-                entry_index += 1
+            entries = _time_stamps_to_subtitle_entries(
+                result.time_stamps,
+                offset=offset,
+                start_index=entry_index,
+                language=result.language or asr_language,
+                config=config,
+                reference_text=result.text,
+            )
+            for entry in entries:
+                subtitle.add_entry(entry)
+            entry_index += len(entries)
 
         if segment_path != audio_path:
             os.remove(segment_path)
@@ -277,6 +289,130 @@ def _download_model_snapshot(model: str, cache_dir: str | None, local_files_only
     from huggingface_hub import snapshot_download
 
     return snapshot_download(repo_id=model, cache_dir=cache_dir, local_files_only=local_files_only)
+
+
+def _time_stamps_to_subtitle_entries(
+    time_stamps: Any,
+    offset: float,
+    start_index: int,
+    language: str | None,
+    config: ASRConfig,
+    reference_text: str | None = None,
+) -> list[SubtitleEntry]:
+    spans = [_to_time_span(item, offset) for item in time_stamps]
+    spans = [span for span in spans if span.text]
+    if reference_text:
+        spans = _apply_reference_punctuation(spans, reference_text, language)
+    if not spans:
+        return []
+
+    entries: list[SubtitleEntry] = []
+    buffer: list[ASRTimeSpan] = []
+
+    def flush() -> None:
+        if not buffer:
+            return
+        entries.append(
+            SubtitleEntry(
+                index=start_index + len(entries),
+                start_time=seconds_to_srt_time(buffer[0].start_time),
+                end_time=seconds_to_srt_time(max(buffer[-1].end_time, buffer[0].start_time)),
+                original_text=_join_asr_text([span.text for span in buffer], language),
+            )
+        )
+        buffer.clear()
+
+    for span in spans:
+        if buffer and _should_split_before(buffer, span, language, config):
+            flush()
+
+        buffer.append(span)
+        if span.text.endswith(SENTENCE_ENDINGS):
+            flush()
+
+    flush()
+    return entries
+
+
+def _to_time_span(item: Any, offset: float) -> ASRTimeSpan:
+    start_time = float(item.start_time) + offset
+    end_time = max(float(item.end_time) + offset, start_time)
+    return ASRTimeSpan(text=str(item.text).strip(), start_time=start_time, end_time=end_time)
+
+
+def _should_split_before(
+    buffer: list[ASRTimeSpan],
+    next_span: ASRTimeSpan,
+    language: str | None,
+    config: ASRConfig,
+) -> bool:
+    gap_seconds = next_span.start_time - buffer[-1].end_time
+    prospective_text = _join_asr_text([span.text for span in [*buffer, next_span]], language)
+    prospective_duration = max(next_span.end_time, buffer[-1].end_time) - buffer[0].start_time
+    return (
+        gap_seconds >= config.subtitle_gap_seconds
+        or len(prospective_text) > config.subtitle_max_chars
+        or prospective_duration > config.subtitle_max_duration
+    )
+
+
+def _join_asr_text(parts: list[str], language: str | None) -> str:
+    if language in CJK_ASR_LANGUAGES:
+        text = "".join(parts)
+    else:
+        text = " ".join(parts)
+
+    text = re.sub(r"\s+([,.;:!?%，。；：！？])", r"\1", text)
+    text = re.sub(r"([(（])\s+", r"\1", text)
+    text = re.sub(r"\s+([)）])", r"\1", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _apply_reference_punctuation(
+    spans: list[ASRTimeSpan],
+    reference_text: str,
+    language: str | None,
+) -> list[ASRTimeSpan]:
+    if language in CJK_ASR_LANGUAGES:
+        return spans
+
+    reference_words = reference_text.split()
+    if not reference_words:
+        return spans
+
+    updated_spans: list[ASRTimeSpan] = []
+    reference_index = 0
+    for span in spans:
+        match_index = _find_reference_word(reference_words, reference_index, span.text)
+        if match_index is None:
+            updated_spans.append(span)
+            continue
+
+        updated_spans.append(
+            ASRTimeSpan(
+                text=reference_words[match_index],
+                start_time=span.start_time,
+                end_time=span.end_time,
+            )
+        )
+        reference_index = match_index + 1
+
+    return updated_spans
+
+
+def _find_reference_word(reference_words: list[str], start_index: int, text: str) -> int | None:
+    normalized_text = _normalize_reference_word(text)
+    if not normalized_text:
+        return None
+
+    for index in range(start_index, min(start_index + 5, len(reference_words))):
+        if _normalize_reference_word(reference_words[index]) == normalized_text:
+            return index
+    return None
+
+
+def _normalize_reference_word(text: str) -> str:
+    return re.sub(r"[^0-9A-Za-z]+", "", text).lower()
 
 
 def _split_audio(audio: AudioSegment, audio_path: Path, max_length: int):

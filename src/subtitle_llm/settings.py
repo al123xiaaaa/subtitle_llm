@@ -81,6 +81,23 @@ class ASRConfig(BaseModel):
     device: str | None = "cpu"
     cache_dir: str | None = None
     prefer_local_cache: bool = True
+    subtitle_gap_seconds: float = 0.45
+    subtitle_max_chars: int = 84
+    subtitle_max_duration: float = 7.0
+
+    @field_validator("max_audio_length", "subtitle_max_chars")
+    @classmethod
+    def positive_integer(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("value must be positive")
+        return value
+
+    @field_validator("subtitle_gap_seconds", "subtitle_max_duration")
+    @classmethod
+    def positive_float(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("value must be positive")
+        return value
 
 
 class AppConfig(BaseModel):

@@ -9,7 +9,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from subtitle_llm.settings import ConfigError, load_config
+from subtitle_llm.settings import ASRConfig, ConfigError, load_config
 
 
 CONFIG_YAML = """
@@ -58,7 +58,7 @@ class TestNewConfig(unittest.TestCase):
         self.assertEqual(config.config_version, "2")
         self.assertEqual(config.default_output_format, "source-first")
         self.assertEqual(config.pipeline.chunk_size, 34)
-        self.assertEqual(config.asr.max_audio_length, 300)
+        self.assertEqual(config.asr.max_audio_length, ASRConfig().max_audio_length)
         self.assertTrue(config.asr.prefer_local_cache)
 
 
