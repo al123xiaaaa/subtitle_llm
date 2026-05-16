@@ -3,27 +3,26 @@ import os
 import json
 import logging
 
-# Determine the absolute path to the project root
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
-print(f"tui project_root: {project_root}")
-
-# Add project_root to sys.path if it's not already included
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-from src.models.subtitle_entry import SubtitleEntry
-from src.services.tui.custom_handling import CustomHandlingApp
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _ensure_project_root_on_path():
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
 
 
 def main():
     if len(sys.argv) < 2:
         print("Usage: python run_custom_handling.py <data_file>")
         sys.exit(1)
+
+    _ensure_project_root_on_path()
+    from src.models.subtitle_entry import SubtitleEntry
+    from src.services.tui.custom_handling import CustomHandlingApp
 
     data_file = sys.argv[1]
 

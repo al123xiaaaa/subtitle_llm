@@ -1,0 +1,38 @@
+DataTable {
+  border: solid #ffffff;
+  background: #4c4848;
+  color: #ffffff;
+}
+
+DataTable .datatable--row {
+  min-height: 3;
+  padding: 1 0;
+}
+
+DataTable .datatable--cell {
+  content-align: left top;
+}
+
+#status {
+  height: 1;
+  background: #333333;
+  color: #ffffff;
+}
+
+DataTable .selected {
+  background: #3399ff;
+  color: #ffffff;
+}
+
+DataTable .highlighted {
+  background: #ffa500;
+  color: #000000;
+}
+
+DataTable .datatable--even-row {
+  background: #4c4848;
+}
+
+DataTable .datatable--odd-row {
+  background: #5c5a5a;
+}

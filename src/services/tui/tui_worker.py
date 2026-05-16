@@ -15,14 +15,6 @@ import json
 import time
 import logging
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-from src.models.subtitle_entry import SubtitleEntry
-from src.services.tui.custom_handling import CustomHandlingApp
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -33,10 +25,21 @@ OUTPUT_READY = "output.ready"
 DONE_FILE = "done"
 
 
+def _ensure_project_root_on_path():
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python tui_worker.py <comm_dir>")
         sys.exit(1)
+
+    _ensure_project_root_on_path()
+    from src.models.subtitle_entry import SubtitleEntry
+    from src.services.tui.custom_handling import CustomHandlingApp
 
     comm_dir = sys.argv[1]
     input_path = os.path.join(comm_dir, INPUT_FILE)

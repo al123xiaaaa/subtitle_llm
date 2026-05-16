@@ -1,0 +1,49 @@
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+
+class TokenUsage(BaseModel):
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+    def add_usage(self, usage) -> None:
+        data = usage.to_dict() if hasattr(usage, "to_dict") else usage
+        self.prompt_tokens += int(data.get("prompt_tokens", 0))
+        self.completion_tokens += int(data.get("completion_tokens", 0))
+        self.total_tokens += int(data.get("total_tokens", 0))
+
+
+class FailedChunk(BaseModel):
+    chunk_index: int
+    entry_indices: list[int]
+    error: str
+
+
+class TranslationReport(BaseModel):
+    input_file: str
+    output_file: str
+    checkpoint_file: str
+    context_file: str
+    stage: str = "初始化"
+    total_entries: int = 0
+    processed_entries: int = 0
+    short_entries: int = 0
+    total_chunks: int = 0
+    completed_chunks: int = 0
+    resumed_entries: int = 0
+    failed_chunks: list[FailedChunk] = Field(default_factory=list)
+    boundary_risk_count: int = 0
+    boundary_risks: list[dict] = Field(default_factory=list)
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
+    output_format: str = "source-first"
+
+    def mark_failed(self, chunk_index: int, entry_indices: list[int], error: Exception | str) -> None:
+        self.failed_chunks.append(
+            FailedChunk(
+                chunk_index=chunk_index,
+                entry_indices=entry_indices,
+                error=str(error),
+            )
+        )

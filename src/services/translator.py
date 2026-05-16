@@ -1,6 +1,13 @@
 import os
 os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "0"
 
+import logging
+import concurrent.futures
+import json
+import re
+import threading
+import sys
+
 from src.services.file_handler import FileHandler
 from src.services.factories.llm_client_factory import LLMClientFactory
 from src.services.json_handler import JSONSubtitleHandler
@@ -21,12 +28,6 @@ from src.utils.prompts import (
 )
 from src.models.subtitle_entry import SubtitleEntry
 
-import concurrent.futures
-import json
-import re
-import threading
-import sys
-
 from rich.logging import RichHandler
 from rich.console import Console
 from rich.progress import (
@@ -39,8 +40,6 @@ from rich.progress import (
 )
 
 console = Console()
-
-import logging
 
 logging.basicConfig(
     level=logging.INFO,
@@ -850,7 +849,6 @@ def refine_translation(
 def fix_missing_translations(
     client, config, chunk, processed_lines, target_language, token_usage
 ):
-    chunk_size = len(chunk)
     original_text = "\n".join(
         [f"[{i+1}]\n[{entry.original_text}]" for i, entry in enumerate(chunk)]
     )

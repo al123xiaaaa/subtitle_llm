@@ -1,8 +1,9 @@
 import unittest
-from unittest.mock import patch, mock_open
 from io import StringIO
+from unittest.mock import patch
+
 from src.services.file_handler import FileHandler
-from src.models.subtitle import Subtitle
+
 
 class TestFileHandler(unittest.TestCase):
     @patch('builtins.open')

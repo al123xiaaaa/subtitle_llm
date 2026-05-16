@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "subtitle-llm"
+version = "0.2.0"
+description = "LLM-powered bilingual subtitle translation CLI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "chardet>=5.0.0",
+    "google-generativeai",
+    "openai>=1.44.1",
+    "pydantic>=2",
+    "pydub",
+    "PyYAML>=6.0.1",
+    "requests",
+    "textual",
+    "tiktoken",
+    "typer>=0.12",
+    "yt-dlp",
+]
+
+[project.optional-dependencies]
+asr = ["qwen-asr"]
+
+[project.scripts]
+subtitle-llm = "subtitle_llm.cli.app:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["subtitle_llm*"]
+
+[tool.setuptools.package-data]
+subtitle_llm = ["config/*.yaml", "review/*.css"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/test_new_*.py" = ["E402"]
