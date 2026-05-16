@@ -5,9 +5,9 @@ import logging
 
 from textual import events
 from textual.app import App, ComposeResult
-from textual.containers import Container
+from textual.containers import Container, Horizontal
 from textual.reactive import reactive
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.widgets import DataTable, Footer, Header, LoadingIndicator, ProgressBar, Static
 
 from subtitle_llm.domain import SubtitleEntry
 
@@ -28,15 +28,34 @@ class CustomHandlingApp(App):
     selected_lines = reactive(set())
     merge_map = reactive([])
 
-    def __init__(self, subtitle_entries: list[SubtitleEntry], temp_file_path: str, **kwargs):
+    def __init__(
+        self,
+        subtitle_entries: list[SubtitleEntry],
+        temp_file_path: str,
+        chunk_index: int = 0,
+        total_chunks: int = 1,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.subtitle_entries = subtitle_entries
         self.temp_file_path = temp_file_path
+        self.chunk_index = chunk_index
+        self.total_chunks = max(total_chunks, 1)
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield Horizontal(
+            LoadingIndicator(id="activity"),
+            Static("等待审核操作。", id="status"),
+            id="status_bar",
+        )
+        yield Horizontal(
+            Static(id="progress_label"),
+            ProgressBar(total=self.total_chunks, show_eta=False, id="chunk_progress"),
+            id="progress_bar",
+        )
+        yield Container(DataTable(id="subtitles_table"), id="table_panel")
         yield Footer()
-        yield Container(DataTable(id="subtitles_table"), Static(id="status"))
 
     def on_mount(self):
         table = self.query_one("#subtitles_table", DataTable)
@@ -57,7 +76,8 @@ class CustomHandlingApp(App):
                 height=2,
             )
         table.scroll_end()
-        self.query_one("#status", Static).update("准备就绪。")
+        self.update_progress()
+        self.update_status("准备就绪，等待审核操作。")
 
     async def on_key(self, event: events.Key) -> None:
         table = self.query_one("#subtitles_table", DataTable)
@@ -73,7 +93,7 @@ class CustomHandlingApp(App):
                         "merge_map": self.merge_map.copy(),
                     }
                 )
-                self.query_one("#status", Static).update("选中的行已写入以供翻译。")
+                self.update_status("选中的行已写入以供翻译。")
         elif event.key == "s":
             await self.on_key_s()
         elif event.key == "a":
@@ -84,7 +104,7 @@ class CustomHandlingApp(App):
             await self.merge_selected_rows()
         elif event.key == "escape" and self.selected_lines:
             self.clear_selection()
-            self.query_one("#status", Static).update("已取消选择。")
+            self.update_status("已取消选择。")
 
     async def on_quit(self):
         for entry in self.subtitle_entries:
@@ -105,7 +125,7 @@ class CustomHandlingApp(App):
         for entry in self.subtitle_entries:
             entry.needs_retranslation = False
         self.update_retranslation_status(0, len(self.subtitle_entries), False)
-        self.query_one("#status", Static).update("所有翻译已接受。跳过重新翻译。")
+        self.update_status("所有翻译已接受。跳过重新翻译。")
         self.write_data_to_temp_file(
             {
                 "selected_subtitle_entries": [entry.to_dict() for entry in self.subtitle_entries],
@@ -140,7 +160,7 @@ class CustomHandlingApp(App):
             self.selected_lines.remove(row_key)
             table.remove_class("selected", row_key)
             table.update_cell(row_key, "selected", "No")
-            self.query_one("#status", Static).update(f"取消选择行: {row_key}")
+            self.update_status(f"取消选择行: {row_key}")
             return
 
         selected_indices = sorted([int(row.split("-")[1]) for row in self.selected_lines])
@@ -154,7 +174,7 @@ class CustomHandlingApp(App):
         self.selected_lines.add(row_key)
         table.add_class("selected", row_key)
         table.update_cell(row_key, "selected", "Yes")
-        self.query_one("#status", Static).update(f"选择行: {row_key}")
+        self.update_status(f"选择行: {row_key}")
 
     def clear_selection(self):
         table = self.query_one("#subtitles_table", DataTable)
@@ -165,13 +185,13 @@ class CustomHandlingApp(App):
 
     async def merge_selected_rows(self):
         if len(self.selected_lines) < 2:
-            self.query_one("#status", Static).update("需要至少选择两行以合并。")
+            self.update_status("需要至少选择两行以合并。")
             return
 
         selected_indices = sorted([int(row.split("-")[1]) for row in self.selected_lines])
         for i in range(1, len(selected_indices)):
             if selected_indices[i] != selected_indices[i - 1] + 1:
-                self.query_one("#status", Static).update("请选择相邻的行进行合并。")
+                self.update_status("请选择相邻的行进行合并。")
                 return
 
         target_index = selected_indices[0]
@@ -197,7 +217,7 @@ class CustomHandlingApp(App):
         self.rebuild_table()
         self.selected_lines.clear()
         self.update_retranslation_status(target_index, len(self.subtitle_entries), True)
-        self.query_one("#status", Static).update("选中的行已合并并标记为需要重新翻译。")
+        self.update_status("选中的行已合并并标记为需要重新翻译。")
 
     def rebuild_table(self):
         table = self.query_one("#subtitles_table", DataTable)
@@ -223,7 +243,15 @@ class CustomHandlingApp(App):
             with open(self.temp_file_path, "w", encoding="utf-8") as file:
                 json.dump(data, file, ensure_ascii=False, indent=4)
             logger.info("数据已写入临时文件: %s", self.temp_file_path)
-            self.query_one("#status", Static).update("数据已成功写入临时文件。")
+            self.update_status("数据已成功写入临时文件。")
         except Exception as exc:
             logger.error("写入数据到临时文件失败: %s", exc)
-            self.query_one("#status", Static).update("写入数据到临时文件失败。")
+            self.update_status("写入数据到临时文件失败。")
+
+    def update_status(self, message: str) -> None:
+        self.query_one("#status", Static).update(message)
+
+    def update_progress(self) -> None:
+        progress = min(self.chunk_index + 1, self.total_chunks)
+        self.query_one("#progress_label", Static).update(f"Chunk {progress}/{self.total_chunks}")
+        self.query_one("#chunk_progress", ProgressBar).update(total=self.total_chunks, progress=progress)

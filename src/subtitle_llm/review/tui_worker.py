@@ -58,7 +58,12 @@ def main() -> None:
         total_chunks = data.get("total_chunks", 1)
         print(f"\n=== Chunk {chunk_index + 1}/{total_chunks} ===")
 
-        app = CustomHandlingApp(subtitle_entries, temp_file_path=str(output_path))
+        app = CustomHandlingApp(
+            subtitle_entries,
+            temp_file_path=str(output_path),
+            chunk_index=chunk_index,
+            total_chunks=total_chunks,
+        )
         app.run()
 
         if output_path.exists():
