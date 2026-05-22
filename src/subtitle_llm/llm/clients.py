@@ -77,6 +77,7 @@ class CustomHTTPChatClient(BaseClient):
                 "temperature": config.temperature,
                 "top_p": config.top_p,
                 "top_k": config.top_k,
+                "repeat_penalty": config.repeat_penalty,
                 "frequency_penalty": config.frequency_penalty,
                 "presence_penalty": config.presence_penalty,
                 "n": config.n,

@@ -1,0 +1,38 @@
+# Hy-MT2-7B 本地翻译配置
+# 摘要用 Gemini（推理能力强），翻译用本地 Hy-MT2 7B（翻译质量优先）
+# 使用方式: subtitle-llm translate --config hy-mt2-7b-local.yaml --input xxx.srt --target-language Chinese
+#
+# 前置条件:
+#   1. 启动本地服务: ./start-hy-mt2-7b.sh
+#   2. export GEMINI_API_KEY="..."
+#   3. export HYMT2_API_KEY="local-no-key-needed"
+
+pipeline:
+  # 7B 本地推理更慢，保持串行并缩小 chunk，避免单次请求过长。
+  threads: 1
+  chunk_size: 12
+  review_mode: "tui"
+  fallback_on_chunk_error: "abort"
+
+summary_model:
+  provider: "gemini"
+  api_key_env: "GEMINI_API_KEY"
+  model: "gemini-3.1-flash-lite-preview"
+  top_p: 0.85
+  top_k: 12
+  retry_delay_seconds: 40
+
+translation_model:
+  provider: "custom"
+  api_key_env: "HYMT2_API_KEY"
+  endpoint: "http://127.0.0.1:8123/v1"
+  model: "/Users/xiaguangwei/.cache/hy-mt2/Hy-MT2-7B-Q4_K_M.gguf"
+  temperature: 0.7
+  top_p: 0.6
+  top_k: 20
+  repeat_penalty: 1.05
+  max_tokens: 4096
+  request_timeout_seconds: 1800
+  rate_limit: 2
+  max_retries: 3
+  retry_delay_seconds: 10

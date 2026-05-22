@@ -31,6 +31,7 @@ class ModelConfig(BaseModel):
     temperature: float = 0.5
     top_p: float = 1.0
     top_k: int | None = None
+    repeat_penalty: float | None = None
     frequency_penalty: float = 0.0
     presence_penalty: float = 0.0
     n: int = 1
