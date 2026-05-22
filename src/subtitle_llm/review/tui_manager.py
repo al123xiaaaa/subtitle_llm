@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import platform
 import shlex
 import subprocess
@@ -9,6 +10,8 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+from subtitle_llm.runtime_logging import RUN_LOG_ENV
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,7 @@ class TUIManager:
     def submit_chunk(self, data, chunk_index: int = 0, total_chunks: int = 1):
         self._ensure_worker()
         assert self.comm_dir is not None
+        logger.info("提交TUI审核: chunk=%s/%s entries=%s", chunk_index + 1, total_chunks, len(data))
 
         input_path = Path(self.comm_dir) / INPUT_FILE
         input_ready = Path(self.comm_dir) / INPUT_READY
@@ -63,6 +67,7 @@ class TUIManager:
             return
         (Path(self.comm_dir) / DONE_FILE).write_text("done", encoding="utf-8")
         self.worker_started = False
+        logger.info("TUI Worker 停止: 通信目录=%s", self.comm_dir)
 
     def _ensure_worker(self) -> None:
         if self.worker_started:
@@ -71,6 +76,9 @@ class TUIManager:
         self.comm_dir = tempfile.mkdtemp(prefix="subtitle_llm_tui_")
         cwd = Path.cwd()
         command = f"{shlex.quote(sys.executable)} {shlex.quote(str(self.worker_script))} {shlex.quote(self.comm_dir)}"
+        run_log = os.getenv(RUN_LOG_ENV)
+        if run_log:
+            command = f"{command} {shlex.quote(run_log)}"
         activate = self._find_virtualenv_activate(cwd)
         if activate:
             command = f"source {shlex.quote(str(activate))} && {command}"

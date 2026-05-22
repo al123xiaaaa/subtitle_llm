@@ -36,6 +36,7 @@ class ModelConfig(BaseModel):
     n: int = 1
     stream: bool = False
     rate_limit: int | None = None
+    request_timeout_seconds: float = 120.0
     max_retries: int = 6
     retry_delay_seconds: float = 60.0
 

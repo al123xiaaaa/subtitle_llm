@@ -86,7 +86,12 @@ class CustomHTTPChatClient(BaseClient):
         }
         for attempt in range(config.max_retries):
             try:
-                response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=120)
+                response = requests.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=data,
+                    timeout=config.request_timeout_seconds,
+                )
                 response.raise_for_status()
                 result = response.json()
                 content = result["choices"][0]["message"]["content"].strip()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -18,6 +19,8 @@ from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.pipeline.text import parse_translation_results
 from subtitle_llm.review import AutoReviewPort, ReviewPort, TuiReviewPort
 from subtitle_llm.settings import AppConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -51,6 +54,14 @@ class TranslationService:
         self.review_port = review_port
 
     def translate(self, request: TranslationRequest) -> TranslationResult:
+        logger.info(
+            "翻译任务开始: input=%s target_language=%s source_language=%s resume=%s review_mode=%s",
+            request.input_file,
+            request.target_language,
+            request.source_language,
+            request.resume,
+            request.review_mode or self.config.pipeline.review_mode,
+        )
         input_file = self._resolve_input(request.input_file, request.source_language)
         output_file = request.output_file or self._default_output_file(
             input_file,
@@ -67,6 +78,13 @@ class TranslationService:
             context_file=str(context_file),
             output_format=output_format,
         )
+        logger.info(
+            "翻译文件已准备: resolved_input=%s output=%s checkpoint=%s context=%s",
+            input_file,
+            output_file,
+            checkpoint_file,
+            context_file,
+        )
 
         subtitle = SubtitleIO.read(
             input_file,
@@ -74,6 +92,7 @@ class TranslationService:
             max_duration=self.config.pipeline.max_duration,
         )
         report.total_entries = len(subtitle.entries)
+        logger.info("字幕读取完成: entries=%s", report.total_entries)
 
         checkpoint = CheckpointStore(
             checkpoint_file=checkpoint_file,
@@ -83,6 +102,8 @@ class TranslationService:
             config_version=self.config.config_version,
         )
         resumed_indices = self._restore_checkpoint(request, subtitle, checkpoint, report)
+        if resumed_indices:
+            logger.info("断点恢复完成: resumed_entries=%s", len(resumed_indices))
 
         context_service = ContextService(
             self.summary_client,
@@ -95,6 +116,11 @@ class TranslationService:
         context, context_usage = context_service.build_context(context_source, request.target_language)
         report.token_usage.add_usage(context_usage.to_dict())
         context_service.save_context(context, context_file)
+        logger.info(
+            "上下文生成完成: context_file=%s context_tokens=%s",
+            context_file,
+            context_usage.total_tokens,
+        )
 
         planner = ChunkPlanner(
             chunk_size=self.config.pipeline.chunk_size,
@@ -117,37 +143,52 @@ class TranslationService:
                 boundary_risks_by_key[(risk["before_index"], risk["after_index"])] = risk
         report.boundary_risks = list(boundary_risks_by_key.values())
         report.boundary_risk_count = len(report.boundary_risks)
+        logger.info(
+            "chunk规划完成: chunks=%s short_entries=%s boundary_risks=%s",
+            report.total_chunks,
+            report.short_entries,
+            report.boundary_risk_count,
+        )
 
         translator = ChunkTranslator(self.translation_client, self.config.translation_model)
         quality_gate = QualityGate()
         review_mode = request.review_mode or self.config.pipeline.review_mode
         review_port = self._review_port(review_mode)
+        logger.info("审核模式: %s", review_mode)
         translated_entries: list[SubtitleEntry] = [
             entry for entry in subtitle.entries if entry.index in resumed_indices
         ]
 
-        self._run_chunks(
-            planned_chunks,
-            translator,
-            quality_gate,
-            review_port,
-            context,
-            request.target_language,
-            subtitle,
-            translated_entries,
-            checkpoint,
-            report,
-        )
+        try:
+            self._run_chunks(
+                planned_chunks,
+                translator,
+                quality_gate,
+                review_port,
+                context,
+                request.target_language,
+                subtitle,
+                translated_entries,
+                checkpoint,
+                report,
+            )
 
-        self._finalize_subtitle(subtitle, translated_entries)
-        report.stage = "完成"
-        report.processed_entries = len(subtitle.entries)
-        checkpoint.save(subtitle, report)
-        SubtitleIO.write_srt(subtitle, output_file, output_format=output_format)
-        stop_review = getattr(review_port, "stop", None)
-        if callable(stop_review):
-            stop_review()
-        return TranslationResult(subtitle=subtitle, report=report)
+            self._finalize_subtitle(subtitle, translated_entries)
+            report.stage = "完成"
+            report.processed_entries = len(subtitle.entries)
+            checkpoint.save(subtitle, report)
+            SubtitleIO.write_srt(subtitle, output_file, output_format=output_format)
+            logger.info(
+                "翻译任务完成: output=%s failed_chunks=%s total_tokens=%s",
+                output_file,
+                len(report.failed_chunks),
+                report.token_usage.total_tokens,
+            )
+            return TranslationResult(subtitle=subtitle, report=report)
+        finally:
+            stop_review = getattr(review_port, "stop", None)
+            if callable(stop_review):
+                stop_review()
 
     def _run_chunks(
         self,
@@ -197,6 +238,11 @@ class TranslationService:
                             report,
                         )
                     except Exception as exc:
+                        logger.exception(
+                            "chunk处理失败: chunk=%s entries=%s",
+                            planned.index + 1,
+                            [entry.index for entry in planned.entries],
+                        )
                         self._handle_chunk_failure(planned, translated_entries, report, exc)
                     finally:
                         report.completed_chunks += 1
@@ -226,6 +272,14 @@ class TranslationService:
         )
         quality_gate.apply_diagnosis(planned.entries, diagnosis)
         if diagnosis.has_issues:
+            logger.warning(
+                "chunk质量诊断命中: chunk=%s reliability=%s flagged=%s summary=%s",
+                planned.index + 1,
+                diagnosis.reliability,
+                diagnosis.flagged_entries,
+                diagnosis.summary,
+            )
+        if diagnosis.has_issues:
             if isinstance(review_port, AutoReviewPort):
                 repair_usage = CompletionUsage()
                 repaired = translator.repair_translation(
@@ -245,9 +299,20 @@ class TranslationService:
                     target_language=target_language,
                 )
                 quality_gate.apply_diagnosis(planned.entries, repaired_diagnosis)
+                logger.info(
+                    "chunk自动重译完成: chunk=%s reliability=%s flagged=%s",
+                    planned.index + 1,
+                    repaired_diagnosis.reliability,
+                    repaired_diagnosis.flagged_entries,
+                )
             else:
                 review_result = review_port.review(planned.entries, planned.index, report.total_chunks)
                 planned.entries = review_result.chunk
+                logger.info(
+                    "TUI审核完成: chunk=%s selected_for_retranslation=%s",
+                    planned.index + 1,
+                    len(review_result.entries_to_retranslate),
+                )
                 if review_result.entries_to_retranslate:
                     selected = review_result.entries_to_retranslate
                     selected_result = translator.translate_and_refine(
@@ -260,9 +325,11 @@ class TranslationService:
                     for entry, refined_text in parse_translation_results(selected_result.translation, selected_result.chunk):
                         entry.needs_retranslation = False
                         entry.set_translated_text(refined_text.strip())
+                    logger.info("TUI选中重译完成: chunk=%s selected=%s", planned.index + 1, len(selected))
 
         for entry in planned.entries:
             translated_entries.append(entry)
+        logger.info("chunk接受完成: chunk=%s entries=%s", planned.index + 1, len(planned.entries))
 
     def _handle_chunk_failure(
         self,
@@ -273,10 +340,12 @@ class TranslationService:
     ) -> None:
         report.mark_failed(planned.index, [entry.index for entry in planned.entries], exc)
         if self.config.pipeline.fallback_on_chunk_error == "abort":
+            logger.error("chunk失败且配置为中止: chunk=%s error=%s", planned.index + 1, exc)
             raise exc
+        logger.warning("chunk失败后回退到原文: chunk=%s error=%s", planned.index + 1, exc)
         for entry in planned.entries:
-            if not entry.translated_text.strip():
-                entry.set_translated_text(entry.original_text.strip())
+            entry.needs_retranslation = True
+            entry.set_translated_text(entry.original_text.strip())
             translated_entries.append(entry)
 
     def _restore_checkpoint(
@@ -335,6 +404,7 @@ class TranslationService:
 
         from subtitle_llm.media import download, transcribe
 
+        logger.info("检测到URL输入，准备下载或复用媒体: url=%s source_language=%s", input_file, source_language)
         output_dir = Path.cwd() / "data" / "input"
         result = download(input_file, output_dir, source_language)
         if len(result) == 3:
@@ -344,12 +414,16 @@ class TranslationService:
             audio_path = None
 
         if subtitle_path:
+            logger.info("URL输入解析到字幕: subtitle=%s video=%s", subtitle_path, _video_path)
             return subtitle_path
         if not audio_path:
             raise RuntimeError("未找到字幕且无法提取音频")
 
         srt_path = output_dir / f"{Path(audio_path).stem}.srt"
-        return transcribe(audio_path, source_language, srt_path, self.config.asr)
+        logger.info("URL输入未找到字幕，准备ASR转写: audio=%s output=%s", audio_path, srt_path)
+        transcribed_path = transcribe(audio_path, source_language, srt_path, self.config.asr)
+        logger.info("ASR转写完成: srt=%s", transcribed_path)
+        return transcribed_path
 
     def _is_url(self, value: str) -> bool:
         parsed = urlparse(value)

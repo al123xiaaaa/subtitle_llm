@@ -78,6 +78,13 @@ class CustomHandlingApp(App):
         table.scroll_end()
         self.update_progress()
         self.update_status("准备就绪，等待审核操作。")
+        logger.info(
+            "TUI审核界面已打开: chunk=%s/%s entries=%s flagged=%s",
+            self.chunk_index + 1,
+            self.total_chunks,
+            len(self.subtitle_entries),
+            len([entry for entry in self.subtitle_entries if entry.needs_retranslation]),
+        )
 
     async def on_key(self, event: events.Key) -> None:
         table = self.query_one("#subtitles_table", DataTable)
@@ -92,6 +99,11 @@ class CustomHandlingApp(App):
                         "selected_subtitle_entries": [entry.to_dict() for entry in selected_entries],
                         "merge_map": self.merge_map.copy(),
                     }
+                )
+                logger.info(
+                    "TUI用户操作: 从行%s开始标记重译 selected=%s",
+                    row_index,
+                    len(selected_entries),
                 )
                 self.update_status("选中的行已写入以供翻译。")
         elif event.key == "s":
@@ -110,6 +122,7 @@ class CustomHandlingApp(App):
         for entry in self.subtitle_entries:
             if entry.needs_retranslation:
                 entry.translated_text = ""
+        selected_count = len([entry for entry in self.subtitle_entries if entry.needs_retranslation])
         self.write_data_to_temp_file(
             {
                 "selected_subtitle_entries": [
@@ -119,6 +132,7 @@ class CustomHandlingApp(App):
                 "merge_map": self.merge_map.copy(),
             }
         )
+        logger.info("TUI用户操作: 确认并继续 selected_for_retranslation=%s", selected_count)
         await self.action_quit()
 
     async def on_key_s(self):
@@ -133,6 +147,7 @@ class CustomHandlingApp(App):
                 "merge_map": self.merge_map.copy(),
             }
         )
+        logger.info("TUI用户操作: 跳过重译 entries=%s", len(self.subtitle_entries))
         await self.action_quit()
 
     def handle_spacebar_selection(self, row_index: int) -> list[SubtitleEntry]:
@@ -161,6 +176,7 @@ class CustomHandlingApp(App):
             table.remove_class("selected", row_key)
             table.update_cell(row_key, "selected", "No")
             self.update_status(f"取消选择行: {row_key}")
+            logger.info("TUI用户操作: 取消选择行 row=%s", row_key)
             return
 
         selected_indices = sorted([int(row.split("-")[1]) for row in self.selected_lines])
@@ -175,6 +191,7 @@ class CustomHandlingApp(App):
         table.add_class("selected", row_key)
         table.update_cell(row_key, "selected", "Yes")
         self.update_status(f"选择行: {row_key}")
+        logger.info("TUI用户操作: 选择行 row=%s selected_count=%s", row_key, len(self.selected_lines))
 
     def clear_selection(self):
         table = self.query_one("#subtitles_table", DataTable)
@@ -218,6 +235,11 @@ class CustomHandlingApp(App):
         self.selected_lines.clear()
         self.update_retranslation_status(target_index, len(self.subtitle_entries), True)
         self.update_status("选中的行已合并并标记为需要重新翻译。")
+        logger.info(
+            "TUI用户操作: 合并行 merged_index=%s merged_from=%s",
+            target_entry.index,
+            selected_indices,
+        )
 
     def rebuild_table(self):
         table = self.query_one("#subtitles_table", DataTable)

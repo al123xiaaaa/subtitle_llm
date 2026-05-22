@@ -7,6 +7,13 @@
 #   2. export GEMINI_API_KEY="..."
 #   3. export HYMT2_API_KEY="local-no-key-needed"
 
+pipeline:
+  # 本地 CPU 推理吞吐有限，避免并发请求把 llama.cpp server 压到超时。
+  threads: 1
+  chunk_size: 18
+  review_mode: "tui"
+  fallback_on_chunk_error: "abort"
+
 summary_model:
   provider: "gemini"
   api_key_env: "GEMINI_API_KEY"
@@ -23,6 +30,7 @@ translation_model:
   temperature: 0.3
   top_p: 0.8
   max_tokens: 4096
-  rate_limit: 30
+  request_timeout_seconds: 600
+  rate_limit: 5
   max_retries: 3
   retry_delay_seconds: 10

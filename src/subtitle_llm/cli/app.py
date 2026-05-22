@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Annotated
 
@@ -9,6 +10,7 @@ from dotenv import load_dotenv
 from subtitle_llm.media import download as download_media
 from subtitle_llm.media import transcribe as transcribe_audio
 from subtitle_llm.pipeline import TranslationRequest, TranslationService
+from subtitle_llm.runtime_logging import configure_run_logging
 from subtitle_llm.settings import ConfigError, load_config
 
 # 自动加载项目根目录的 .env 文件（API keys 等）
@@ -20,6 +22,8 @@ app = typer.Typer(
     no_args_is_help=True,
     pretty_exceptions_show_locals=False,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _load_service(config_path: Path | None) -> TranslationService:
@@ -55,22 +59,51 @@ def translate(
         ),
     ] = None,
     resume: Annotated[bool, typer.Option("--resume", help="Resume from checkpoint if metadata matches.")] = False,
-    review: Annotated[bool, typer.Option("--review/--no-review", help="Use TUI review for suspicious chunks.")] = False,
+    review: Annotated[
+        bool | None,
+        typer.Option("--review/--no-review", help="Use TUI review for suspicious chunks."),
+    ] = None,
 ) -> None:
     """Translate an SRT file, word-level JSON transcript, or video URL."""
-    service = _load_service(config)
-    result = service.translate(
-        TranslationRequest(
-            input_file=input_file,
-            output_file=output_file,
-            target_language=target_language,
-            source_language=source_language,
-            output_format=output_format,
-            resume=resume,
-            review_mode="tui" if review else "auto",
+    log_path = configure_run_logging("translate")
+    logger.info(
+        "用户操作: translate input=%s output=%s target_language=%s source_language=%s config=%s format=%s resume=%s review=%s",
+        input_file,
+        output_file,
+        target_language,
+        source_language,
+        config,
+        output_format,
+        resume,
+        review,
+    )
+    try:
+        service = _load_service(config)
+        result = service.translate(
+            TranslationRequest(
+                input_file=input_file,
+                output_file=output_file,
+                target_language=target_language,
+                source_language=source_language,
+                output_format=output_format,
+                resume=resume,
+                review_mode=None if review is None else ("tui" if review else "auto"),
+            )
         )
+    except Exception:
+        logger.exception("命令失败: translate")
+        typer.secho(f"日志文件：{log_path}", fg=typer.colors.YELLOW, err=True)
+        raise
+    logger.info(
+        "命令完成: translate output=%s entries=%s chunks=%s failed_chunks=%s total_tokens=%s",
+        result.report.output_file,
+        result.report.total_entries,
+        result.report.total_chunks,
+        len(result.report.failed_chunks),
+        result.report.token_usage.total_tokens,
     )
     _print_report(result.report)
+    typer.echo(f"日志文件：{log_path}")
 
 
 @app.command()
@@ -82,8 +115,22 @@ def download(
     source_language: Annotated[str, typer.Option("--source-language", "-s", help="Subtitle language.")] = "en",
 ) -> None:
     """Download a video and available subtitles."""
-    result = download_media(url, output_dir, source_language)
+    log_path = configure_run_logging("download")
+    logger.info(
+        "用户操作: download url=%s output_dir=%s source_language=%s",
+        url,
+        output_dir,
+        source_language,
+    )
+    try:
+        result = download_media(url, output_dir, source_language)
+    except Exception:
+        logger.exception("命令失败: download")
+        typer.secho(f"日志文件：{log_path}", fg=typer.colors.YELLOW, err=True)
+        raise
+    logger.info("命令完成: download result=%s", result)
     typer.echo(result)
+    typer.echo(f"日志文件：{log_path}")
 
 
 @app.command()
@@ -94,8 +141,23 @@ def transcribe(
     config: Annotated[Path | None, typer.Option("--config", "-c", help="Config YAML path.")] = None,
 ) -> None:
     """Transcribe audio to SRT with the configured ASR model."""
-    app_config = load_config(config)
-    transcribe_audio(audio, language, output, app_config.asr)
+    log_path = configure_run_logging("transcribe")
+    logger.info(
+        "用户操作: transcribe audio=%s output=%s language=%s config=%s",
+        audio,
+        output,
+        language,
+        config,
+    )
+    try:
+        app_config = load_config(config)
+        transcribe_audio(audio, language, output, app_config.asr)
+    except Exception:
+        logger.exception("命令失败: transcribe")
+        typer.secho(f"日志文件：{log_path}", fg=typer.colors.YELLOW, err=True)
+        raise
+    logger.info("命令完成: transcribe output=%s", output)
+    typer.echo(f"日志文件：{log_path}")
 
 
 def _print_report(report) -> None:

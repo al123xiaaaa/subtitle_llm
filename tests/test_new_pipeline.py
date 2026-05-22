@@ -57,6 +57,38 @@ class RecordingLLMClient(FakeLLMClient):
         return super().create_completion(config, messages)
 
 
+class TimeoutAfterBadTranslationClient(FakeLLMClient):
+    def create_completion(self, config, messages):
+        prompt = messages[-1]["content"]
+        if "Analyze the following subtitle content" in prompt:
+            return super().create_completion(config, messages)
+        if "Previous flawed translation" in prompt:
+            raise TimeoutError("local model timed out")
+        return CompletionResult(
+            content="[1]\n只翻译了第一句",
+            usage=CompletionUsage(prompt_tokens=2, completion_tokens=2, total_tokens=4),
+        )
+
+
+class FailingTranslationClient(FakeLLMClient):
+    def create_completion(self, config, messages):
+        prompt = messages[-1]["content"]
+        if "Analyze the following subtitle content" in prompt:
+            return super().create_completion(config, messages)
+        raise RuntimeError("chunk boom")
+
+
+class StoppableReviewPort:
+    def __init__(self):
+        self.stopped = False
+
+    def review(self, chunk, chunk_index, total_chunks):
+        raise AssertionError("review should not be called")
+
+    def stop(self):
+        self.stopped = True
+
+
 def make_config():
     model = ModelConfig(type=ModelProvider.CUSTOM, api_key_env="FAKE_KEY", model="fake", endpoint="https://fake.test")
     return AppConfig(
@@ -97,6 +129,64 @@ class TestNewPipeline(unittest.TestCase):
             self.assertEqual(result.report.failed_chunks, [])
             self.assertTrue(Path(result.report.context_file).exists())
             self.assertTrue(Path(result.report.checkpoint_file).exists())
+
+    def test_failed_auto_repair_replaces_partial_placeholders_with_source_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.srt"
+            output_path = Path(tmp) / "output.srt"
+            input_path.write_text(
+                "1\n00:00:01,000 --> 00:00:02,000\nHello there.\n\n"
+                "2\n00:00:03,000 --> 00:00:04,000\nSecond sentence.\n\n",
+                encoding="utf-8",
+            )
+            service = TranslationService(
+                make_config(),
+                translation_client=TimeoutAfterBadTranslationClient(),
+                summary_client=FakeLLMClient(),
+            )
+
+            result = service.translate(
+                TranslationRequest(
+                    input_file=str(input_path),
+                    output_file=str(output_path),
+                    target_language="Chinese",
+                )
+            )
+
+            output_text = output_path.read_text(encoding="utf-8")
+            self.assertNotIn("Translation missing line", output_text)
+            self.assertIn("Hello there.", output_text)
+            self.assertIn("Second sentence.", output_text)
+            self.assertEqual(len(result.report.failed_chunks), 1)
+
+    def test_review_port_stops_when_translation_aborts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.srt"
+            output_path = Path(tmp) / "output.srt"
+            input_path.write_text(
+                "1\n00:00:01,000 --> 00:00:02,000\nHello there.\n\n",
+                encoding="utf-8",
+            )
+            config = make_config()
+            config.pipeline.fallback_on_chunk_error = "abort"
+            review_port = StoppableReviewPort()
+            service = TranslationService(
+                config,
+                translation_client=FailingTranslationClient(),
+                summary_client=FakeLLMClient(),
+                review_port=review_port,
+            )
+
+            with self.assertRaises(RuntimeError):
+                service.translate(
+                    TranslationRequest(
+                        input_file=str(input_path),
+                        output_file=str(output_path),
+                        target_language="Chinese",
+                    )
+                )
+
+            self.assertTrue(review_port.stopped)
 
     def test_translation_defaults_output_path_from_input_title(self):
         with tempfile.TemporaryDirectory() as tmp:
