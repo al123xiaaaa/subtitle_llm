@@ -4,11 +4,15 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from dotenv import load_dotenv
 
 from subtitle_llm.media import download as download_media
 from subtitle_llm.media import transcribe as transcribe_audio
 from subtitle_llm.pipeline import TranslationRequest, TranslationService
 from subtitle_llm.settings import ConfigError, load_config
+
+# 自动加载项目根目录的 .env 文件（API keys 等）
+load_dotenv()
 
 app = typer.Typer(
     name="subtitle-llm",
@@ -40,7 +44,9 @@ def translate(
         ),
     ] = None,
     config: Annotated[Path | None, typer.Option("--config", "-c", help="Config YAML path.")] = None,
-    source_language: Annotated[str, typer.Option("--source-language", "-s", help="Source language for URL subtitles/ASR.")] = "en",
+    source_language: Annotated[
+        str, typer.Option("--source-language", "-s", help="Source language for URL subtitles/ASR.")
+    ] = "en",
     output_format: Annotated[
         str | None,
         typer.Option(
@@ -70,7 +76,9 @@ def translate(
 @app.command()
 def download(
     url: Annotated[str, typer.Argument(help="Video URL.")],
-    output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Directory for downloaded media/subtitles.")] = Path("data/input"),
+    output_dir: Annotated[
+        Path, typer.Option("--output-dir", "-o", help="Directory for downloaded media/subtitles.")
+    ] = Path("data/input"),
     source_language: Annotated[str, typer.Option("--source-language", "-s", help="Subtitle language.")] = "en",
 ) -> None:
     """Download a video and available subtitles."""
@@ -98,9 +106,7 @@ def _print_report(report) -> None:
     typer.echo(f"断点文件：{report.checkpoint_file}")
     typer.echo(f"输出格式：{report.output_format}")
     typer.echo(
-        f"字幕条数：{report.total_entries}，"
-        f"已处理：{report.processed_entries}，"
-        f"短句保留：{report.short_entries}"
+        f"字幕条数：{report.total_entries}，已处理：{report.processed_entries}，短句保留：{report.short_entries}"
     )
     typer.echo(f"Chunk：成功 {successful_chunks} / {report.total_chunks}，失败 {len(report.failed_chunks)}")
     typer.echo(f"疑似跨 Chunk 断句边界：{report.boundary_risk_count}")

@@ -69,15 +69,20 @@ class CustomHTTPChatClient(BaseClient):
         self._acquire()
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         data = {
-            "model": config.model,
-            "messages": messages,
-            "max_tokens": config.max_tokens,
-            "temperature": config.temperature,
-            "top_p": config.top_p,
-            "top_k": config.top_k,
-            "frequency_penalty": config.frequency_penalty,
-            "n": config.n,
-            "stream": config.stream,
+            k: v
+            for k, v in {
+                "model": config.model,
+                "messages": messages,
+                "max_tokens": config.max_tokens,
+                "temperature": config.temperature,
+                "top_p": config.top_p,
+                "top_k": config.top_k,
+                "frequency_penalty": config.frequency_penalty,
+                "presence_penalty": config.presence_penalty,
+                "n": config.n,
+                "stream": config.stream,
+            }.items()
+            if v is not None
         }
         for attempt in range(config.max_retries):
             try:
@@ -129,7 +134,9 @@ class GeminiChatClient(BaseClient):
                 HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
             },
         )
-        history: list[dict[str, object]] = [{"role": item["role"], "parts": [item["content"]]} for item in messages[:-1]]
+        history: list[dict[str, object]] = [
+            {"role": item["role"], "parts": [item["content"]]} for item in messages[:-1]
+        ]
         for attempt in range(config.max_retries):
             try:
                 chat_session = model.start_chat(history=cast(Any, history))

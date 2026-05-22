@@ -14,6 +14,7 @@ dependencies = [
     "openai>=1.44.1",
     "pydantic>=2",
     "pydub",
+    "python-dotenv>=1.0.0",
     "PyYAML>=6.0.1",
     "requests",
     "textual",
