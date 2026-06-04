@@ -77,26 +77,21 @@ class PipelineConfig(BaseModel):
 
 
 class ASRConfig(BaseModel):
-    model: str = "Qwen/Qwen3-ASR-1.7B"
-    forced_aligner: str = "Qwen/Qwen3-ForcedAligner-0.6B"
-    max_audio_length: int = 180
-    device: str | None = "cpu"
-    cache_dir: str | None = None
-    prefer_local_cache: bool = True
-    subtitle_gap_seconds: float = 0.45
-    subtitle_max_chars: int = 84
-    subtitle_max_duration: float = 7.0
+    """FunASR ASR 引擎配置。
 
-    @field_validator("max_audio_length", "subtitle_max_chars")
+    默认使用 SenseVoiceSmall 模型，自带 VAD（fsmn-vad）和标点恢复（ct-punc）。
+    """
+
+    model: str = "iic/SenseVoiceSmall"
+    vad_model: str = "fsmn-vad"
+    punc_model: str = "ct-punc"
+    spk_model: str | None = None  # 设为 "cam++" 启用说话人分离
+    vad_max_segment_ms: int = 30000  # VAD 单段最大时长（毫秒）
+    device: str | None = "cpu"
+
+    @field_validator("vad_max_segment_ms")
     @classmethod
     def positive_integer(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("value must be positive")
-        return value
-
-    @field_validator("subtitle_gap_seconds", "subtitle_max_duration")
-    @classmethod
-    def positive_float(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("value must be positive")
         return value

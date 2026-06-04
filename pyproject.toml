@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-asr = ["qwen-asr"]
+asr = ["funasr"]
 
 [project.scripts]
 subtitle-llm = "subtitle_llm.cli.app:app"

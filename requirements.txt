@@ -7,7 +7,7 @@ tiktoken
 requests
 google-generativeai
 yt-dlp
-qwen-asr
+funasr
 pydub
 pydantic>=2
 typer>=0.12
