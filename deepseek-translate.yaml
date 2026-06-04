@@ -1,0 +1,31 @@
+# Qwen3-ASR 本地转录 + DeepSeek 翻译
+# 用法:
+#   1. transcribe: python3 main.py transcribe audio.mp3 -o out.srt -l Italian
+#   2. translate:  python3 main.py translate --config deepseek-translate.yaml -i out.srt -t Chinese
+
+pipeline:
+  threads: 2
+  chunk_size: 18
+  review_mode: "auto"
+  fallback_on_chunk_error: "abort"
+
+summary_model:
+  provider: "custom"
+  api_key_env: "DEEPSEEK_API_KEY"
+  endpoint: "https://api.deepseek.com/v1"
+  model: "deepseek-chat"
+  top_p: 0.85
+  retry_delay_seconds: 10
+
+translation_model:
+  provider: "custom"
+  api_key_env: "DEEPSEEK_API_KEY"
+  endpoint: "https://api.deepseek.com/v1"
+  model: "deepseek-chat"
+  temperature: 0.3
+  top_p: 0.8
+  max_tokens: 4096
+  request_timeout_seconds: 120
+  rate_limit: 5
+  max_retries: 3
+  retry_delay_seconds: 10
