@@ -10,6 +10,7 @@ if str(SRC_DIR) not in sys.path:
 
 from typer.testing import CliRunner
 
+from subtitle_llm.media.muxer import MuxResult
 from subtitle_llm.cli.app import app
 from subtitle_llm.pipeline.report import TranslationReport
 
@@ -123,6 +124,86 @@ class TestNewCLI(unittest.TestCase):
             request = fake_service.translate.call_args.args[0]
             self.assertIsNone(request.output_file)
 
+    def test_translate_command_can_embed_video_after_translation(self):
+        runner = CliRunner()
+        report = TranslationReport(
+            input_file="input.srt",
+            output_file="output.srt",
+            checkpoint_file="output_checkpoint.json",
+            context_file="output_context.txt",
+            source_video_file="downloaded.mp4",
+            total_entries=1,
+            processed_entries=1,
+            total_chunks=1,
+            completed_chunks=1,
+        )
+        fake_service = Mock()
+        fake_service.translate.return_value = Mock(report=report)
+
+        with runner.isolated_filesystem():
+            with patch("subtitle_llm.cli.app._load_service", return_value=fake_service):
+                with patch(
+                    "subtitle_llm.cli.app.mux_subtitle_track",
+                    return_value=MuxResult(output_file="output.mkv", command=["ffmpeg"]),
+                ) as mux:
+                    result = runner.invoke(
+                        app,
+                        [
+                            "translate",
+                            "--input",
+                            "https://example.test/video",
+                            "--target-language",
+                            "Chinese",
+                            "--embed-video",
+                            "--ffmpeg",
+                            "/bin/ffmpeg",
+                        ],
+                    )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("源视频：downloaded.mp4", result.output)
+            self.assertIn("输出视频：output.mkv", result.output)
+            mux.assert_called_once_with(
+                video_file="downloaded.mp4",
+                subtitle_file="output.srt",
+                output_file=None,
+                target_language="Chinese",
+                ffmpeg="/bin/ffmpeg",
+            )
+
+    def test_translate_command_keeps_subtitle_success_when_embedding_fails(self):
+        runner = CliRunner()
+        report = TranslationReport(
+            input_file="input.srt",
+            output_file="output.srt",
+            checkpoint_file="output_checkpoint.json",
+            context_file="output_context.txt",
+            total_entries=1,
+            processed_entries=1,
+            total_chunks=1,
+            completed_chunks=1,
+        )
+        fake_service = Mock()
+        fake_service.translate.return_value = Mock(report=report)
+
+        with runner.isolated_filesystem():
+            with patch("subtitle_llm.cli.app._load_service", return_value=fake_service):
+                result = runner.invoke(
+                    app,
+                    [
+                        "translate",
+                        "--input",
+                        "input.srt",
+                        "--target-language",
+                        "Chinese",
+                        "--embed-video",
+                    ],
+                )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("输出文件：output.srt", result.output)
+            self.assertIn("视频封装：未选择视频，跳过生成 MKV", result.output)
+
     def test_translate_command_logs_failures(self):
         runner = CliRunner()
         fake_service = Mock()
@@ -147,12 +228,41 @@ class TestNewCLI(unittest.TestCase):
             self.assertIn("命令失败: translate", log_text)
             self.assertIn("RuntimeError: boom", log_text)
 
+    def test_mux_command_prints_output_video(self):
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            with patch(
+                "subtitle_llm.cli.app.mux_subtitle_track",
+                return_value=MuxResult(output_file="output.mkv", command=["ffmpeg"]),
+            ) as mux:
+                result = runner.invoke(
+                    app,
+                    [
+                        "mux",
+                        "video.mp4",
+                        "subtitle.srt",
+                        "--target-language",
+                        "Chinese",
+                        "--ffmpeg",
+                        "/bin/ffmpeg",
+                    ],
+                )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("MKV 生成完成", result.output)
+            self.assertIn("输出视频：output.mkv", result.output)
+            mux.assert_called_once()
+            self.assertEqual(mux.call_args.kwargs["video_file"], Path("video.mp4"))
+            self.assertEqual(mux.call_args.kwargs["subtitle_file"], Path("subtitle.srt"))
+            self.assertEqual(mux.call_args.kwargs["target_language"], "Chinese")
+
     def test_help_shows_commands(self):
         runner = CliRunner()
         result = runner.invoke(app, ["--help"])
         self.assertEqual(result.exit_code, 0)
         self.assertIn("Usage", result.output)
         self.assertIn("translate", result.output)
+        self.assertIn("mux", result.output)
 
     def _single_log(self, command: str) -> Path:
         logs = list(Path("data/logs").glob(f"*_{command}_*.log"))

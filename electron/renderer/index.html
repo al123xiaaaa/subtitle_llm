@@ -113,6 +113,22 @@
                 <button id="chooseOutput" class="secondary-button" type="button">选择</button>
               </div>
             </label>
+            <section class="mkv-panel span-2" aria-labelledby="embedMkvTitle">
+              <div class="mkv-panel-heading">
+                <label class="check-row">
+                  <input id="embedMkv" type="checkbox" />
+                  <span id="embedMkvTitle">翻译完成后生成带字幕 MKV</span>
+                </label>
+                <span id="mkvCapabilityStatus" class="status-pill is-missing">检测 FFmpeg 中</span>
+              </div>
+              <label>
+                <span>视频文件</span>
+                <div class="inline-control">
+                  <input id="translateVideo" type="text" placeholder="视频 URL 会自动复用下载到的视频；本地字幕可手动选择" />
+                  <button id="chooseTranslateVideo" class="secondary-button" type="button">选择</button>
+                </div>
+              </label>
+            </section>
             <details class="advanced-panel span-2">
               <summary>高级配置</summary>
               <label class="check-row">
@@ -133,6 +149,33 @@
             </label>
             <div class="actions span-2">
               <button id="startTranslate" class="primary-button" type="submit">开始翻译</button>
+            </div>
+          </form>
+          <form id="muxForm" class="form-grid mux-form">
+            <div class="span-2 form-section-heading">
+              <h3>已有字幕生成 MKV</h3>
+              <p>翻译后想补生成视频时，在这里选择字幕和视频即可。</p>
+            </div>
+            <label>
+              <span>已翻译字幕</span>
+              <div class="inline-control">
+                <input id="muxSubtitle" type="text" placeholder="output.zh.srt" />
+                <button id="chooseMuxSubtitle" class="secondary-button" type="button">选择</button>
+              </div>
+            </label>
+            <label>
+              <span>视频文件</span>
+              <div class="inline-control">
+                <input id="muxVideo" type="text" placeholder="video.mp4 / video.mkv" />
+                <button id="chooseMuxVideo" class="secondary-button" type="button">选择</button>
+              </div>
+            </label>
+            <label>
+              <span>字幕语言</span>
+              <input id="muxTargetLanguage" type="text" value="Chinese" />
+            </label>
+            <div class="actions">
+              <button id="startMux" class="primary-button" type="submit">生成 MKV</button>
             </div>
           </form>
         </section>
@@ -224,6 +267,28 @@
               <button id="showOutput" class="secondary-button" type="button" disabled>定位文件</button>
               <button id="cancelJob" class="danger-button" type="button" disabled>取消</button>
               <button id="clearLog" class="secondary-button" type="button">清空</button>
+            </div>
+          </div>
+          <div id="resultFiles" class="result-files is-hidden">
+            <div id="subtitleResultRow" class="result-file-row is-hidden">
+              <div>
+                <strong>字幕文件</strong>
+                <span id="subtitleResultPath"></span>
+              </div>
+              <div class="result-actions">
+                <button class="secondary-button" type="button" data-open-result="subtitle">打开</button>
+                <button class="secondary-button" type="button" data-show-result="subtitle">定位</button>
+              </div>
+            </div>
+            <div id="videoResultRow" class="result-file-row is-hidden">
+              <div>
+                <strong>带字幕 MKV</strong>
+                <span id="videoResultPath"></span>
+              </div>
+              <div class="result-actions">
+                <button class="secondary-button" type="button" data-open-result="video">打开</button>
+                <button class="secondary-button" type="button" data-show-result="video">定位</button>
+              </div>
             </div>
           </div>
           <pre id="logBody" aria-live="polite"></pre>

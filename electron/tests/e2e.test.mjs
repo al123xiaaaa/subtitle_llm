@@ -1,0 +1,302 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { _electron as electron } from "playwright";
+
+const require = createRequire(import.meta.url);
+const electronPath = require("electron");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(__dirname, "../..");
+const youtubeUrl = "https://www.youtube.com/watch?v=c0dm-l0AOBE&pp=ugUEEgJlbg%3D%3D";
+
+const fakePythonSource = `#!/usr/bin/env node
+const fs = require("node:fs");
+
+const args = process.argv.slice(2);
+const command = args[1] || "";
+const commandLog = process.env.SUBTITLE_LLM_E2E_COMMAND_LOG;
+
+function optionValue(flag) {
+  const index = args.indexOf(flag);
+  return index >= 0 ? args[index + 1] : "";
+}
+
+if (commandLog) {
+  fs.appendFileSync(commandLog, JSON.stringify({
+    args,
+    command,
+    env: {
+      DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY || "",
+      GEMINI_API_KEY: process.env.GEMINI_API_KEY || "",
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+    },
+  }) + "\\n");
+}
+
+setTimeout(() => {
+  if (command === "translate") {
+    const output = optionValue("--output") || "data/output/youtube.zh.srt";
+    console.log("\\n===== 翻译完成 =====");
+    console.log("输出格式：source-first");
+    console.log("SUBTITLE_LLM_RESULT " + JSON.stringify({
+      command: "translate",
+      output_file: output,
+      source_video_file: args.includes("--embed-video") ? "data/input/youtube.mp4" : null,
+      embedded_video_file: args.includes("--embed-video") ? "data/output/youtube.zh.mkv" : null,
+      embedded_video_error: null,
+      context_file: "data/output/youtube.zh_context.txt",
+      checkpoint_file: "data/output/youtube.zh_checkpoint.json",
+      output_format: "source-first",
+    }));
+    console.log("日志文件：data/logs/e2e_translate.log");
+    process.exit(0);
+  }
+
+  if (command === "mux") {
+    const output = optionValue("--output") || "data/output/manual.zh.mkv";
+    console.log("===== MKV 生成完成 =====");
+    console.log("SUBTITLE_LLM_RESULT " + JSON.stringify({ command: "mux", output_video_file: output }));
+    console.log("日志文件：data/logs/e2e_mux.log");
+    process.exit(0);
+  }
+
+  console.error("unknown command: " + command);
+  process.exit(2);
+}, 80);
+`;
+
+const fakeFfmpegSource = `#!/usr/bin/env node
+if (process.argv.includes("-version")) {
+  console.log("ffmpeg version e2e-fake");
+  process.exit(0);
+}
+process.exit(0);
+`;
+
+const tests = [
+  ["首次启动可以保存 DeepSeek API Key，且不泄露明文", testOnboardingSavesKey],
+  ["YouTube URL 翻译会自动启用 MKV，并传递正确 CLI 参数", testYoutubeTranslateWithMkv],
+  ["已有字幕和视频可以单独生成 MKV", testManualMuxFlow],
+  ["API Key 可以从环境变量回退，跳过首次配置", testEnvCredentialFallback],
+  ["没有 FFmpeg 时 MKV 控件禁用但翻译表单仍可用", testFfmpegMissingDisablesMkvOnly],
+];
+
+for (const [name, test] of tests) {
+  await test();
+  console.log(`✓ ${name}`);
+}
+
+async function testOnboardingSavesKey() {
+  await withApp(async ({ page, userDataDir }) => {
+    await page.locator("#onboarding").waitFor({ state: "visible" });
+    await page.locator("#onboardingApiKey").fill("sk-e2e-deepseek");
+    await page.locator("#onboardingSave").click();
+    await page.locator("#onboarding").waitFor({ state: "hidden" });
+
+    await page.locator('[data-tab="settings"]').click();
+    await page.locator('[data-provider-card="deepseek"] .status-pill.is-saved').waitFor({ state: "visible" });
+
+    const settings = JSON.parse(fs.readFileSync(path.join(userDataDir, "settings.json"), "utf8"));
+    assert.equal(settings.apiKeys.deepseek, "sk-e2e-deepseek");
+    assert.equal(await page.locator("body").evaluate((body) => body.innerText.includes("sk-e2e-deepseek")), false);
+  });
+}
+
+async function testYoutubeTranslateWithMkv() {
+  await withApp(async ({ page, commandLogPath, fakeFfmpegPath }) => {
+    await saveOnboardingKey(page);
+    await page.locator("#translateInput").fill(youtubeUrl);
+    await page.locator("#embedMkv").waitFor({ state: "visible" });
+    assert.equal(await page.locator("#embedMkv").isChecked(), true);
+    await page.locator("#modelSelect").selectOption("deepseek-v4-pro");
+
+    await page.locator("#startTranslate").click();
+    await waitForRunStatus(page, "完成");
+
+    await page.locator("#subtitleResultPath", { hasText: "data/output/youtube.zh.srt" }).waitFor();
+    await page.locator("#videoResultPath", { hasText: "data/output/youtube.zh.mkv" }).waitFor();
+
+    const commands = readCommands(commandLogPath);
+    assert.equal(commands.length, 1);
+    assert.equal(commands[0].command, "translate");
+    assert.deepEqual(commands[0].args.slice(0, 4), ["main.py", "translate", "--input", youtubeUrl]);
+    assertHasArg(commands[0].args, "--target-language", "Chinese");
+    assertHasArg(commands[0].args, "--source-language", "en");
+    assertHasArg(commands[0].args, "--ffmpeg", fakeFfmpegPath);
+    assert.equal(commands[0].args.includes("--embed-video"), true);
+    assert.equal(commands[0].args.includes("--no-review"), true);
+    assert.equal(commands[0].env.DEEPSEEK_API_KEY, "sk-e2e-deepseek");
+
+    const configPath = valueAfter(commands[0].args, "--config");
+    assert.ok(configPath, "expected generated config path");
+    assert.match(fs.readFileSync(configPath, "utf8"), /model: "deepseek-v4-pro"/);
+  });
+}
+
+async function testManualMuxFlow() {
+  await withApp({ env: { DEEPSEEK_API_KEY: "env-e2e-deepseek" } }, async ({ electronApp, page, tempDir, commandLogPath, fakeFfmpegPath }) => {
+    const subtitlePath = path.join(tempDir, "translated.zh.srt");
+    const videoPath = path.join(tempDir, "source.mp4");
+    fs.writeFileSync(subtitlePath, "1\\n00:00:00,000 --> 00:00:01,000\\n你好\\n", "utf8");
+    fs.writeFileSync(videoPath, "video", "utf8");
+
+    await electronApp.evaluate(({ dialog }, paths) => {
+      dialog.showOpenDialog = async (_window, options = {}) => {
+        if (String(options.title || "").includes("已翻译字幕")) {
+          return { canceled: false, filePaths: [paths.subtitlePath] };
+        }
+        if (String(options.title || "").includes("视频文件")) {
+          return { canceled: false, filePaths: [paths.videoPath] };
+        }
+        return { canceled: true, filePaths: [] };
+      };
+    }, { subtitlePath, videoPath });
+
+    await page.locator("#chooseMuxSubtitle").click();
+    await page.locator("#chooseMuxVideo").click();
+    await page.locator("#muxSubtitle").waitFor({ state: "visible" });
+    assert.equal(await page.locator("#muxSubtitle").inputValue(), subtitlePath);
+    assert.equal(await page.locator("#muxVideo").inputValue(), videoPath);
+    assert.equal(await page.locator("#startMux").isEnabled(), true);
+
+    await page.locator("#startMux").click();
+    await waitForRunStatus(page, "完成");
+    await page.locator("#videoResultPath", { hasText: "data/output/manual.zh.mkv" }).waitFor();
+
+    const commands = readCommands(commandLogPath);
+    assert.equal(commands.length, 1);
+    assert.deepEqual(commands[0].args.slice(0, 4), ["main.py", "mux", videoPath, subtitlePath]);
+    assertHasArg(commands[0].args, "--target-language", "Chinese");
+    assertHasArg(commands[0].args, "--ffmpeg", fakeFfmpegPath);
+  });
+}
+
+async function testEnvCredentialFallback() {
+  await withApp({ env: { DEEPSEEK_API_KEY: "env-e2e-deepseek" } }, async ({ page, userDataDir }) => {
+    await page.locator("#onboarding").waitFor({ state: "hidden" });
+    await page.locator("#sidebarProviderStatus .status-pill.is-env", { hasText: "DEEPSEEK_API_KEY" }).waitFor();
+    assert.equal(fs.existsSync(path.join(userDataDir, "settings.json")), false);
+  });
+}
+
+async function testFfmpegMissingDisablesMkvOnly() {
+  await withApp(
+    {
+      disableFfmpeg: true,
+      env: { DEEPSEEK_API_KEY: "env-e2e-deepseek" },
+    },
+    async ({ page }) => {
+      await page.locator("#mkvCapabilityStatus", { hasText: "未找到 FFmpeg" }).waitFor();
+      assert.equal(await page.locator("#embedMkv").isDisabled(), true);
+      assert.equal(await page.locator("#chooseTranslateVideo").isDisabled(), true);
+      assert.equal(await page.locator("#startMux").isDisabled(), true);
+      assert.equal(await page.locator("#startTranslate").isEnabled(), true);
+    },
+  );
+}
+
+async function withApp(optionsOrCallback, maybeCallback) {
+  const options = typeof optionsOrCallback === "function" ? {} : optionsOrCallback;
+  const callback = typeof optionsOrCallback === "function" ? optionsOrCallback : maybeCallback;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "subtitle-llm-electron-e2e-"));
+  const userDataDir = path.join(tempDir, "userData");
+  const commandLogPath = path.join(tempDir, "commands.jsonl");
+  const fakePythonPath = path.join(tempDir, process.platform === "win32" ? "fake-python.cmd" : "fake-python");
+  const fakeFfmpegPath = path.join(tempDir, process.platform === "win32" ? "fake-ffmpeg.cmd" : "fake-ffmpeg");
+
+  writeExecutable(fakePythonPath, fakePythonSource);
+  writeExecutable(fakeFfmpegPath, fakeFfmpegSource);
+
+  const env = {
+    ...process.env,
+    DEEPSEEK_API_KEY: "",
+    GEMINI_API_KEY: "",
+    OPENAI_API_KEY: "",
+    ...(options.env || {}),
+    ELECTRON_ENABLE_LOGGING: "0",
+    SUBTITLE_LLM_USER_DATA_DIR: userDataDir,
+    SUBTITLE_LLM_PYTHON: fakePythonPath,
+    SUBTITLE_LLM_E2E_COMMAND_LOG: commandLogPath,
+  };
+  if (options.disableFfmpeg) {
+    env.SUBTITLE_LLM_DISABLE_FFMPEG_DETECT = "1";
+  } else {
+    env.SUBTITLE_LLM_FFMPEG = fakeFfmpegPath;
+  }
+
+  const electronApp = await electron.launch({
+    executablePath: electronPath,
+    args: [projectRoot],
+    cwd: projectRoot,
+    env,
+    timeout: 30000,
+  });
+
+  const consoleErrors = [];
+  const pageErrors = [];
+
+  try {
+    const page = await electronApp.firstWindow();
+    page.on("console", (message) => {
+      if (message.type() === "error") {
+        consoleErrors.push(message.text());
+      }
+    });
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await waitForAppReady(page);
+    await callback({ electronApp, page, tempDir, userDataDir, commandLogPath, fakeFfmpegPath });
+    assert.deepEqual(pageErrors, []);
+    assert.deepEqual(consoleErrors, []);
+  } finally {
+    await electronApp.close().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function waitForAppReady(page) {
+  await page.locator("#translateForm").waitFor({ state: "visible" });
+  await page.waitForFunction(() => document.querySelector("#runtimeInfo")?.textContent !== "加载中");
+}
+
+async function saveOnboardingKey(page) {
+  await page.locator("#onboarding").waitFor({ state: "visible" });
+  await page.locator("#onboardingApiKey").fill("sk-e2e-deepseek");
+  await page.locator("#onboardingSave").click();
+  await page.locator("#onboarding").waitFor({ state: "hidden" });
+}
+
+async function waitForRunStatus(page, expected) {
+  await page.waitForFunction(
+    (text) => document.querySelector("#runStatus")?.textContent === text,
+    expected,
+    { timeout: 10000 },
+  );
+}
+
+function writeExecutable(filePath, source) {
+  fs.writeFileSync(filePath, source, { encoding: "utf8", mode: 0o755 });
+  if (process.platform !== "win32") {
+    fs.chmodSync(filePath, 0o755);
+  }
+}
+
+function readCommands(commandLogPath) {
+  return fs
+    .readFileSync(commandLogPath, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+function assertHasArg(args, flag, expectedValue) {
+  assert.equal(valueAfter(args, flag), expectedValue, `expected ${flag} ${expectedValue} in ${args.join(" ")}`);
+}
+
+function valueAfter(args, flag) {
+  const index = args.indexOf(flag);
+  return index >= 0 ? args[index + 1] : "";
+}

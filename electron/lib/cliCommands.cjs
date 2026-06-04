@@ -52,6 +52,13 @@ function buildTranslateArgs(options = {}) {
     args.push("--no-review");
   }
 
+  if (options.embedVideo) {
+    args.push("--embed-video");
+    addOption(args, "--video", options.video);
+    addOption(args, "--video-output", options.videoOutput);
+    addOption(args, "--ffmpeg", options.ffmpeg);
+  }
+
   return args;
 }
 
@@ -72,6 +79,16 @@ function buildTranscribeArgs(options = {}) {
   return args;
 }
 
+function buildMuxArgs(options = {}) {
+  const video = required(options.video, "视频文件");
+  const subtitle = required(options.subtitle, "字幕文件");
+  const args = ["main.py", "mux", video, subtitle];
+  addOption(args, "--output", options.output);
+  addOption(args, "--target-language", options.targetLanguage || "Chinese");
+  addOption(args, "--ffmpeg", options.ffmpeg);
+  return args;
+}
+
 function buildPythonArgs(request = {}) {
   switch (request.command) {
     case "translate":
@@ -80,6 +97,8 @@ function buildPythonArgs(request = {}) {
       return buildDownloadArgs(request.options);
     case "transcribe":
       return buildTranscribeArgs(request.options);
+    case "mux":
+      return buildMuxArgs(request.options);
     default:
       throw new Error(`未知命令：${request.command || ""}`);
   }

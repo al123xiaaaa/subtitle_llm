@@ -1,4 +1,5 @@
 const api = window.subtitleLLM;
+const RESULT_EVENT_PREFIX = "SUBTITLE_LLM_RESULT ";
 
 const state = {
   app: null,
@@ -6,9 +7,13 @@ const state = {
   activeCommand: null,
   isBusy: false,
   lastOutputPath: "",
+  lastSubtitlePath: "",
+  lastEmbeddedVideoPath: "",
+  lastSourceVideoPath: "",
   selectedProviderId: "deepseek",
   selectedOnboardingProviderId: "deepseek",
   onboardingDismissed: false,
+  embedPreferenceTouched: false,
 };
 
 const elements = {
@@ -33,6 +38,20 @@ const elements = {
   translateConfig: document.querySelector("#translateConfig"),
   chooseTranslateConfig: document.querySelector("#chooseTranslateConfig"),
   startTranslate: document.querySelector("#startTranslate"),
+  embedMkv: document.querySelector("#embedMkv"),
+  translateVideo: document.querySelector("#translateVideo"),
+  chooseTranslateVideo: document.querySelector("#chooseTranslateVideo"),
+  mkvCapabilityStatus: document.querySelector("#mkvCapabilityStatus"),
+  muxForm: document.querySelector("#muxForm"),
+  muxSubtitle: document.querySelector("#muxSubtitle"),
+  muxVideo: document.querySelector("#muxVideo"),
+  muxTargetLanguage: document.querySelector("#muxTargetLanguage"),
+  startMux: document.querySelector("#startMux"),
+  resultFiles: document.querySelector("#resultFiles"),
+  subtitleResultRow: document.querySelector("#subtitleResultRow"),
+  subtitleResultPath: document.querySelector("#subtitleResultPath"),
+  videoResultRow: document.querySelector("#videoResultRow"),
+  videoResultPath: document.querySelector("#videoResultPath"),
   logBody: document.querySelector("#logBody"),
   runStatus: document.querySelector("#runStatus"),
   cancelJob: document.querySelector("#cancelJob"),
@@ -92,6 +111,7 @@ function setBusy(isBusy) {
     }
   });
   renderTranslationAvailability();
+  renderMkvAvailability();
 }
 
 function appendLog(text, kind = "stdout") {
@@ -113,12 +133,88 @@ function setOutputPath(filePath) {
   elements.showOutput.disabled = false;
 }
 
+function setSubtitlePath(filePath) {
+  if (!filePath) {
+    return;
+  }
+  state.lastSubtitlePath = filePath.trim();
+  setOutputPath(state.lastSubtitlePath);
+  elements.muxSubtitle.value = state.lastSubtitlePath;
+  renderResultFiles();
+  renderMkvAvailability();
+}
+
+function setSourceVideoPath(filePath) {
+  if (!filePath) {
+    return;
+  }
+  state.lastSourceVideoPath = filePath.trim();
+  elements.muxVideo.value = state.lastSourceVideoPath;
+  renderMkvAvailability();
+}
+
+function setEmbeddedVideoPath(filePath) {
+  if (!filePath) {
+    return;
+  }
+  state.lastEmbeddedVideoPath = filePath.trim();
+  setOutputPath(state.lastEmbeddedVideoPath);
+  renderResultFiles();
+}
+
+function renderResultFiles() {
+  const hasSubtitle = Boolean(state.lastSubtitlePath);
+  const hasVideo = Boolean(state.lastEmbeddedVideoPath);
+  elements.resultFiles.classList.toggle("is-hidden", !hasSubtitle && !hasVideo);
+  elements.subtitleResultRow.classList.toggle("is-hidden", !hasSubtitle);
+  elements.videoResultRow.classList.toggle("is-hidden", !hasVideo);
+  elements.subtitleResultPath.textContent = state.lastSubtitlePath;
+  elements.videoResultPath.textContent = state.lastEmbeddedVideoPath;
+}
+
 function parseKnownOutput(text) {
   for (const line of text.split(/\r?\n/)) {
+    if (parseResultEvent(line)) {
+      continue;
+    }
     const outputMatch = line.match(/^输出文件：(.+)$/);
     if (outputMatch) {
-      setOutputPath(outputMatch[1]);
+      setSubtitlePath(outputMatch[1]);
     }
+    const sourceVideoMatch = line.match(/^源视频：(.+)$/);
+    if (sourceVideoMatch) {
+      setSourceVideoPath(sourceVideoMatch[1]);
+    }
+    const embeddedVideoMatch = line.match(/^输出视频：(.+)$/);
+    if (embeddedVideoMatch) {
+      setEmbeddedVideoPath(embeddedVideoMatch[1]);
+    }
+  }
+}
+
+function parseResultEvent(line) {
+  if (!line.startsWith(RESULT_EVENT_PREFIX)) {
+    return false;
+  }
+
+  try {
+    const event = JSON.parse(line.slice(RESULT_EVENT_PREFIX.length));
+    if (event.output_file) {
+      setSubtitlePath(event.output_file);
+    }
+    if (event.source_video_file) {
+      setSourceVideoPath(event.source_video_file);
+    }
+    if (event.embedded_video_file) {
+      setEmbeddedVideoPath(event.embedded_video_file);
+    }
+    if (event.output_video_file) {
+      setEmbeddedVideoPath(event.output_video_file);
+    }
+    return true;
+  } catch (error) {
+    appendLog(`结果事件解析失败：${error.message}\n`, "stderr");
+    return true;
   }
 }
 
@@ -198,6 +294,42 @@ function renderTranslationAvailability() {
   elements.startTranslate.disabled = state.isBusy || (!useYaml && !status.available);
 }
 
+function ffmpegAvailable() {
+  return Boolean(state.app?.ffmpeg?.available);
+}
+
+function looksLikeUrl(rawValue) {
+  try {
+    const parsed = new URL(rawValue);
+    return ["http:", "https:"].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function syncEmbedDefault() {
+  if (state.embedPreferenceTouched || !ffmpegAvailable()) {
+    return;
+  }
+  elements.embedMkv.checked = looksLikeUrl(value("translateInput"));
+}
+
+function renderMkvAvailability() {
+  const available = ffmpegAvailable();
+  const statusText = available ? "FFmpeg 可用" : state.app?.ffmpeg?.error || "未找到 FFmpeg";
+  elements.mkvCapabilityStatus.textContent = statusText;
+  elements.mkvCapabilityStatus.className = available ? "status-pill is-saved" : "status-pill is-missing";
+
+  elements.embedMkv.disabled = state.isBusy || !available;
+  elements.translateVideo.disabled = state.isBusy || !available;
+  elements.chooseTranslateVideo.disabled = state.isBusy || !available;
+  elements.muxSubtitle.disabled = state.isBusy || !available;
+  elements.muxVideo.disabled = state.isBusy || !available;
+  elements.muxTargetLanguage.disabled = state.isBusy || !available;
+  elements.startMux.disabled =
+    state.isBusy || !available || !elements.muxSubtitle.value.trim() || !elements.muxVideo.value.trim();
+}
+
 function renderSettingsCards() {
   elements.settingsCards.innerHTML = providers()
     .map(
@@ -259,6 +391,8 @@ function renderAll() {
   renderModelSelect();
   renderSettingsCards();
   renderTranslationAvailability();
+  syncEmbedDefault();
+  renderMkvAvailability();
   renderOnboarding();
 }
 
@@ -338,6 +472,25 @@ elements.modelSelect.addEventListener("change", async () => {
 
 elements.customModelInput.addEventListener("change", persistProviderPreference);
 elements.useYamlConfig.addEventListener("change", renderTranslationAvailability);
+elements.embedMkv.addEventListener("change", () => {
+  state.embedPreferenceTouched = true;
+  renderMkvAvailability();
+});
+byId("translateInput").addEventListener("input", () => {
+  syncEmbedDefault();
+  renderMkvAvailability();
+});
+byId("targetLanguage").addEventListener("input", () => {
+  elements.muxTargetLanguage.value = value("targetLanguage") || "Chinese";
+});
+elements.muxSubtitle.addEventListener("input", renderMkvAvailability);
+elements.muxVideo.addEventListener("input", renderMkvAvailability);
+elements.translateVideo.addEventListener("input", () => {
+  if (value("translateVideo")) {
+    elements.muxVideo.value = value("translateVideo");
+  }
+  renderMkvAvailability();
+});
 
 elements.configureProvider.addEventListener("click", () => {
   switchTab("settings");
@@ -392,10 +545,31 @@ elements.onboardingSettings.addEventListener("click", () => {
   switchTab("settings");
 });
 
-byId("chooseInput").addEventListener("click", async () => setValue("translateInput", await api.selectInput()));
+byId("chooseInput").addEventListener("click", async () => {
+  setValue("translateInput", await api.selectInput());
+  syncEmbedDefault();
+  renderMkvAvailability();
+});
+byId("chooseTranslateVideo").addEventListener("click", async () => {
+  setValue("translateVideo", await api.selectVideo());
+  if (value("translateVideo")) {
+    elements.embedMkv.checked = true;
+    state.embedPreferenceTouched = true;
+    elements.muxVideo.value = value("translateVideo");
+  }
+  renderMkvAvailability();
+});
 byId("chooseTranslateConfig").addEventListener("click", async () => setValue("translateConfig", await api.selectConfig()));
 byId("chooseTranscribeConfig").addEventListener("click", async () => setValue("transcribeConfig", await api.selectConfig()));
 byId("chooseDownloadDir").addEventListener("click", async () => setValue("downloadOutputDir", await api.selectDirectory()));
+byId("chooseMuxSubtitle").addEventListener("click", async () => {
+  setValue("muxSubtitle", await api.selectSubtitle());
+  renderMkvAvailability();
+});
+byId("chooseMuxVideo").addEventListener("click", async () => {
+  setValue("muxVideo", await api.selectVideo());
+  renderMkvAvailability();
+});
 byId("chooseAudio").addEventListener("click", async () => {
   const audio = await api.selectAudio();
   setValue("audioInput", audio);
@@ -416,13 +590,16 @@ elements.translateForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const output = value("translateOutput");
   if (output) {
-    setOutputPath(output);
+    setSubtitlePath(output);
   }
   await persistProviderPreference();
+  const input = value("translateInput");
+  const video = value("translateVideo");
+  const embedVideo = elements.embedMkv.checked && ffmpegAvailable() && (looksLikeUrl(input) || video);
   await startJob(
     "translate",
     {
-      input: value("translateInput"),
+      input,
       targetLanguage: value("targetLanguage"),
       sourceLanguage: value("sourceLanguage"),
       output,
@@ -430,9 +607,20 @@ elements.translateForm.addEventListener("submit", async (event) => {
       outputFormat: value("outputFormat"),
       reviewMode: value("reviewMode"),
       resume: byId("resumeTranslate").checked,
+      embedVideo,
+      video,
     },
     elements.useYamlConfig.checked ? null : modelSelection(),
   );
+});
+
+elements.muxForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await startJob("mux", {
+    subtitle: value("muxSubtitle"),
+    video: value("muxVideo"),
+    targetLanguage: value("muxTargetLanguage") || value("targetLanguage") || "Chinese",
+  });
 });
 
 elements.downloadForm.addEventListener("submit", async (event) => {
@@ -469,6 +657,24 @@ elements.cancelJob.addEventListener("click", async () => {
 
 elements.clearLog.addEventListener("click", () => {
   elements.logBody.textContent = "";
+});
+
+elements.resultFiles.addEventListener("click", async (event) => {
+  const openTarget = event.target.dataset.openResult;
+  const showTarget = event.target.dataset.showResult;
+  const target = openTarget || showTarget;
+  if (!target) {
+    return;
+  }
+  const filePath = target === "video" ? state.lastEmbeddedVideoPath : state.lastSubtitlePath;
+  if (!filePath) {
+    return;
+  }
+  if (openTarget) {
+    await api.openPath(filePath);
+  } else {
+    await api.showInFolder(filePath);
+  }
 });
 
 elements.openOutput.addEventListener("click", async () => {

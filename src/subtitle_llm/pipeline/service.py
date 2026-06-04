@@ -40,6 +40,12 @@ class TranslationResult:
     report: TranslationReport
 
 
+@dataclass(frozen=True)
+class ResolvedInput:
+    subtitle_file: str
+    video_file: str | None = None
+
+
 class TranslationService:
     def __init__(
         self,
@@ -62,7 +68,8 @@ class TranslationService:
             request.resume,
             request.review_mode or self.config.pipeline.review_mode,
         )
-        input_file = self._resolve_input(request.input_file, request.source_language)
+        resolved_input = self._resolve_input(request.input_file, request.source_language)
+        input_file = resolved_input.subtitle_file
         output_file = request.output_file or self._default_output_file(
             input_file,
             request.target_language,
@@ -77,6 +84,7 @@ class TranslationService:
             checkpoint_file=str(checkpoint_file),
             context_file=str(context_file),
             output_format=output_format,
+            source_video_file=resolved_input.video_file,
         )
         logger.info(
             "翻译文件已准备: resolved_input=%s output=%s checkpoint=%s context=%s",
@@ -398,9 +406,9 @@ class TranslationService:
             return TuiReviewPort()
         return AutoReviewPort()
 
-    def _resolve_input(self, input_file: str, source_language: str) -> str:
+    def _resolve_input(self, input_file: str, source_language: str) -> ResolvedInput:
         if not self._is_url(input_file):
-            return input_file
+            return ResolvedInput(subtitle_file=input_file)
 
         from subtitle_llm.media import download, transcribe
 
@@ -415,7 +423,7 @@ class TranslationService:
 
         if subtitle_path:
             logger.info("URL输入解析到字幕: subtitle=%s video=%s", subtitle_path, _video_path)
-            return subtitle_path
+            return ResolvedInput(subtitle_file=subtitle_path, video_file=_video_path)
         if not audio_path:
             raise RuntimeError("未找到字幕且无法提取音频")
 
@@ -423,7 +431,7 @@ class TranslationService:
         logger.info("URL输入未找到字幕，准备ASR转写: audio=%s output=%s", audio_path, srt_path)
         transcribed_path = transcribe(audio_path, source_language, srt_path, self.config.asr)
         logger.info("ASR转写完成: srt=%s", transcribed_path)
-        return transcribed_path
+        return ResolvedInput(subtitle_file=transcribed_path, video_file=_video_path)
 
     def _is_url(self, value: str) -> bool:
         parsed = urlparse(value)

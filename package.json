@@ -7,9 +7,12 @@
   "scripts": {
     "desktop": "electron .",
     "desktop:dev": "electron . --dev",
-    "test:desktop": "node electron/tests/smoke.test.mjs"
+    "test:desktop": "npm run test:desktop:smoke && npm run test:desktop:e2e",
+    "test:desktop:e2e": "node electron/tests/e2e.test.mjs",
+    "test:desktop:smoke": "node electron/tests/smoke.test.mjs"
   },
   "devDependencies": {
-    "electron": "^42.3.3"
+    "electron": "^42.3.3",
+    "playwright": "^1.60.0"
   }
 }

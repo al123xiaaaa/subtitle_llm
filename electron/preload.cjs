@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld("subtitleLLM", {
   savePreferences: (preferences) => ipcRenderer.invoke("settings:save-preferences", preferences),
   selectInput: () => ipcRenderer.invoke("dialog:select-input"),
   selectAudio: () => ipcRenderer.invoke("dialog:select-audio"),
+  selectVideo: () => ipcRenderer.invoke("dialog:select-video"),
+  selectSubtitle: () => ipcRenderer.invoke("dialog:select-subtitle"),
   selectConfig: () => ipcRenderer.invoke("dialog:select-config"),
   selectDirectory: () => ipcRenderer.invoke("dialog:select-directory"),
   saveSrt: (defaultName) => ipcRenderer.invoke("dialog:save-srt", defaultName),

@@ -7,9 +7,13 @@ from typing import Annotated
 import typer
 from dotenv import load_dotenv
 
+from subtitle_llm.cli.result_events import emit_result_event
 from subtitle_llm.media import download as download_media
+from subtitle_llm.media import mux_subtitle_track
+from subtitle_llm.media.muxer import MuxError
 from subtitle_llm.media import transcribe as transcribe_audio
 from subtitle_llm.pipeline import TranslationRequest, TranslationService
+from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.runtime_logging import configure_run_logging
 from subtitle_llm.settings import ConfigError, load_config
 
@@ -63,11 +67,24 @@ def translate(
         bool | None,
         typer.Option("--review/--no-review", help="Use TUI review for suspicious chunks."),
     ] = None,
+    embed_video: Annotated[
+        bool,
+        typer.Option("--embed-video/--no-embed-video", help="Generate an MKV with the translated SRT as a soft subtitle track."),
+    ] = False,
+    video_file: Annotated[
+        Path | None,
+        typer.Option("--video", help="Video file to mux with the translated subtitle. URL inputs can resolve this automatically."),
+    ] = None,
+    video_output: Annotated[
+        Path | None,
+        typer.Option("--video-output", help="Output MKV path. Defaults to the subtitle output directory."),
+    ] = None,
+    ffmpeg: Annotated[str, typer.Option("--ffmpeg", help="FFmpeg executable path.")] = "ffmpeg",
 ) -> None:
     """Translate an SRT file, word-level JSON transcript, or video URL."""
     log_path = configure_run_logging("translate")
     logger.info(
-        "用户操作: translate input=%s output=%s target_language=%s source_language=%s config=%s format=%s resume=%s review=%s",
+        "用户操作: translate input=%s output=%s target_language=%s source_language=%s config=%s format=%s resume=%s review=%s embed_video=%s video=%s video_output=%s",
         input_file,
         output_file,
         target_language,
@@ -76,6 +93,9 @@ def translate(
         output_format,
         resume,
         review,
+        embed_video,
+        video_file,
+        video_output,
     )
     try:
         service = _load_service(config)
@@ -90,6 +110,14 @@ def translate(
                 review_mode=None if review is None else ("tui" if review else "auto"),
             )
         )
+        if embed_video:
+            _embed_translated_subtitle(
+                report=result.report,
+                video_file=video_file,
+                video_output=video_output,
+                target_language=target_language,
+                ffmpeg=ffmpeg,
+            )
     except Exception:
         logger.exception("命令失败: translate")
         typer.secho(f"日志文件：{log_path}", fg=typer.colors.YELLOW, err=True)
@@ -103,6 +131,47 @@ def translate(
         result.report.token_usage.total_tokens,
     )
     _print_report(result.report)
+    typer.echo(f"日志文件：{log_path}")
+
+
+@app.command()
+def mux(
+    video: Annotated[Path, typer.Argument(help="Video file path.")],
+    subtitle: Annotated[Path, typer.Argument(help="Translated .srt file path.")],
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Output MKV path. Defaults to the subtitle output directory."),
+    ] = None,
+    target_language: Annotated[str, typer.Option("--target-language", "-t", help="Subtitle track language.")] = "Chinese",
+    ffmpeg: Annotated[str, typer.Option("--ffmpeg", help="FFmpeg executable path.")] = "ffmpeg",
+) -> None:
+    """Mux translated SRT as the default soft subtitle track in an MKV."""
+    log_path = configure_run_logging("mux")
+    logger.info(
+        "用户操作: mux video=%s subtitle=%s output=%s target_language=%s ffmpeg=%s",
+        video,
+        subtitle,
+        output,
+        target_language,
+        ffmpeg,
+    )
+    try:
+        result = mux_subtitle_track(
+            video_file=video,
+            subtitle_file=subtitle,
+            output_file=output,
+            target_language=target_language,
+            ffmpeg=ffmpeg,
+        )
+    except MuxError as exc:
+        logger.exception("命令失败: mux")
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        typer.secho(f"日志文件：{log_path}", fg=typer.colors.YELLOW, err=True)
+        raise typer.Exit(2) from exc
+    logger.info("命令完成: mux output=%s", result.output_file)
+    typer.echo("===== MKV 生成完成 =====")
+    typer.echo(f"输出视频：{result.output_file}")
+    emit_result_event("mux", output_video_file=result.output_file)
     typer.echo(f"日志文件：{log_path}")
 
 
@@ -160,10 +229,46 @@ def transcribe(
     typer.echo(f"日志文件：{log_path}")
 
 
+def _embed_translated_subtitle(
+    report: TranslationReport,
+    video_file: Path | None,
+    video_output: Path | None,
+    target_language: str,
+    ffmpeg: str,
+) -> None:
+    source_video = str(video_file) if video_file else report.source_video_file
+    if not source_video:
+        report.embedded_video_error = "未选择视频，跳过生成 MKV"
+        logger.warning("视频封装跳过: %s", report.embedded_video_error)
+        return
+
+    try:
+        result = mux_subtitle_track(
+            video_file=source_video,
+            subtitle_file=report.output_file,
+            output_file=video_output,
+            target_language=target_language,
+            ffmpeg=ffmpeg,
+        )
+    except MuxError as exc:
+        report.embedded_video_error = str(exc)
+        logger.exception("视频封装失败: video=%s subtitle=%s", source_video, report.output_file)
+        return
+
+    report.embedded_video_file = result.output_file
+    logger.info("视频封装完成: output=%s", result.output_file)
+
+
 def _print_report(report) -> None:
     successful_chunks = report.completed_chunks - len(report.failed_chunks)
     typer.echo("\n===== 翻译完成 =====")
     typer.echo(f"输出文件：{report.output_file}")
+    if report.source_video_file:
+        typer.echo(f"源视频：{report.source_video_file}")
+    if report.embedded_video_file:
+        typer.echo(f"输出视频：{report.embedded_video_file}")
+    if report.embedded_video_error:
+        typer.echo(f"视频封装：{report.embedded_video_error}")
     typer.echo(f"上下文文件：{report.context_file}")
     typer.echo(f"断点文件：{report.checkpoint_file}")
     typer.echo(f"输出格式：{report.output_format}")
@@ -182,6 +287,16 @@ def _print_report(report) -> None:
         typer.echo("失败 chunk：")
         for failed in report.failed_chunks:
             typer.echo(f"- #{failed.chunk_index + 1}: {failed.error}")
+    emit_result_event(
+        "translate",
+        output_file=report.output_file,
+        source_video_file=report.source_video_file,
+        embedded_video_file=report.embedded_video_file,
+        embedded_video_error=report.embedded_video_error,
+        context_file=report.context_file,
+        checkpoint_file=report.checkpoint_file,
+        output_format=report.output_format,
+    )
 
 
 if __name__ == "__main__":
