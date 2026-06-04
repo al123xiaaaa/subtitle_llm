@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Subtitle LLM</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="onboarding" class="onboarding is-hidden" aria-modal="true" role="dialog">
+      <section class="onboarding-panel">
+        <p class="eyebrow">首次配置</p>
+        <h1>先连接一个翻译服务</h1>
+        <p>保存 API Key 后就可以开始翻译字幕。也可以使用系统环境变量，App 会自动识别。</p>
+        <div id="onboardingProviders" class="provider-cards"></div>
+        <label>
+          <span id="onboardingKeyLabel">API Key</span>
+          <input id="onboardingApiKey" type="password" autocomplete="off" />
+        </label>
+        <div class="actions">
+          <button id="onboardingSave" class="primary-button" type="button">保存并开始</button>
+          <button id="onboardingSettings" class="secondary-button" type="button">打开设置</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">SL</div>
+          <div>
+            <h1>Subtitle LLM</h1>
+            <p id="runtimeInfo">加载中</p>
+          </div>
+        </div>
+        <nav class="tabs" aria-label="任务类型">
+          <button class="tab is-active" type="button" data-tab="translate">翻译字幕</button>
+          <button class="tab" type="button" data-tab="download">下载字幕</button>
+          <button class="tab" type="button" data-tab="transcribe">音频转写</button>
+          <button class="tab" type="button" data-tab="settings">设置</button>
+        </nav>
+        <section class="status-panel" aria-labelledby="statusTitle">
+          <h2 id="statusTitle">服务状态</h2>
+          <div id="sidebarProviderStatus" class="provider-status-list"></div>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <section class="task-panel is-active" data-panel="translate" aria-labelledby="translateTitle">
+          <div class="panel-heading">
+            <div>
+              <h2 id="translateTitle">翻译字幕</h2>
+              <p>SRT、转写 JSON 或视频 URL</p>
+            </div>
+            <button class="secondary-button" id="chooseInput" type="button">选择文件</button>
+          </div>
+          <form id="translateForm" class="form-grid">
+            <label>
+              <span>翻译服务</span>
+              <select id="providerSelect"></select>
+            </label>
+            <label>
+              <span>模型</span>
+              <select id="modelSelect"></select>
+            </label>
+            <label id="customModelRow" class="span-2 is-hidden">
+              <span>自定义模型 ID</span>
+              <input id="customModelInput" type="text" autocomplete="off" />
+            </label>
+            <div class="span-2 credential-row">
+              <span id="providerCredentialStatus" class="status-pill">加载中</span>
+              <button id="configureProvider" class="secondary-button" type="button">配置 API Key</button>
+            </div>
+            <label class="span-2">
+              <span>输入</span>
+              <input id="translateInput" name="input" type="text" placeholder="input.srt / input.json / https://..." required />
+            </label>
+            <label>
+              <span>目标语言</span>
+              <input id="targetLanguage" name="targetLanguage" type="text" value="Chinese" required />
+            </label>
+            <label>
+              <span>源语言</span>
+              <input id="sourceLanguage" name="sourceLanguage" type="text" value="en" />
+            </label>
+            <label>
+              <span>输出格式</span>
+              <select id="outputFormat" name="outputFormat">
+                <option value="">使用配置默认值</option>
+                <option value="source-first">原文在前</option>
+                <option value="target-first">译文在前</option>
+                <option value="bilingual">双语</option>
+                <option value="target-only">仅译文</option>
+                <option value="source-only">仅原文</option>
+              </select>
+            </label>
+            <label>
+              <span>复核方式</span>
+              <select id="reviewMode" name="reviewMode">
+                <option value="auto">自动修复</option>
+                <option value="config">使用配置</option>
+                <option value="tui">TUI 复核</option>
+              </select>
+            </label>
+            <label class="span-2">
+              <span>输出文件</span>
+              <div class="inline-control">
+                <input id="translateOutput" name="output" type="text" placeholder="默认写入 data/output" />
+                <button id="chooseOutput" class="secondary-button" type="button">选择</button>
+              </div>
+            </label>
+            <details class="advanced-panel span-2">
+              <summary>高级配置</summary>
+              <label class="check-row">
+                <input id="useYamlConfig" type="checkbox" />
+                <span>使用 YAML 配置文件覆盖服务商和模型选择</span>
+              </label>
+              <label>
+                <span>配置文件</span>
+                <div class="inline-control">
+                  <input id="translateConfig" name="config" type="text" placeholder="默认配置" disabled />
+                  <button id="chooseTranslateConfig" class="secondary-button" type="button" disabled>选择</button>
+                </div>
+              </label>
+            </details>
+            <label class="check-row">
+              <input id="resumeTranslate" name="resume" type="checkbox" />
+              <span>从断点继续</span>
+            </label>
+            <div class="actions span-2">
+              <button id="startTranslate" class="primary-button" type="submit">开始翻译</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="task-panel" data-panel="download" aria-labelledby="downloadTitle">
+          <div class="panel-heading">
+            <div>
+              <h2 id="downloadTitle">下载字幕</h2>
+              <p>视频地址与字幕语言</p>
+            </div>
+          </div>
+          <form id="downloadForm" class="form-grid">
+            <label class="span-2">
+              <span>视频 URL</span>
+              <input id="downloadUrl" name="url" type="url" placeholder="https://..." required />
+            </label>
+            <label>
+              <span>源语言</span>
+              <input id="downloadSourceLanguage" name="sourceLanguage" type="text" value="en" />
+            </label>
+            <label>
+              <span>输出文件夹</span>
+              <div class="inline-control">
+                <input id="downloadOutputDir" name="outputDir" type="text" value="data/input" />
+                <button id="chooseDownloadDir" class="secondary-button" type="button">选择</button>
+              </div>
+            </label>
+            <div class="actions span-2">
+              <button class="primary-button" type="submit">开始下载</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="task-panel" data-panel="transcribe" aria-labelledby="transcribeTitle">
+          <div class="panel-heading">
+            <div>
+              <h2 id="transcribeTitle">音频转写</h2>
+              <p>生成 SRT 后可继续翻译</p>
+            </div>
+            <button class="secondary-button" id="chooseAudio" type="button">选择音频</button>
+          </div>
+          <form id="transcribeForm" class="form-grid">
+            <label class="span-2">
+              <span>音频文件</span>
+              <input id="audioInput" name="audio" type="text" required />
+            </label>
+            <label>
+              <span>语言</span>
+              <input id="transcribeLanguage" name="language" type="text" value="English" />
+            </label>
+            <label>
+              <span>输出 SRT</span>
+              <div class="inline-control">
+                <input id="transcribeOutput" name="output" type="text" required />
+                <button id="chooseTranscribeOutput" class="secondary-button" type="button">选择</button>
+              </div>
+            </label>
+            <label class="span-2">
+              <span>配置文件</span>
+              <div class="inline-control">
+                <input id="transcribeConfig" name="config" type="text" placeholder="默认配置" />
+                <button id="chooseTranscribeConfig" class="secondary-button" type="button">选择</button>
+              </div>
+            </label>
+            <div class="actions span-2">
+              <button class="primary-button" type="submit">开始转写</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="task-panel" data-panel="settings" aria-labelledby="settingsTitle">
+          <div class="panel-heading">
+            <div>
+              <h2 id="settingsTitle">设置</h2>
+              <p>管理翻译服务 API Key</p>
+            </div>
+          </div>
+          <div id="settingsCards" class="settings-grid"></div>
+        </section>
+
+        <section class="run-panel" aria-labelledby="runTitle">
+          <div class="run-heading">
+            <div>
+              <h2 id="runTitle">任务日志</h2>
+              <p id="runStatus">空闲</p>
+            </div>
+            <div class="run-actions">
+              <button id="openOutput" class="secondary-button" type="button" disabled>打开输出</button>
+              <button id="showOutput" class="secondary-button" type="button" disabled>定位文件</button>
+              <button id="cancelJob" class="danger-button" type="button" disabled>取消</button>
+              <button id="clearLog" class="secondary-button" type="button">清空</button>
+            </div>
+          </div>
+          <pre id="logBody" aria-live="polite"></pre>
+        </section>
+      </main>
+    </div>
+    <script src="./app.js"></script>
+  </body>
+</html>

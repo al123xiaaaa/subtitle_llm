@@ -10,6 +10,22 @@ Install the package in editable mode:
 pip install -e .
 ```
 
+Start the desktop app:
+
+```bash
+npm install
+npm run desktop
+```
+
+The Electron app keeps the Python pipeline as the source of truth. It provides forms for translating subtitles,
+downloading subtitles, and transcribing audio, then streams the CLI output into the desktop log panel.
+If you want the app to use a specific Python interpreter, set `SUBTITLE_LLM_PYTHON` before starting Electron.
+On first launch, configure a translation service API Key in the setup prompt or the Settings page. The app
+prefers locally saved keys, then falls back to environment variables such as `DEEPSEEK_API_KEY`.
+In the translation view, choose a service and model; DeepSeek defaults to `deepseek-v4-flash` and also offers
+`deepseek-v4-pro`. Advanced users can still use a YAML config, and generated runtime configs are passed to
+the CLI with `--config`.
+
 Set the API key expected by the default config:
 
 ```bash

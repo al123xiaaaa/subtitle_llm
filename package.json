@@ -1,0 +1,15 @@
+{
+  "name": "subtitle-llm-desktop",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Electron desktop frontend for subtitle-llm",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "desktop": "electron .",
+    "desktop:dev": "electron . --dev",
+    "test:desktop": "node electron/tests/smoke.test.mjs"
+  },
+  "devDependencies": {
+    "electron": "^42.3.3"
+  }
+}
