@@ -188,20 +188,12 @@ export function createDesktopRuntime({
   }
 
   function prepareRequestForRun(request: DesktopJobRequest): PreparedDesktopJobRequest {
-    const nextRequest: PreparedDesktopJobRequest = {
-      ...request,
-      options: {
-        ...request.options,
-      },
-      envOverrides: {
-        ...request.envOverrides,
-      },
-    };
+    const nextRequest = cloneRequestForRun(request);
 
-    if (request.command === "translate" && request.modelSelection?.mode === "service") {
-      const provider = getProvider(request.modelSelection.providerId);
+    if (nextRequest.command === "translate" && nextRequest.modelSelection?.mode === "service") {
+      const provider = getProvider(nextRequest.modelSelection.providerId);
       const credential = resolveCredential(getSettingsPath(), provider, env);
-      nextRequest.generatedConfigPath = writeDesktopModelConfig(projectRoot, request.modelSelection);
+      nextRequest.generatedConfigPath = writeDesktopModelConfig(projectRoot, nextRequest.modelSelection);
       nextRequest.options.config = nextRequest.generatedConfigPath;
       nextRequest.envOverrides = {
         ...nextRequest.envOverrides,
@@ -209,7 +201,7 @@ export function createDesktopRuntime({
       };
     }
 
-    if (["translate", "mux"].includes(request.command)) {
+    if (nextRequest.command === "translate" || nextRequest.command === "mux") {
       const ffmpeg = detectFfmpeg();
       if (ffmpeg.available && !nextRequest.options.ffmpeg) {
         nextRequest.options.ffmpeg = ffmpeg.executable;
@@ -217,6 +209,22 @@ export function createDesktopRuntime({
     }
 
     return nextRequest;
+  }
+
+  function cloneRequestForRun(request: DesktopJobRequest): PreparedDesktopJobRequest {
+    const envOverrides = { ...request.envOverrides };
+    switch (request.command) {
+      case "translate":
+        return { ...request, options: { ...request.options }, envOverrides };
+      case "download":
+        return { ...request, options: { ...request.options }, envOverrides };
+      case "transcribe":
+        return { ...request, options: { ...request.options }, envOverrides };
+      case "mux":
+        return { ...request, options: { ...request.options }, envOverrides };
+      default:
+        throw new Error("未知命令");
+    }
   }
 
   function sendJobEvent(sender: Pick<WebContents, "isDestroyed" | "send">, payload: JobEvent): void {

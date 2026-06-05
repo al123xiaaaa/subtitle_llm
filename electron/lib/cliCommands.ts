@@ -1,8 +1,12 @@
-import type { DesktopJobRequest } from "../types.js";
+import type {
+  DesktopJobRequest,
+  DownloadJobOptions,
+  MuxJobOptions,
+  TranscribeJobOptions,
+  TranslateJobOptions,
+} from "../types.js";
 
 export const VALID_OUTPUT_FORMATS = new Set(["source-first", "target-first", "target-only", "source-only", "bilingual"]);
-
-type JobOptions = Record<string, unknown>;
 
 function cleanString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -23,7 +27,7 @@ function addOption(args: string[], flag: string, value: unknown): void {
   }
 }
 
-function buildTranslateArgs(options: JobOptions = {}): string[] {
+function buildTranslateArgs(options: TranslateJobOptions): string[] {
   const input = required(options.input, "输入文件或 URL");
   const targetLanguage = required(options.targetLanguage, "目标语言");
   const args = ["main.py", "translate", "--input", input, "--target-language", targetLanguage];
@@ -60,7 +64,7 @@ function buildTranslateArgs(options: JobOptions = {}): string[] {
   return args;
 }
 
-function buildDownloadArgs(options: JobOptions = {}): string[] {
+function buildDownloadArgs(options: DownloadJobOptions): string[] {
   const url = required(options.url, "视频 URL");
   const args = ["main.py", "download", url];
   addOption(args, "--output-dir", options.outputDir || "data/input");
@@ -68,7 +72,7 @@ function buildDownloadArgs(options: JobOptions = {}): string[] {
   return args;
 }
 
-function buildTranscribeArgs(options: JobOptions = {}): string[] {
+function buildTranscribeArgs(options: TranscribeJobOptions): string[] {
   const audio = required(options.audio, "音频文件");
   const output = required(options.output, "输出文件");
   const args = ["main.py", "transcribe", audio, "--output", output];
@@ -77,7 +81,7 @@ function buildTranscribeArgs(options: JobOptions = {}): string[] {
   return args;
 }
 
-function buildMuxArgs(options: JobOptions = {}): string[] {
+function buildMuxArgs(options: MuxJobOptions): string[] {
   const video = required(options.video, "视频文件");
   const subtitle = required(options.subtitle, "字幕文件");
   const args = ["main.py", "mux", video, subtitle];
@@ -87,7 +91,7 @@ function buildMuxArgs(options: JobOptions = {}): string[] {
   return args;
 }
 
-export function buildPythonArgs(request: Partial<DesktopJobRequest> = {}): string[] {
+export function buildPythonArgs(request: DesktopJobRequest): string[] {
   switch (request.command) {
     case "translate":
       return buildTranslateArgs(request.options);
@@ -98,7 +102,7 @@ export function buildPythonArgs(request: Partial<DesktopJobRequest> = {}): strin
     case "mux":
       return buildMuxArgs(request.options);
     default:
-      throw new Error(`未知命令：${request.command || ""}`);
+      throw new Error("未知命令");
   }
 }
 

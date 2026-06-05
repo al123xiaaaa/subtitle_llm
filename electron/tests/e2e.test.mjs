@@ -84,10 +84,11 @@ const tests = [
   ["没有 FFmpeg 时 MKV 控件禁用但翻译表单仍可用", testFfmpegMissingDisablesMkvOnly],
 ];
 
-for (const [name, test] of tests) {
+await tests.reduce(async (previous, [name, test]) => {
+  await previous;
   await test();
   console.log(`✓ ${name}`);
-}
+}, Promise.resolve());
 
 async function testOnboardingSavesKey() {
   await withApp(async ({ page, userDataDir }) => {

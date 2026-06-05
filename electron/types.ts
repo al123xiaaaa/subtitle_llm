@@ -59,6 +59,8 @@ export interface AppState {
 }
 
 export type CommandName = "translate" | "download" | "transcribe" | "mux";
+export type OutputFormat = "source-first" | "target-first" | "target-only" | "source-only" | "bilingual";
+export type ReviewMode = "auto" | "config" | "tui";
 
 export interface ModelSelection {
   mode: "service";
@@ -68,17 +70,73 @@ export interface ModelSelection {
   endpoint?: string;
 }
 
-export interface DesktopJobRequest {
-  command: CommandName;
-  options: Record<string, unknown>;
+export interface TranslateJobOptions {
+  input: string;
+  targetLanguage: string;
+  sourceLanguage?: string;
+  output?: string;
+  config?: string;
+  outputFormat?: OutputFormat | "";
+  reviewMode?: ReviewMode;
+  resume?: boolean;
+  embedVideo?: boolean;
+  video?: string;
+  videoOutput?: string;
+  ffmpeg?: string;
+}
+
+export interface DownloadJobOptions {
+  url: string;
+  outputDir?: string;
+  sourceLanguage?: string;
+}
+
+export interface TranscribeJobOptions {
+  audio: string;
+  output: string;
+  language?: string;
+  config?: string;
+}
+
+export interface MuxJobOptions {
+  video: string;
+  subtitle: string;
+  output?: string;
+  targetLanguage?: string;
+  ffmpeg?: string;
+}
+
+export interface TranslateJobRequest {
+  command: "translate";
+  options: TranslateJobOptions;
   modelSelection?: ModelSelection | null;
   envOverrides?: Record<string, string>;
 }
 
-export interface PreparedDesktopJobRequest extends DesktopJobRequest {
+export interface DownloadJobRequest {
+  command: "download";
+  options: DownloadJobOptions;
+  envOverrides?: Record<string, string>;
+}
+
+export interface TranscribeJobRequest {
+  command: "transcribe";
+  options: TranscribeJobOptions;
+  envOverrides?: Record<string, string>;
+}
+
+export interface MuxJobRequest {
+  command: "mux";
+  options: MuxJobOptions;
+  envOverrides?: Record<string, string>;
+}
+
+export type DesktopJobRequest = TranslateJobRequest | DownloadJobRequest | TranscribeJobRequest | MuxJobRequest;
+
+export type PreparedDesktopJobRequest = DesktopJobRequest & {
   envOverrides: Record<string, string>;
   generatedConfigPath?: string;
-}
+};
 
 export interface JobStartResponse {
   jobId: string;
@@ -109,6 +167,18 @@ export type JobEvent =
       code: number | null;
       signal: string | null;
     };
+
+export interface CliResultEvent {
+  command: CommandName;
+  output_file?: string | null;
+  source_video_file?: string | null;
+  embedded_video_file?: string | null;
+  output_video_file?: string | null;
+  embedded_video_error?: string | null;
+  context_file?: string | null;
+  checkpoint_file?: string | null;
+  output_format?: OutputFormat | string | null;
+}
 
 export interface ShellResult {
   ok: boolean;

@@ -103,10 +103,11 @@ export function credentialStatus(
 
 export function summarizeSettings(settingsPath: string, env: NodeJS.ProcessEnv = process.env) {
   const settings = readSettings(settingsPath);
-  const providers = listProviders().map((provider) => ({
-    ...provider,
-    credential: credentialStatus(provider, settings, env),
-  }));
+  const providers = listProviders().map((provider) =>
+    Object.assign({}, provider, {
+      credential: credentialStatus(provider, settings, env),
+    }),
+  );
   const firstAvailable = providers.find((provider) => provider.credential.available);
   const preferred =
     providers.find((provider) => provider.id === settings.preferences.lastProviderId && provider.credential.available) ||

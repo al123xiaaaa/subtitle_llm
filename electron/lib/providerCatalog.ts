@@ -71,10 +71,11 @@ export const PROVIDERS: ProviderDefinition[] = [
 const PROVIDER_BY_ID = new Map(PROVIDERS.map((provider) => [provider.id, provider]));
 
 export function listProviders(): ProviderDefinition[] {
-  return PROVIDERS.map((provider) => ({
-    ...provider,
-    models: provider.models.map((model) => ({ ...model })),
-  }));
+  return PROVIDERS.map((provider) =>
+    Object.assign({}, provider, {
+      models: provider.models.map((model) => Object.assign({}, model)),
+    }),
+  );
 }
 
 export function getProvider(providerId: string | undefined): ProviderDefinition {
