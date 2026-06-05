@@ -30,16 +30,17 @@ class TestTuiAnimation(unittest.TestCase):
                         )
                     ],
                     temp_file.name,
-                    chunk_index=1,
+                    chunk_index=3,
                     total_chunks=4,
+                    completed_chunks=0,
                 )
                 async with app.run_test():
                     self.assertIsNotNone(app.query_one("#activity"))
                     self.assertIsNotNone(app.query_one("#status"))
                     progress_label = app.query_one("#progress_label", Static)
                     chunk_progress = app.query_one("#chunk_progress", ProgressBar)
-                    self.assertEqual(str(progress_label.renderable), "Chunk 2/4")
-                    self.assertEqual(chunk_progress.progress, 2)
+                    self.assertEqual(str(progress_label.renderable), "进度 1/4 | 复核 4/4")
+                    self.assertEqual(chunk_progress.progress, 1)
                     self.assertEqual(chunk_progress.total, 4)
                     self.assertIsNotNone(app.query_one("#subtitles_table"))
 

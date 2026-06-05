@@ -13,5 +13,11 @@ class ReviewResult:
 
 
 class ReviewPort(Protocol):
-    def review(self, chunk: list[SubtitleEntry], chunk_index: int, total_chunks: int) -> ReviewResult:
+    def review(
+        self,
+        chunk: list[SubtitleEntry],
+        chunk_index: int,
+        total_chunks: int,
+        completed_chunks: int = 0,
+    ) -> ReviewResult:
         ...

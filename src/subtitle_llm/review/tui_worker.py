@@ -63,14 +63,22 @@ def main() -> None:
         ]
         chunk_index = data.get("chunk_index", 0)
         total_chunks = data.get("total_chunks", 1)
+        completed_chunks = data.get("completed_chunks", 0)
         print(f"\n=== Chunk {chunk_index + 1}/{total_chunks} ===")
-        logger.info("TUI Worker 接收chunk: chunk=%s/%s entries=%s", chunk_index + 1, total_chunks, len(subtitle_entries))
+        logger.info(
+            "TUI Worker 接收chunk: chunk=%s/%s completed=%s entries=%s",
+            chunk_index + 1,
+            total_chunks,
+            completed_chunks,
+            len(subtitle_entries),
+        )
 
         app = CustomHandlingApp(
             subtitle_entries,
             temp_file_path=str(output_path),
             chunk_index=chunk_index,
             total_chunks=total_chunks,
+            completed_chunks=completed_chunks,
         )
         app.run()
 

@@ -314,7 +314,12 @@ class TranslationService:
                     repaired_diagnosis.flagged_entries,
                 )
             else:
-                review_result = review_port.review(planned.entries, planned.index, report.total_chunks)
+                review_result = review_port.review(
+                    planned.entries,
+                    planned.index,
+                    report.total_chunks,
+                    completed_chunks=report.completed_chunks,
+                )
                 planned.entries = review_result.chunk
                 logger.info(
                     "TUI审核完成: chunk=%s selected_for_retranslation=%s",

@@ -16,11 +16,18 @@ class TuiReviewPort:
 
         self.manager = TUIManager()
 
-    def review(self, chunk: list[SubtitleEntry], chunk_index: int, total_chunks: int) -> ReviewResult:
+    def review(
+        self,
+        chunk: list[SubtitleEntry],
+        chunk_index: int,
+        total_chunks: int,
+        completed_chunks: int = 0,
+    ) -> ReviewResult:
         data = self.manager.submit_chunk(
             [entry.to_dict() for entry in chunk],
             chunk_index=chunk_index,
             total_chunks=total_chunks,
+            completed_chunks=completed_chunks,
         )
         if data is None:
             raise RuntimeError("TUI returned no data")

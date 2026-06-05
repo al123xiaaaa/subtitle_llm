@@ -30,10 +30,22 @@ class TUIManager:
         self.comm_dir: str | None = None
         self.worker_started = False
 
-    def submit_chunk(self, data, chunk_index: int = 0, total_chunks: int = 1):
+    def submit_chunk(
+        self,
+        data,
+        chunk_index: int = 0,
+        total_chunks: int = 1,
+        completed_chunks: int = 0,
+    ):
         self._ensure_worker()
         assert self.comm_dir is not None
-        logger.info("提交TUI审核: chunk=%s/%s entries=%s", chunk_index + 1, total_chunks, len(data))
+        logger.info(
+            "提交TUI审核: chunk=%s/%s completed=%s entries=%s",
+            chunk_index + 1,
+            total_chunks,
+            completed_chunks,
+            len(data),
+        )
 
         input_path = Path(self.comm_dir) / INPUT_FILE
         input_ready = Path(self.comm_dir) / INPUT_READY
@@ -47,6 +59,7 @@ class TUIManager:
             "subtitle_entries": data,
             "chunk_index": chunk_index,
             "total_chunks": total_chunks,
+            "completed_chunks": completed_chunks,
         }
         input_path.write_text(json.dumps(payload, ensure_ascii=False, indent=4), encoding="utf-8")
         input_ready.write_text("ready", encoding="utf-8")

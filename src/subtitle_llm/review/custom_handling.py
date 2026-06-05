@@ -34,6 +34,7 @@ class CustomHandlingApp(App):
         temp_file_path: str,
         chunk_index: int = 0,
         total_chunks: int = 1,
+        completed_chunks: int = 0,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -41,6 +42,7 @@ class CustomHandlingApp(App):
         self.temp_file_path = temp_file_path
         self.chunk_index = chunk_index
         self.total_chunks = max(total_chunks, 1)
+        self.completed_chunks = min(max(completed_chunks, 0), self.total_chunks)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -79,9 +81,10 @@ class CustomHandlingApp(App):
         self.update_progress()
         self.update_status("准备就绪，等待审核操作。")
         logger.info(
-            "TUI审核界面已打开: chunk=%s/%s entries=%s flagged=%s",
+            "TUI审核界面已打开: chunk=%s/%s completed=%s entries=%s flagged=%s",
             self.chunk_index + 1,
             self.total_chunks,
+            self.completed_chunks,
             len(self.subtitle_entries),
             len([entry for entry in self.subtitle_entries if entry.needs_retranslation]),
         )
@@ -274,6 +277,12 @@ class CustomHandlingApp(App):
         self.query_one("#status", Static).update(message)
 
     def update_progress(self) -> None:
-        progress = min(self.chunk_index + 1, self.total_chunks)
-        self.query_one("#progress_label", Static).update(f"Chunk {progress}/{self.total_chunks}")
-        self.query_one("#chunk_progress", ProgressBar).update(total=self.total_chunks, progress=progress)
+        current_chunk = min(max(self.chunk_index + 1, 1), self.total_chunks)
+        active_progress = min(self.completed_chunks + 1, self.total_chunks)
+        self.query_one("#progress_label", Static).update(
+            f"进度 {active_progress}/{self.total_chunks} | 复核 {current_chunk}/{self.total_chunks}"
+        )
+        self.query_one("#chunk_progress", ProgressBar).update(
+            total=self.total_chunks,
+            progress=active_progress,
+        )

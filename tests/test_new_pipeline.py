@@ -82,7 +82,7 @@ class StoppableReviewPort:
     def __init__(self):
         self.stopped = False
 
-    def review(self, chunk, chunk_index, total_chunks):
+    def review(self, chunk, chunk_index, total_chunks, completed_chunks=0):
         raise AssertionError("review should not be called")
 
     def stop(self):
@@ -334,7 +334,7 @@ class TestNewPipeline(unittest.TestCase):
         from subtitle_llm.domain import SubtitleEntry
 
         class FakeManager:
-            def submit_chunk(self, data, chunk_index, total_chunks):
+            def submit_chunk(self, data, chunk_index, total_chunks, completed_chunks=0):
                 return {
                     "selected_subtitle_entries": [
                         {
