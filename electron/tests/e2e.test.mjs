@@ -215,7 +215,7 @@ async function withApp(optionsOrCallback, maybeCallback) {
     DEEPSEEK_API_KEY: "",
     GEMINI_API_KEY: "",
     OPENAI_API_KEY: "",
-    ...(options.env || {}),
+    ...options.env,
     ELECTRON_ENABLE_LOGGING: "0",
     SUBTITLE_LLM_USER_DATA_DIR: userDataDir,
     SUBTITLE_LLM_PYTHON: fakePythonPath,

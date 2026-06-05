@@ -17,10 +17,12 @@ npm install
 npm run desktop
 ```
 
+The desktop toolchain requires Node.js 22.18.0 or newer.
 The desktop script builds the TypeScript Electron main/preload code and the Vue 3 renderer before launching.
-For a build-only check, run:
+For linting and build-only checks, run:
 
 ```bash
+npm run lint:desktop
 npm run build:desktop
 npm run typecheck:desktop
 ```
@@ -31,6 +33,7 @@ Run desktop smoke and Electron E2E tests:
 npm run test:desktop
 ```
 
+`test:desktop` runs oxlint, Vue ESLint checks, the production desktop build, type checking, smoke tests, and Electron E2E tests.
 The Electron app keeps the Python pipeline as the source of truth. It provides forms for translating subtitles,
 downloading subtitles, transcribing audio, and generating MKV files with soft subtitle tracks, then streams the CLI
 output into the desktop log panel.

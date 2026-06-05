@@ -191,10 +191,10 @@ export function createDesktopRuntime({
     const nextRequest: PreparedDesktopJobRequest = {
       ...request,
       options: {
-        ...(request.options || {}),
+        ...request.options,
       },
       envOverrides: {
-        ...(request.envOverrides || {}),
+        ...request.envOverrides,
       },
     };
 

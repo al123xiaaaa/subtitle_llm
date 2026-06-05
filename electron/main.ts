@@ -153,7 +153,8 @@ ipcMain.handle("shell:show-in-folder", async (_event, filePath: string) => {
   return { ok: true };
 });
 
-app.whenReady().then(() => {
+async function startApp(): Promise<void> {
+  await app.whenReady();
   createWindow();
 
   app.on("activate", () => {
@@ -161,7 +162,9 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
-});
+}
+
+void startApp();
 
 app.on("window-all-closed", () => {
   runtime.stopAllJobs();

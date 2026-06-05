@@ -5,23 +5,37 @@
   "type": "module",
   "description": "Electron desktop frontend for subtitle-llm",
   "main": "dist/electron/main.js",
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "scripts": {
     "build:desktop": "node scripts/build-electron.mjs && vite build --config electron/renderer/vite.config.ts",
     "desktop": "npm run build:desktop && electron .",
     "desktop:dev": "npm run build:desktop && electron . --dev",
+    "lint:desktop": "npm run lint:desktop:oxlint && npm run lint:desktop:vue",
+    "lint:desktop:fix": "npm run lint:desktop:oxlint:fix && npm run lint:desktop:vue:fix",
+    "lint:desktop:oxlint": "oxlint",
+    "lint:desktop:oxlint:fix": "oxlint --fix",
+    "lint:desktop:vue": "eslint electron/renderer/src --ext .vue",
+    "lint:desktop:vue:fix": "eslint electron/renderer/src --ext .vue --fix",
     "typecheck:desktop": "vue-tsc --noEmit",
-    "test:desktop": "npm run build:desktop && npm run typecheck:desktop && npm run test:desktop:smoke && npm run test:desktop:e2e",
+    "test:desktop": "npm run lint:desktop && npm run build:desktop && npm run typecheck:desktop && npm run test:desktop:smoke && npm run test:desktop:e2e",
     "test:desktop:e2e": "node electron/tests/e2e.test.mjs",
     "test:desktop:smoke": "node electron/tests/smoke.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
+    "@typescript-eslint/parser": "^8.60.1",
     "@vitejs/plugin-vue": "^6.0.7",
     "electron": "^42.3.3",
     "esbuild": "^0.28.0",
+    "eslint": "^10.4.1",
+    "eslint-plugin-vue": "^10.9.2",
+    "oxlint": "^1.68.0",
     "playwright": "^1.60.0",
     "typescript": "^6.0.3",
     "vite": "^8.0.16",
+    "vue-eslint-parser": "^10.4.1",
     "vue-tsc": "^3.3.3"
   },
   "dependencies": {
