@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 import tempfile
 import unittest
@@ -86,6 +87,77 @@ class TestTuiAnimation(unittest.TestCase):
                     self.assertEqual([entry.index for entry in app.selected_entries()], [2, 3])
 
         asyncio.run(run_app())
+
+    def test_review_tui_merge_with_next_combines_original_and_translation(self):
+        async def run_app() -> None:
+            with tempfile.NamedTemporaryFile(suffix=".json") as temp_file:
+                app = CustomHandlingApp(
+                    [
+                        SubtitleEntry(1, "00:00:00,000", "00:00:01,000", "Hello", "你好", False),
+                        SubtitleEntry(2, "00:00:01,000", "00:00:02,000", "world", "世界", False),
+                        SubtitleEntry(3, "00:00:02,000", "00:00:03,000", "again", "又来了", False),
+                    ],
+                    temp_file.name,
+                )
+                async with app.run_test() as pilot:
+                    table = app.query_one("#subtitles_table", DataTable)
+                    table.move_cursor(row=0, animate=False)
+                    await pilot.press("m")
+
+                    self.assertEqual([entry.index for entry in app.subtitle_entries], [1, 3])
+                    self.assertEqual(app.subtitle_entries[0].original_text, "Hello world")
+                    self.assertEqual(app.subtitle_entries[0].translated_text, "你好 世界")
+                    self.assertTrue(app.subtitle_entries[0].needs_retranslation)
+                    self.assertEqual(
+                        app.merge_map,
+                        [{"merged_index": 1, "merged_from_indices": [1, 2]}],
+                    )
+
+                    await pilot.press("m")
+
+                    self.assertEqual([entry.index for entry in app.subtitle_entries], [1])
+                    self.assertEqual(app.subtitle_entries[0].original_text, "Hello world again")
+                    self.assertEqual(app.subtitle_entries[0].translated_text, "你好 世界 又来了")
+                    self.assertEqual(
+                        app.merge_map,
+                        [
+                            {"merged_index": 1, "merged_from_indices": [1, 2]},
+                            {"merged_index": 1, "merged_from_indices": [1, 3]},
+                        ],
+                    )
+
+        asyncio.run(run_app())
+
+    def test_review_tui_accept_all_after_merge_keeps_merged_translation(self):
+        async def run_app(temp_path: str) -> None:
+            app = CustomHandlingApp(
+                [
+                    SubtitleEntry(1, "00:00:00,000", "00:00:01,000", "Hello", "你好", False),
+                    SubtitleEntry(2, "00:00:01,000", "00:00:02,000", "world", "世界", False),
+                ],
+                temp_path,
+            )
+            async with app.run_test() as pilot:
+                table = app.query_one("#subtitles_table", DataTable)
+                table.move_cursor(row=0, animate=False)
+                await pilot.press("m")
+                await pilot.press("y")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_path = str(Path(tmp) / "review.json")
+            asyncio.run(run_app(temp_path))
+            with open(temp_path, encoding="utf-8") as file:
+                data = json.load(file)
+
+        self.assertEqual(
+            data["merge_map"],
+            [{"merged_index": 1, "merged_from_indices": [1, 2]}],
+        )
+        self.assertEqual(len(data["selected_subtitle_entries"]), 1)
+        merged_entry = data["selected_subtitle_entries"][0]
+        self.assertEqual(merged_entry["original_text"], "Hello world")
+        self.assertEqual(merged_entry["translated_text"], "你好 世界")
+        self.assertFalse(merged_entry["needs_retranslation"])
 
 
 if __name__ == "__main__":

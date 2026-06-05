@@ -52,7 +52,9 @@ class TuiReviewPort:
                 original_text=" ".join(
                     updated_by_index[index].original_text for index in merged_from_indices
                 ),
-                translated_text=updated_by_index[merged_index].translated_text,
+                translated_text=join_non_empty_text(
+                    *(updated_by_index[index].translated_text for index in merged_from_indices)
+                ),
                 needs_retranslation=updated_by_index[merged_index].needs_retranslation,
             )
             updated_by_index[merged_index] = merged_entry
@@ -78,3 +80,7 @@ class TuiReviewPort:
 
     def stop(self) -> None:
         self.manager.stop()
+
+
+def join_non_empty_text(*values: str) -> str:
+    return " ".join(value.strip() for value in values if value.strip())

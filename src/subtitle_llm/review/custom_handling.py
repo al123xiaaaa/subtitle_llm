@@ -168,8 +168,8 @@ class CustomHandlingApp(App):
         )
 
         target_entry.end_time = next_entry.end_time
-        target_entry.original_text = " ".join([target_entry.original_text, next_entry.original_text])
-        target_entry.translated_text = ""
+        target_entry.original_text = join_non_empty_text(target_entry.original_text, next_entry.original_text)
+        target_entry.translated_text = join_non_empty_text(target_entry.translated_text, next_entry.translated_text)
         target_entry.needs_retranslation = True
         del self.subtitle_entries[row_index + 1]
         self.adjust_drift_after_merge(row_index)
@@ -341,3 +341,7 @@ class CustomHandlingApp(App):
         if len(text) <= limit:
             return text
         return f"{text[: max(limit - 1, 1)]}…"
+
+
+def join_non_empty_text(*values: str) -> str:
+    return " ".join(value.strip() for value in values if value.strip())

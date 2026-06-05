@@ -517,6 +517,39 @@ class TestNewPipeline(unittest.TestCase):
         self.assertEqual(len(result.entries_to_retranslate), 0)
         self.assertEqual(result.alignment_drift_start_index, 1)
 
+    def test_tui_adapter_merges_translation_text_across_index_changes(self):
+        from subtitle_llm.domain import SubtitleEntry
+
+        class FakeManager:
+            def submit_chunk(self, data, chunk_index, total_chunks, completed_chunks=0):
+                return {
+                    "selected_subtitle_entries": [],
+                    "merge_map": [
+                        {"merged_index": 1, "merged_from_indices": [1, 2]},
+                        {"merged_index": 1, "merged_from_indices": [1, 3]},
+                    ],
+                    "alignment_drift_start_index": None,
+                }
+
+        port = TuiReviewPort.__new__(TuiReviewPort)
+        port.manager = cast(Any, FakeManager())
+        result = port.review(
+            [
+                SubtitleEntry(1, "00:00:00,000", "00:00:01,000", "Hello", "你好"),
+                SubtitleEntry(2, "00:00:01,000", "00:00:02,000", "world", "世界"),
+                SubtitleEntry(3, "00:00:02,000", "00:00:03,000", "again", "又来了"),
+            ],
+            0,
+            1,
+        )
+
+        self.assertEqual(len(result.chunk), 1)
+        self.assertEqual(result.chunk[0].index, 1)
+        self.assertEqual(result.chunk[0].end_time, "00:00:03,000")
+        self.assertEqual(result.chunk[0].original_text, "Hello world again")
+        self.assertEqual(result.chunk[0].translated_text, "你好 世界 又来了")
+        self.assertEqual(result.entries_to_retranslate, [])
+
 
 if __name__ == "__main__":
     unittest.main()
