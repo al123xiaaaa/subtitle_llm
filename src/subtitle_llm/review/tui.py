@@ -34,6 +34,7 @@ class TuiReviewPort:
 
         selected_dicts = data.get("selected_subtitle_entries", [])
         merge_map = data.get("merge_map", [])
+        alignment_drift_start_index = data.get("alignment_drift_start_index")
         updated_by_index = {entry.index: entry for entry in chunk}
 
         for merge_op in merge_map:
@@ -62,6 +63,7 @@ class TuiReviewPort:
             entry = SubtitleEntry.from_dict(item)
             updated_by_index[entry.index] = entry
 
+        drift_start = int(alignment_drift_start_index) if alignment_drift_start_index else None
         updated_chunk = sorted(updated_by_index.values(), key=lambda item: item.index)
         return ReviewResult(
             chunk=updated_chunk,
@@ -69,7 +71,9 @@ class TuiReviewPort:
                 SubtitleEntry.from_dict(item)
                 for item in selected_dicts
                 if item.get("needs_retranslation", False)
+                and not (drift_start is not None and int(item["index"]) >= drift_start)
             ],
+            alignment_drift_start_index=drift_start,
         )
 
     def stop(self) -> None:

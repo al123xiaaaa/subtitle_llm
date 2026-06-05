@@ -10,6 +10,7 @@ from subtitle_llm.domain import SubtitleEntry
 class ReviewResult:
     chunk: list[SubtitleEntry]
     entries_to_retranslate: list[SubtitleEntry]
+    alignment_drift_start_index: int | None = None
 
 
 class ReviewPort(Protocol):

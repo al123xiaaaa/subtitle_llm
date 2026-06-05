@@ -138,3 +138,54 @@ Before answering, silently verify:
 
 Now provide the corrected re-translation:
 """
+
+ALIGNMENT_DRIFT_RETRANSLATE_PROMPT = """You are a senior subtitle translator specializing in {target_language}.
+
+The user marked an alignment drift point in this subtitle chunk. Starting at that point, the previous translation may be shifted, missing lines, duplicated, or attached to the wrong source entry. Your task is to rebuild the translation for the drift range from the original text.
+
+Context:
+{context}
+
+Stable alignment anchors before the drift point (readonly, do not output):
+{stable_anchors}
+
+Readonly Boundary Context:
+{boundary_context}
+
+Original drift range ({chunk_size} entries):
+{original_text}
+
+Previous flawed translation for the drift range, provided only to understand the failure pattern:
+{translation_reference}
+
+Instructions:
+1. Use the stable anchors to understand the last correct alignment before the drift.
+2. Translate from the Original drift range, not from the flawed translation.
+3. Use the flawed translation only to avoid repeating alignment failures.
+4. Output exactly {chunk_size} translated entries, numbered [1] through [{chunk_size}] in order.
+5. Preserve one-entry-in, one-entry-out alignment inside the drift range. Do not merge, split, skip, reorder, renumber, or output anchor/context entries.
+6. Each translated entry must be natural {target_language}, concise enough for subtitles, and faithful to the corresponding original entry.
+7. Do not output placeholders, empty entries, source text, punctuation-only entries, explanations, or markdown.
+8. Output only the XML block below.
+
+Required XML format:
+<response>
+<translation>
+[1]
+[Translated text for drift entry 1]
+[2]
+[Translated text for drift entry 2]
+...
+[{chunk_size}]
+[Translated text for drift entry {chunk_size}]
+</translation>
+</response>
+
+Before answering, silently verify:
+- there are exactly {chunk_size} entries;
+- every index from [1] to [{chunk_size}] appears once;
+- no entry is empty, placeholder text, source text, or punctuation-only;
+- no stable anchor or readonly boundary context entry is output.
+
+Now provide the corrected alignment-aware re-translation:
+"""

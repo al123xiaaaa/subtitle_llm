@@ -1,11 +1,24 @@
 DataTable {
-  border: solid #ffffff;
-  background: #4c4848;
+  border: solid #d7d7d7;
+  background: #202124;
   color: #ffffff;
   height: 1fr;
 }
 
 #table_panel {
+  height: 2fr;
+}
+
+#detail_panel {
+  height: 8;
+  padding: 1 2;
+  border: solid #6b7280;
+  background: #111827;
+  color: #ffffff;
+}
+
+#current_detail {
+  width: 1fr;
   height: 1fr;
 }
 
@@ -30,7 +43,7 @@ DataTable {
 }
 
 #progress_label {
-  width: 36;
+  width: 56;
   height: 1;
   margin: 1 1 0 0;
   content-align: left middle;
@@ -42,15 +55,6 @@ DataTable {
   margin: 1 0 0 0;
 }
 
-DataTable .datatable--row {
-  min-height: 3;
-  padding: 1 0;
-}
-
-DataTable .datatable--cell {
-  content-align: left top;
-}
-
 #status {
   height: 1;
   width: 1fr;
@@ -60,20 +64,18 @@ DataTable .datatable--cell {
   content-align: left middle;
 }
 
-DataTable .selected {
-  background: #3399ff;
-  color: #ffffff;
+DataTable .datatable--row {
+  min-height: 1;
 }
 
-DataTable .highlighted {
-  background: #ffa500;
-  color: #000000;
+DataTable .datatable--cell {
+  content-align: left middle;
 }
 
 DataTable .datatable--even-row {
-  background: #4c4848;
+  background: #202124;
 }
 
 DataTable .datatable--odd-row {
-  background: #5c5a5a;
+  background: #2d2f34;
 }

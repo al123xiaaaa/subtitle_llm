@@ -57,6 +57,33 @@ class RecordingLLMClient(FakeLLMClient):
         return super().create_completion(config, messages)
 
 
+class AlignmentDriftClient(RecordingLLMClient):
+    def create_completion(self, config, messages):
+        prompt = messages[-1]["content"]
+        self.prompts.append(prompt)
+        if "Analyze the following subtitle content" in prompt:
+            return CompletionResult(
+                content="总结: demo summary\n\n短语术语:\n- API(接口)",
+                usage=CompletionUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+        if "alignment drift point" in prompt:
+            return CompletionResult(
+                content=(
+                    "<response><translation>\n"
+                    "[1]\n漂移修复一\n"
+                    "[2]\n漂移修复二\n"
+                    "</translation></response>"
+                ),
+                usage=CompletionUsage(prompt_tokens=3, completion_tokens=3, total_tokens=6),
+            )
+        if "refine a rough translation" in prompt:
+            return CompletionResult(
+                content="[1]\n稳定译文\n[2]\nTranslation missing line - 2\n[3]\nTranslation missing line - 3",
+                usage=CompletionUsage(prompt_tokens=2, completion_tokens=2, total_tokens=4),
+            )
+        return super().create_completion(config, messages)
+
+
 class TimeoutAfterBadTranslationClient(FakeLLMClient):
     def create_completion(self, config, messages):
         prompt = messages[-1]["content"]
@@ -84,6 +111,25 @@ class StoppableReviewPort:
 
     def review(self, chunk, chunk_index, total_chunks, completed_chunks=0):
         raise AssertionError("review should not be called")
+
+    def stop(self):
+        self.stopped = True
+
+
+class DriftReviewPort:
+    def __init__(self):
+        self.calls = 0
+        self.stopped = False
+
+    def review(self, chunk, chunk_index, total_chunks, completed_chunks=0):
+        from subtitle_llm.review.ports import ReviewResult
+
+        self.calls += 1
+        return ReviewResult(
+            chunk=chunk,
+            entries_to_retranslate=[],
+            alignment_drift_start_index=2,
+        )
 
     def stop(self):
         self.stopped = True
@@ -302,6 +348,47 @@ class TestNewPipeline(unittest.TestCase):
         self.assertIn("Quality diagnosis of the previous translation", prompt)
         self.assertIn(quality_report, prompt)
 
+    def test_tui_alignment_drift_uses_anchor_prompt_and_updates_chunk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.srt"
+            output_path = Path(tmp) / "output.srt"
+            input_path.write_text(
+                "1\n00:00:01,000 --> 00:00:02,000\nStable first sentence.\n\n"
+                "2\n00:00:03,000 --> 00:00:04,000\nSecond sentence drifts.\n\n"
+                "3\n00:00:05,000 --> 00:00:06,000\nThird sentence follows.\n\n",
+                encoding="utf-8",
+            )
+            config = make_config()
+            config.pipeline.review_mode = "tui"
+            config.pipeline.chunk_size = 3
+            client = AlignmentDriftClient()
+            review_port = DriftReviewPort()
+            service = TranslationService(
+                config,
+                translation_client=client,
+                summary_client=client,
+                review_port=review_port,
+            )
+
+            result = service.translate(
+                TranslationRequest(
+                    input_file=str(input_path),
+                    output_file=str(output_path),
+                    target_language="Chinese",
+                )
+            )
+
+            output_text = output_path.read_text(encoding="utf-8")
+            drift_prompt = next(prompt for prompt in client.prompts if "alignment drift point" in prompt)
+            self.assertIn("Stable alignment anchors", drift_prompt)
+            self.assertIn("[global 1]", drift_prompt)
+            self.assertIn("Previous flawed translation for the drift range", drift_prompt)
+            self.assertIn("漂移修复一", output_text)
+            self.assertIn("漂移修复二", output_text)
+            self.assertEqual(review_port.calls, 1)
+            self.assertTrue(review_port.stopped)
+            self.assertEqual(result.report.failed_chunks, [])
+
     def test_checkpoint_rejects_mismatched_fingerprint(self):
         with tempfile.TemporaryDirectory() as tmp:
             input_path = Path(tmp) / "input.srt"
@@ -347,6 +434,7 @@ class TestNewPipeline(unittest.TestCase):
                         }
                     ],
                     "merge_map": [{"merged_index": 1, "merged_from_indices": [1, 2]}],
+                    "alignment_drift_start_index": 1,
                 }
 
         port = TuiReviewPort.__new__(TuiReviewPort)
@@ -362,7 +450,8 @@ class TestNewPipeline(unittest.TestCase):
 
         self.assertEqual(len(result.chunk), 1)
         self.assertEqual(result.chunk[0].original_text, "Hello world")
-        self.assertEqual(len(result.entries_to_retranslate), 1)
+        self.assertEqual(len(result.entries_to_retranslate), 0)
+        self.assertEqual(result.alignment_drift_start_index, 1)
 
 
 if __name__ == "__main__":

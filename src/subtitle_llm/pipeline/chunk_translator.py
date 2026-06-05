@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from subtitle_llm.domain import SubtitleEntry
 from subtitle_llm.llm.types import ChatClient, CompletionUsage
 from subtitle_llm.pipeline.prompts import (
+    ALIGNMENT_DRIFT_RETRANSLATE_PROMPT,
     FIX_MISSING_TRANSLATIONS_PROMPT,
     REFINE_TRANSLATION_PROMPT,
     RE_TRANSLATE_PROMPT,
@@ -12,7 +13,9 @@ from subtitle_llm.pipeline.prompts import (
 )
 from subtitle_llm.pipeline.text import (
     extract_translation_block,
+    format_alignment_anchors,
     format_chunk,
+    format_translation_reference,
     process_translation,
 )
 from subtitle_llm.settings import ModelConfig
@@ -159,3 +162,26 @@ class ChunkTranslator:
         result = self.client.create_completion(self.model_config, [{"role": "user", "content": prompt}])
         usage.add(result.usage)
         return process_translation(original_text, extract_translation_block(result.content), chunk)
+
+    def retranslate_alignment_drift(
+        self,
+        drift_chunk: list[SubtitleEntry],
+        stable_anchors: list[SubtitleEntry],
+        context: str,
+        target_language: str,
+        boundary_context: str,
+        usage: CompletionUsage,
+    ) -> str:
+        original_text = format_chunk(drift_chunk)
+        prompt = ALIGNMENT_DRIFT_RETRANSLATE_PROMPT.format(
+            target_language=target_language,
+            context=context,
+            stable_anchors=format_alignment_anchors(stable_anchors),
+            boundary_context=boundary_context,
+            original_text=original_text,
+            translation_reference=format_translation_reference(drift_chunk),
+            chunk_size=len(drift_chunk),
+        )
+        result = self.client.create_completion(self.model_config, [{"role": "user", "content": prompt}])
+        usage.add(result.usage)
+        return process_translation(original_text, extract_translation_block(result.content), drift_chunk)

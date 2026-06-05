@@ -23,7 +23,7 @@ DONE_FILE = "done"
 
 
 class TUIManager:
-    def __init__(self, width: int = 300, height: int = 52):
+    def __init__(self, width: int = 140, height: int = 42):
         self.width = width
         self.height = height
         self.worker_script = Path(__file__).with_name("tui_worker.py")

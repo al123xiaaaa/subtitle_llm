@@ -17,7 +17,7 @@ from subtitle_llm.pipeline.context import ContextService
 from subtitle_llm.pipeline.quality import QualityGate
 from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.pipeline.text import parse_translation_results
-from subtitle_llm.review import AutoReviewPort, ReviewPort, TuiReviewPort
+from subtitle_llm.review import AutoReviewPort, ReviewPort, ReviewResult, TuiReviewPort
 from subtitle_llm.settings import AppConfig
 
 logger = logging.getLogger(__name__)
@@ -241,6 +241,7 @@ class TranslationService:
                             translator,
                             quality_gate,
                             review_port,
+                            context,
                             target_language,
                             translated_entries,
                             report,
@@ -264,6 +265,7 @@ class TranslationService:
         translator: ChunkTranslator,
         quality_gate: QualityGate,
         review_port: ReviewPort,
+        context: str,
         target_language: str,
         translated_entries: list[SubtitleEntry],
         report: TranslationReport,
@@ -314,35 +316,155 @@ class TranslationService:
                     repaired_diagnosis.flagged_entries,
                 )
             else:
-                review_result = review_port.review(
-                    planned.entries,
-                    planned.index,
-                    report.total_chunks,
-                    completed_chunks=report.completed_chunks,
+                self._review_chunk_with_tui(
+                    planned,
+                    translator,
+                    quality_gate,
+                    review_port,
+                    context,
+                    target_language,
+                    report,
                 )
-                planned.entries = review_result.chunk
-                logger.info(
-                    "TUI审核完成: chunk=%s selected_for_retranslation=%s",
-                    planned.index + 1,
-                    len(review_result.entries_to_retranslate),
-                )
-                if review_result.entries_to_retranslate:
-                    selected = review_result.entries_to_retranslate
-                    selected_result = translator.translate_and_refine(
-                        selected,
-                        "",
-                        target_language,
-                        planned.boundary_context,
-                    )
-                    report.token_usage.add_usage(selected_result.usage.to_dict())
-                    for entry, refined_text in parse_translation_results(selected_result.translation, selected_result.chunk):
-                        entry.needs_retranslation = False
-                        entry.set_translated_text(refined_text.strip())
-                    logger.info("TUI选中重译完成: chunk=%s selected=%s", planned.index + 1, len(selected))
 
         for entry in planned.entries:
             translated_entries.append(entry)
         logger.info("chunk接受完成: chunk=%s entries=%s", planned.index + 1, len(planned.entries))
+
+    def _review_chunk_with_tui(
+        self,
+        planned: PlannedChunk,
+        translator: ChunkTranslator,
+        quality_gate: QualityGate,
+        review_port: ReviewPort,
+        context: str,
+        target_language: str,
+        report: TranslationReport,
+    ) -> None:
+        max_rounds = 2
+        for review_round in range(1, max_rounds + 1):
+            review_result = review_port.review(
+                planned.entries,
+                planned.index,
+                report.total_chunks,
+                completed_chunks=report.completed_chunks,
+            )
+            planned.entries = review_result.chunk
+            logger.info(
+                "TUI审核完成: chunk=%s round=%s selected_for_retranslation=%s drift_start=%s",
+                planned.index + 1,
+                review_round,
+                len(review_result.entries_to_retranslate),
+                review_result.alignment_drift_start_index,
+            )
+
+            retranslated = self._apply_tui_review_result(
+                planned,
+                review_result,
+                translator,
+                context,
+                target_language,
+                report,
+            )
+            if not retranslated:
+                for entry in planned.entries:
+                    entry.needs_retranslation = False
+                logger.info("TUI审核接受当前chunk: chunk=%s round=%s", planned.index + 1, review_round)
+                return
+
+            diagnosis = quality_gate.diagnose_chunk(planned.entries, target_language=target_language)
+            quality_gate.apply_diagnosis(planned.entries, diagnosis)
+            if not diagnosis.has_issues:
+                logger.info("TUI重译后质量检查通过: chunk=%s round=%s", planned.index + 1, review_round)
+                return
+
+            logger.warning(
+                "TUI重译后质量诊断仍命中: chunk=%s round=%s reliability=%s flagged=%s summary=%s",
+                planned.index + 1,
+                review_round,
+                diagnosis.reliability,
+                diagnosis.flagged_entries,
+                diagnosis.summary,
+            )
+
+        logger.warning("TUI复核达到上限，接受当前结果继续: chunk=%s", planned.index + 1)
+
+    def _apply_tui_review_result(
+        self,
+        planned: PlannedChunk,
+        review_result: ReviewResult,
+        translator: ChunkTranslator,
+        context: str,
+        target_language: str,
+        report: TranslationReport,
+    ) -> bool:
+        drift_start = review_result.alignment_drift_start_index
+        ordinary_indices = {entry.index for entry in review_result.entries_to_retranslate}
+        ordinary_entries = [
+            entry
+            for entry in planned.entries
+            if entry.index in ordinary_indices
+            and not (drift_start is not None and entry.index >= drift_start)
+        ]
+
+        did_retranslate = False
+        if ordinary_entries:
+            selected_result = translator.translate_and_refine(
+                ordinary_entries,
+                context,
+                target_language,
+                planned.boundary_context,
+            )
+            report.token_usage.add_usage(selected_result.usage.to_dict())
+            for entry, refined_text in parse_translation_results(
+                selected_result.translation,
+                selected_result.chunk,
+            ):
+                entry.needs_retranslation = False
+                entry.set_translated_text(refined_text.strip())
+            logger.info(
+                "TUI普通重译完成: chunk=%s selected=%s",
+                planned.index + 1,
+                len(ordinary_entries),
+            )
+            did_retranslate = True
+
+        if drift_start is not None:
+            drift_position = self._entry_position(planned.entries, drift_start)
+            if drift_position is None:
+                logger.warning("TUI漂移起点不存在，跳过漂移重译: chunk=%s drift_start=%s", planned.index + 1, drift_start)
+                return did_retranslate
+
+            stable_anchors = planned.entries[max(0, drift_position - 6):drift_position]
+            drift_entries = planned.entries[drift_position:]
+            drift_usage = CompletionUsage()
+            drift_translation = translator.retranslate_alignment_drift(
+                drift_entries,
+                stable_anchors,
+                context,
+                target_language,
+                planned.boundary_context,
+                drift_usage,
+            )
+            report.token_usage.add_usage(drift_usage.to_dict())
+            for entry, refined_text in parse_translation_results(drift_translation, drift_entries):
+                entry.needs_retranslation = False
+                entry.set_translated_text(refined_text.strip())
+            logger.info(
+                "TUI对齐漂移重译完成: chunk=%s drift_start=%s entries=%s anchors=%s",
+                planned.index + 1,
+                drift_start,
+                len(drift_entries),
+                len(stable_anchors),
+            )
+            did_retranslate = True
+
+        return did_retranslate
+
+    def _entry_position(self, entries: list[SubtitleEntry], entry_index: int) -> int | None:
+        for position, entry in enumerate(entries):
+            if entry.index == entry_index:
+                return position
+        return None
 
     def _handle_chunk_failure(
         self,

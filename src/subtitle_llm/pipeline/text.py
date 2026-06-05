@@ -150,6 +150,28 @@ def format_chunk(chunk: list[SubtitleEntry]) -> str:
     return "\n".join([f"[{i + 1}]\n[{entry.original_text}]" for i, entry in enumerate(chunk)])
 
 
+def format_translation_reference(entries: list[SubtitleEntry]) -> str:
+    if not entries:
+        return "(none)"
+    return "\n".join(
+        f"[{i + 1}] global {entry.index}\n"
+        f"Original: {entry.original_text}\n"
+        f"Previous translation: {entry.translated_text or '(empty)'}"
+        for i, entry in enumerate(entries)
+    )
+
+
+def format_alignment_anchors(entries: list[SubtitleEntry]) -> str:
+    if not entries:
+        return "(none)"
+    return "\n".join(
+        f"[global {entry.index}]\n"
+        f"Original: {entry.original_text}\n"
+        f"Confirmed translation: {entry.translated_text or '(empty)'}"
+        for entry in entries
+    )
+
+
 def process_translation(original_text: str, translated_text: str, chunk: list[SubtitleEntry]) -> str:
     original_lines = original_text.split("\n")
     processed_lines: list[str] = []
