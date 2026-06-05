@@ -1,4 +1,6 @@
-const PROVIDERS = [
+import type { ModelSelection, ProviderDefinition } from "../types.js";
+
+export const PROVIDERS: ProviderDefinition[] = [
   {
     id: "deepseek",
     name: "DeepSeek",
@@ -68,24 +70,24 @@ const PROVIDERS = [
 
 const PROVIDER_BY_ID = new Map(PROVIDERS.map((provider) => [provider.id, provider]));
 
-function listProviders() {
+export function listProviders(): ProviderDefinition[] {
   return PROVIDERS.map((provider) => ({
     ...provider,
     models: provider.models.map((model) => ({ ...model })),
   }));
 }
 
-function getProvider(providerId) {
-  const provider = PROVIDER_BY_ID.get(providerId);
+export function getProvider(providerId: string | undefined): ProviderDefinition {
+  const provider = PROVIDER_BY_ID.get(providerId || "");
   if (!provider) {
     throw new Error(`未知翻译服务：${providerId || ""}`);
   }
   return provider;
 }
 
-function resolveModelId(provider, modelId, customModelId) {
+export function resolveModelId(provider: ProviderDefinition, modelId?: string, customModelId?: string): string {
   if (modelId === "__custom__") {
-    const custom = typeof customModelId === "string" ? customModelId.trim() : "";
+    const custom = cleanString(customModelId);
     if (!custom) {
       throw new Error(`${provider.name} 自定义模型 ID 不能为空`);
     }
@@ -99,8 +101,10 @@ function resolveModelId(provider, modelId, customModelId) {
   return selected;
 }
 
-module.exports = {
-  getProvider,
-  listProviders,
-  resolveModelId,
-};
+export function providerFromSelection(selection: ModelSelection): ProviderDefinition {
+  return getProvider(selection.providerId);
+}
+
+function cleanString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}

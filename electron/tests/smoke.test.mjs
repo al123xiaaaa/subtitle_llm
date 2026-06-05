@@ -2,22 +2,20 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { buildEnv, buildPythonArgs } = require("../lib/cliCommands.cjs");
-const { createDesktopRuntime } = require("../lib/desktopRuntime.cjs");
-const { createFfmpegDetector } = require("../lib/ffmpegStatus.cjs");
-const { getProvider, listProviders, resolveModelId } = require("../lib/providerCatalog.cjs");
-const { buildDesktopModelConfigContent } = require("../lib/modelConfig.cjs");
-const {
+import { buildEnv, buildPythonArgs } from "../../dist/electron/lib/cliCommands.js";
+import { createDesktopRuntime } from "../../dist/electron/lib/desktopRuntime.js";
+import { createFfmpegDetector } from "../../dist/electron/lib/ffmpegStatus.js";
+import { buildDesktopModelConfigContent } from "../../dist/electron/lib/modelConfig.js";
+import { getProvider, listProviders, resolveModelId } from "../../dist/electron/lib/providerCatalog.js";
+import {
   clearApiKey,
   readSettings,
   resolveCredential,
   saveApiKey,
   savePreferences,
   summarizeSettings,
-} = require("../lib/settingsStore.cjs");
+} from "../../dist/electron/lib/settingsStore.js";
 
 assert.deepEqual(
   buildPythonArgs({

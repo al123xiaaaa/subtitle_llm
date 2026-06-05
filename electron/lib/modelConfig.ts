@@ -1,16 +1,24 @@
-const fs = require("node:fs");
-const path = require("node:path");
-const { getProvider, resolveModelId } = require("./providerCatalog.cjs");
+import fs from "node:fs";
+import path from "node:path";
+import type { ModelSelection } from "../types.js";
+import { getProvider, resolveModelId } from "./providerCatalog.js";
 
-function yamlString(value) {
+interface DesktopModelConfig {
+  provider: string;
+  model: string;
+  apiKeyEnv: string;
+  endpoint: string;
+}
+
+function yamlString(value: string): string {
   return JSON.stringify(value);
 }
 
-function cleanString(value) {
+function cleanString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function renderModelSection(name, model, defaults = {}) {
+function renderModelSection(name: string, model: DesktopModelConfig, defaults: Record<string, string> = {}): string {
   const lines = [
     `${name}:`,
     `  provider: ${yamlString(model.provider)}`,
@@ -29,7 +37,7 @@ function renderModelSection(name, model, defaults = {}) {
   return lines.join("\n");
 }
 
-function buildModelFromSelection(selection = {}) {
+export function buildModelFromSelection(selection: Partial<ModelSelection> = {}): DesktopModelConfig {
   const provider = getProvider(selection.providerId);
   const model = resolveModelId(provider, selection.modelId, selection.customModelId);
 
@@ -41,7 +49,7 @@ function buildModelFromSelection(selection = {}) {
   };
 }
 
-function buildDesktopModelConfigContent(selection = {}) {
+export function buildDesktopModelConfigContent(selection: Partial<ModelSelection> = {}): string {
   if (selection.mode !== "service") {
     throw new Error("未启用服务商模型配置");
   }
@@ -72,7 +80,7 @@ function buildDesktopModelConfigContent(selection = {}) {
   ].join("\n");
 }
 
-function writeDesktopModelConfig(projectRoot, selection) {
+export function writeDesktopModelConfig(projectRoot: string, selection: ModelSelection): string {
   const outputDir = path.join(projectRoot, "data", "desktop-configs");
   fs.mkdirSync(outputDir, { recursive: true });
 
@@ -81,9 +89,3 @@ function writeDesktopModelConfig(projectRoot, selection) {
   fs.writeFileSync(outputPath, content, "utf8");
   return outputPath;
 }
-
-module.exports = {
-  buildDesktopModelConfigContent,
-  buildModelFromSelection,
-  writeDesktopModelConfig,
-};

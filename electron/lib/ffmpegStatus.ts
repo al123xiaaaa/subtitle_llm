@@ -1,22 +1,26 @@
-const fs = require("node:fs");
-const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import type { FfmpegStatus } from "../types.js";
 
-const COMMON_FFMPEG_PATHS = [
-  "/opt/homebrew/bin/ffmpeg",
-  "/usr/local/bin/ffmpeg",
-  "/usr/bin/ffmpeg",
-];
+export const COMMON_FFMPEG_PATHS = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"];
 
-function createFfmpegDetector({
+interface FfmpegDetectorOptions {
+  env?: NodeJS.ProcessEnv;
+  fileSystem?: Pick<typeof fs, "existsSync">;
+  pathModule?: Pick<typeof path, "isAbsolute">;
+  spawnSyncFn?: typeof spawnSync;
+}
+
+export function createFfmpegDetector({
   env = process.env,
   fileSystem = fs,
   pathModule = path,
   spawnSyncFn = spawnSync,
-} = {}) {
-  let cachedStatus = null;
+}: FfmpegDetectorOptions = {}) {
+  let cachedStatus: FfmpegStatus | null = null;
 
-  return function detectFfmpeg() {
+  return function detectFfmpeg(): FfmpegStatus {
     if (cachedStatus) {
       return cachedStatus;
     }
@@ -26,14 +30,11 @@ function createFfmpegDetector({
       return cachedStatus;
     }
 
-    const candidates = [
-      env.SUBTITLE_LLM_FFMPEG,
-      env.FFMPEG_BINARY,
-      "ffmpeg",
-      ...COMMON_FFMPEG_PATHS,
-    ].filter(Boolean);
+    const candidates = [env.SUBTITLE_LLM_FFMPEG, env.FFMPEG_BINARY, "ffmpeg", ...COMMON_FFMPEG_PATHS].filter(
+      Boolean,
+    ) as string[];
 
-    const seen = new Set();
+    const seen = new Set<string>();
     for (const candidate of candidates) {
       if (seen.has(candidate)) {
         continue;
@@ -65,7 +66,7 @@ function createFfmpegDetector({
   };
 }
 
-function missingStatus() {
+export function missingStatus(): FfmpegStatus {
   return {
     available: false,
     executable: "",
@@ -73,9 +74,3 @@ function missingStatus() {
     error: "未找到 FFmpeg。安装 FFmpeg 后可生成带字幕 MKV。",
   };
 }
-
-module.exports = {
-  COMMON_FFMPEG_PATHS,
-  createFfmpegDetector,
-  missingStatus,
-};

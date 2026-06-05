@@ -1,19 +1,37 @@
-const fs = require("node:fs");
-const path = require("node:path");
-const { spawn } = require("node:child_process");
-const { buildEnv, buildPythonArgs } = require("./cliCommands.cjs");
-const { createFfmpegDetector } = require("./ffmpegStatus.cjs");
-const { getProvider } = require("./providerCatalog.cjs");
-const { writeDesktopModelConfig } = require("./modelConfig.cjs");
-const {
-  clearApiKey,
-  resolveCredential,
-  saveApiKey,
-  savePreferences,
-  summarizeSettings,
-} = require("./settingsStore.cjs");
+import fs from "node:fs";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import type { App, WebContents } from "electron";
+import type {
+  AppState,
+  DesktopJobRequest,
+  DesktopPreferences,
+  FfmpegStatus,
+  JobEvent,
+  PreparedDesktopJobRequest,
+} from "../types.js";
+import { buildEnv, buildPythonArgs } from "./cliCommands.js";
+import { createFfmpegDetector } from "./ffmpegStatus.js";
+import { getProvider } from "./providerCatalog.js";
+import { writeDesktopModelConfig } from "./modelConfig.js";
+import { clearApiKey, resolveCredential, saveApiKey, savePreferences, summarizeSettings } from "./settingsStore.js";
 
-function applyUserDataOverride(app, env = process.env) {
+interface DesktopRuntimeOptions {
+  app: Pick<App, "getPath">;
+  projectRoot: string;
+  env?: NodeJS.ProcessEnv;
+  spawnFn?: typeof spawn;
+  detectFfmpeg?: () => FfmpegStatus;
+}
+
+interface ActiveJob {
+  child: ReturnType<typeof spawn>;
+  command: DesktopJobRequest["command"];
+  finished: boolean;
+  sender: Pick<WebContents, "isDestroyed" | "send">;
+}
+
+export function applyUserDataOverride(app: Pick<App, "setPath">, env: NodeJS.ProcessEnv = process.env): void {
   if (!env.SUBTITLE_LLM_USER_DATA_DIR) {
     return;
   }
@@ -22,16 +40,16 @@ function applyUserDataOverride(app, env = process.env) {
   app.setPath("userData", userDataDir);
 }
 
-function createDesktopRuntime({
+export function createDesktopRuntime({
   app,
   projectRoot,
   env = process.env,
   spawnFn = spawn,
   detectFfmpeg = createFfmpegDetector({ env }),
-} = {}) {
-  const activeJobs = new Map();
+}: DesktopRuntimeOptions) {
+  const activeJobs = new Map<string, ActiveJob>();
 
-  function resolvePythonExecutable() {
+  function resolvePythonExecutable(): string {
     if (env.SUBTITLE_LLM_PYTHON) {
       return env.SUBTITLE_LLM_PYTHON;
     }
@@ -49,11 +67,11 @@ function createDesktopRuntime({
     return process.platform === "win32" ? "python" : "python3";
   }
 
-  function getSettingsPath() {
+  function getSettingsPath(): string {
     return path.join(app.getPath("userData"), "settings.json");
   }
 
-  function getAppState() {
+  function getAppState(): AppState {
     return {
       projectRoot,
       pythonExecutable: resolvePythonExecutable(),
@@ -64,22 +82,22 @@ function createDesktopRuntime({
     };
   }
 
-  function saveProviderApiKey(providerId, apiKey) {
+  function saveProviderApiKey(providerId: string, apiKey: string): AppState {
     saveApiKey(getSettingsPath(), providerId, apiKey);
     return getAppState();
   }
 
-  function clearProviderApiKey(providerId) {
+  function clearProviderApiKey(providerId: string): AppState {
     clearApiKey(getSettingsPath(), providerId);
     return getAppState();
   }
 
-  function updatePreferences(preferences) {
+  function updatePreferences(preferences: DesktopPreferences): AppState {
     savePreferences(getSettingsPath(), preferences);
     return getAppState();
   }
 
-  function startJob(sender, request) {
+  function startJob(sender: Pick<WebContents, "isDestroyed" | "send">, request: DesktopJobRequest) {
     if (hasRunningJob()) {
       throw new Error("已有任务正在运行，请先取消或等待完成");
     }
@@ -100,7 +118,7 @@ function createDesktopRuntime({
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    const job = {
+    const job: ActiveJob = {
       child,
       command: request.command,
       finished: false,
@@ -117,10 +135,10 @@ function createDesktopRuntime({
       generatedConfigPath: runRequest.generatedConfigPath || "",
     });
 
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => sendJobEvent(sender, { type: "stdout", jobId, text: chunk }));
-    child.stderr.on("data", (chunk) => sendJobEvent(sender, { type: "stderr", jobId, text: chunk }));
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => sendJobEvent(sender, { type: "stdout", jobId, text: chunk }));
+    child.stderr?.on("data", (chunk: string) => sendJobEvent(sender, { type: "stderr", jobId, text: chunk }));
     child.on("error", (error) => {
       job.finished = true;
       activeJobs.delete(jobId);
@@ -135,7 +153,7 @@ function createDesktopRuntime({
     return { jobId };
   }
 
-  function cancelJob(jobId) {
+  function cancelJob(jobId: string) {
     const job = activeJobs.get(jobId);
     if (!job) {
       return { ok: false, message: "任务不存在或已结束" };
@@ -149,7 +167,7 @@ function createDesktopRuntime({
     return { ok: true };
   }
 
-  function stopAllJobs() {
+  function stopAllJobs(): void {
     for (const job of activeJobs.values()) {
       if (!job.finished) {
         job.child.kill("SIGTERM");
@@ -157,7 +175,7 @@ function createDesktopRuntime({
     }
   }
 
-  function resolveUserPath(filePath) {
+  function resolveUserPath(filePath: unknown): string {
     const cleaned = typeof filePath === "string" ? filePath.trim() : "";
     if (!cleaned) {
       return "";
@@ -165,12 +183,12 @@ function createDesktopRuntime({
     return path.isAbsolute(cleaned) ? cleaned : path.resolve(projectRoot, cleaned);
   }
 
-  function hasRunningJob() {
+  function hasRunningJob(): boolean {
     return Array.from(activeJobs.values()).some((job) => !job.finished);
   }
 
-  function prepareRequestForRun(request) {
-    const nextRequest = {
+  function prepareRequestForRun(request: DesktopJobRequest): PreparedDesktopJobRequest {
+    const nextRequest: PreparedDesktopJobRequest = {
       ...request,
       options: {
         ...(request.options || {}),
@@ -180,7 +198,7 @@ function createDesktopRuntime({
       },
     };
 
-    if (request.command === "translate" && request.modelSelection && request.modelSelection.mode === "service") {
+    if (request.command === "translate" && request.modelSelection?.mode === "service") {
       const provider = getProvider(request.modelSelection.providerId);
       const credential = resolveCredential(getSettingsPath(), provider, env);
       nextRequest.generatedConfigPath = writeDesktopModelConfig(projectRoot, request.modelSelection);
@@ -201,7 +219,7 @@ function createDesktopRuntime({
     return nextRequest;
   }
 
-  function sendJobEvent(sender, payload) {
+  function sendJobEvent(sender: Pick<WebContents, "isDestroyed" | "send">, payload: JobEvent): void {
     if (!sender.isDestroyed()) {
       sender.send("job:event", payload);
     }
@@ -218,8 +236,3 @@ function createDesktopRuntime({
     updatePreferences,
   };
 }
-
-module.exports = {
-  applyUserDataOverride,
-  createDesktopRuntime,
-};

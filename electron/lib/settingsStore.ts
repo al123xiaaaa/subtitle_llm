@@ -1,10 +1,11 @@
-const fs = require("node:fs");
-const path = require("node:path");
-const { listProviders } = require("./providerCatalog.cjs");
+import fs from "node:fs";
+import path from "node:path";
+import type { CredentialStatus, DesktopPreferences, DesktopSettings, ProviderDefinition } from "../types.js";
+import { listProviders } from "./providerCatalog.js";
 
 const SETTINGS_VERSION = 1;
 
-function defaultSettings() {
+export function defaultSettings(): DesktopSettings {
   return {
     version: SETTINGS_VERSION,
     apiKeys: {},
@@ -16,15 +17,17 @@ function defaultSettings() {
   };
 }
 
-function normalizeSettings(raw) {
+function normalizeSettings(raw: unknown): DesktopSettings {
   const settings = defaultSettings();
   if (!raw || typeof raw !== "object") {
     return settings;
   }
-  settings.apiKeys = raw.apiKeys && typeof raw.apiKeys === "object" ? raw.apiKeys : {};
+
+  const record = raw as Partial<DesktopSettings>;
+  settings.apiKeys = record.apiKeys && typeof record.apiKeys === "object" ? record.apiKeys : {};
   settings.preferences = {
     ...settings.preferences,
-    ...(raw.preferences && typeof raw.preferences === "object" ? raw.preferences : {}),
+    ...(record.preferences && typeof record.preferences === "object" ? record.preferences : {}),
   };
   settings.preferences.modelsByProvider =
     settings.preferences.modelsByProvider && typeof settings.preferences.modelsByProvider === "object"
@@ -37,27 +40,27 @@ function normalizeSettings(raw) {
   return settings;
 }
 
-function readSettings(settingsPath) {
+export function readSettings(settingsPath: string): DesktopSettings {
   try {
     return normalizeSettings(JSON.parse(fs.readFileSync(settingsPath, "utf8")));
   } catch (error) {
-    if (error.code === "ENOENT") {
+    if (isNodeError(error) && error.code === "ENOENT") {
       return defaultSettings();
     }
     throw error;
   }
 }
 
-function writeSettings(settingsPath, settings) {
+export function writeSettings(settingsPath: string, settings: DesktopSettings): void {
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify(normalizeSettings(settings), null, 2), "utf8");
 }
 
-function cleanString(value) {
+function cleanString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function maskSecret(secret) {
+export function maskSecret(secret: unknown): string {
   const value = cleanString(secret);
   if (!value) {
     return "";
@@ -65,7 +68,11 @@ function maskSecret(secret) {
   return `...${value.slice(-4)}`;
 }
 
-function credentialStatus(provider, settings, env = process.env) {
+export function credentialStatus(
+  provider: ProviderDefinition,
+  settings: DesktopSettings,
+  env: NodeJS.ProcessEnv = process.env,
+): CredentialStatus {
   const saved = cleanString(settings.apiKeys[provider.id]);
   if (saved) {
     return {
@@ -94,7 +101,7 @@ function credentialStatus(provider, settings, env = process.env) {
   };
 }
 
-function summarizeSettings(settingsPath, env = process.env) {
+export function summarizeSettings(settingsPath: string, env: NodeJS.ProcessEnv = process.env) {
   const settings = readSettings(settingsPath);
   const providers = listProviders().map((provider) => ({
     ...provider,
@@ -116,7 +123,7 @@ function summarizeSettings(settingsPath, env = process.env) {
   };
 }
 
-function saveApiKey(settingsPath, providerId, apiKey) {
+export function saveApiKey(settingsPath: string, providerId: string, apiKey: string) {
   const key = cleanString(apiKey);
   if (!key) {
     throw new Error("API Key 不能为空");
@@ -127,14 +134,14 @@ function saveApiKey(settingsPath, providerId, apiKey) {
   return summarizeSettings(settingsPath);
 }
 
-function clearApiKey(settingsPath, providerId) {
+export function clearApiKey(settingsPath: string, providerId: string) {
   const settings = readSettings(settingsPath);
   delete settings.apiKeys[providerId];
   writeSettings(settingsPath, settings);
   return summarizeSettings(settingsPath);
 }
 
-function savePreferences(settingsPath, preferences) {
+export function savePreferences(settingsPath: string, preferences: Partial<DesktopPreferences>) {
   const settings = readSettings(settingsPath);
   settings.preferences = {
     ...settings.preferences,
@@ -144,7 +151,11 @@ function savePreferences(settingsPath, preferences) {
   return summarizeSettings(settingsPath);
 }
 
-function resolveCredential(settingsPath, provider, env = process.env) {
+export function resolveCredential(
+  settingsPath: string,
+  provider: ProviderDefinition,
+  env: NodeJS.ProcessEnv = process.env,
+) {
   const settings = readSettings(settingsPath);
   const saved = cleanString(settings.apiKeys[provider.id]);
   if (saved) {
@@ -167,15 +178,6 @@ function resolveCredential(settingsPath, provider, env = process.env) {
   throw new Error(`${provider.name} API Key 未配置`);
 }
 
-module.exports = {
-  clearApiKey,
-  credentialStatus,
-  defaultSettings,
-  maskSecret,
-  readSettings,
-  resolveCredential,
-  saveApiKey,
-  savePreferences,
-  summarizeSettings,
-  writeSettings,
-};
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
+}

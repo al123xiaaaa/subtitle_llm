@@ -1,16 +1,14 @@
-const VALID_OUTPUT_FORMATS = new Set([
-  "source-first",
-  "target-first",
-  "target-only",
-  "source-only",
-  "bilingual",
-]);
+import type { DesktopJobRequest } from "../types.js";
 
-function cleanString(value) {
+export const VALID_OUTPUT_FORMATS = new Set(["source-first", "target-first", "target-only", "source-only", "bilingual"]);
+
+type JobOptions = Record<string, unknown>;
+
+function cleanString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function required(value, label) {
+function required(value: unknown, label: string): string {
   const cleaned = cleanString(value);
   if (!cleaned) {
     throw new Error(`${label}不能为空`);
@@ -18,14 +16,14 @@ function required(value, label) {
   return cleaned;
 }
 
-function addOption(args, flag, value) {
+function addOption(args: string[], flag: string, value: unknown): void {
   const cleaned = cleanString(value);
   if (cleaned) {
     args.push(flag, cleaned);
   }
 }
 
-function buildTranslateArgs(options = {}) {
+function buildTranslateArgs(options: JobOptions = {}): string[] {
   const input = required(options.input, "输入文件或 URL");
   const targetLanguage = required(options.targetLanguage, "目标语言");
   const args = ["main.py", "translate", "--input", input, "--target-language", targetLanguage];
@@ -62,7 +60,7 @@ function buildTranslateArgs(options = {}) {
   return args;
 }
 
-function buildDownloadArgs(options = {}) {
+function buildDownloadArgs(options: JobOptions = {}): string[] {
   const url = required(options.url, "视频 URL");
   const args = ["main.py", "download", url];
   addOption(args, "--output-dir", options.outputDir || "data/input");
@@ -70,7 +68,7 @@ function buildDownloadArgs(options = {}) {
   return args;
 }
 
-function buildTranscribeArgs(options = {}) {
+function buildTranscribeArgs(options: JobOptions = {}): string[] {
   const audio = required(options.audio, "音频文件");
   const output = required(options.output, "输出文件");
   const args = ["main.py", "transcribe", audio, "--output", output];
@@ -79,7 +77,7 @@ function buildTranscribeArgs(options = {}) {
   return args;
 }
 
-function buildMuxArgs(options = {}) {
+function buildMuxArgs(options: JobOptions = {}): string[] {
   const video = required(options.video, "视频文件");
   const subtitle = required(options.subtitle, "字幕文件");
   const args = ["main.py", "mux", video, subtitle];
@@ -89,7 +87,7 @@ function buildMuxArgs(options = {}) {
   return args;
 }
 
-function buildPythonArgs(request = {}) {
+export function buildPythonArgs(request: Partial<DesktopJobRequest> = {}): string[] {
   switch (request.command) {
     case "translate":
       return buildTranslateArgs(request.options);
@@ -104,8 +102,11 @@ function buildPythonArgs(request = {}) {
   }
 }
 
-function buildEnv(baseEnv = {}, overrides = {}) {
-  const env = {
+export function buildEnv(
+  baseEnv: NodeJS.ProcessEnv = {},
+  overrides: Record<string, string | undefined> = {},
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     PYTHONIOENCODING: "utf-8",
     PYTHONUNBUFFERED: "1",
@@ -125,9 +126,3 @@ function buildEnv(baseEnv = {}, overrides = {}) {
 
   return env;
 }
-
-module.exports = {
-  VALID_OUTPUT_FORMATS,
-  buildEnv,
-  buildPythonArgs,
-};

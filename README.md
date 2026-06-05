@@ -17,6 +17,14 @@ npm install
 npm run desktop
 ```
 
+The desktop script builds the TypeScript Electron main/preload code and the Vue 3 renderer before launching.
+For a build-only check, run:
+
+```bash
+npm run build:desktop
+npm run typecheck:desktop
+```
+
 Run desktop smoke and Electron E2E tests:
 
 ```bash
@@ -85,6 +93,12 @@ to keep these model files somewhere other than the default Hugging Face cache di
 subtitle_llm/
 ├── pyproject.toml
 ├── main.py
+├── electron/
+│   ├── main.ts        # Electron main process
+│   ├── preload.ts     # contextBridge IPC bridge
+│   ├── lib/           # typed desktop runtime modules
+│   └── renderer/      # Vue 3 + Vite renderer
+├── scripts/           # desktop build scripts
 ├── src/
 │   ├── subtitle_llm/
 │   │   ├── cli/          # Typer commands

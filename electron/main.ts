@@ -1,17 +1,20 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
-const path = require("node:path");
-const { applyUserDataOverride, createDesktopRuntime } = require("./lib/desktopRuntime.cjs");
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import type { DesktopJobRequest, DesktopPreferences } from "./types.js";
+import { applyUserDataOverride, createDesktopRuntime } from "./lib/desktopRuntime.js";
 
-const projectRoot = path.resolve(__dirname, "..");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(__dirname, "../..");
 applyUserDataOverride(app);
 
 const runtime = createDesktopRuntime({
   app,
   projectRoot,
 });
-let mainWindow = null;
+let mainWindow: BrowserWindow | null = null;
 
-function createWindow() {
+function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1180,
     height: 820,
@@ -27,25 +30,25 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  void mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
 ipcMain.handle("app:get-state", async () => runtime.getAppState());
 
-ipcMain.handle("settings:save-api-key", async (_event, providerId, apiKey) => {
+ipcMain.handle("settings:save-api-key", async (_event, providerId: string, apiKey: string) => {
   return runtime.saveProviderApiKey(providerId, apiKey);
 });
 
-ipcMain.handle("settings:clear-api-key", async (_event, providerId) => {
+ipcMain.handle("settings:clear-api-key", async (_event, providerId: string) => {
   return runtime.clearProviderApiKey(providerId);
 });
 
-ipcMain.handle("settings:save-preferences", async (_event, preferences) => {
+ipcMain.handle("settings:save-preferences", async (_event, preferences: DesktopPreferences) => {
   return runtime.updatePreferences(preferences);
 });
 
 ipcMain.handle("dialog:select-input", async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
+  const result = await dialog.showOpenDialog(mainWindow!, {
     title: "选择字幕或转写 JSON",
     properties: ["openFile"],
     filters: [
@@ -57,7 +60,7 @@ ipcMain.handle("dialog:select-input", async () => {
 });
 
 ipcMain.handle("dialog:select-audio", async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
+  const result = await dialog.showOpenDialog(mainWindow!, {
     title: "选择音频文件",
     properties: ["openFile"],
     filters: [
@@ -69,7 +72,7 @@ ipcMain.handle("dialog:select-audio", async () => {
 });
 
 ipcMain.handle("dialog:select-video", async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
+  const result = await dialog.showOpenDialog(mainWindow!, {
     title: "选择视频文件",
     properties: ["openFile"],
     filters: [
@@ -81,7 +84,7 @@ ipcMain.handle("dialog:select-video", async () => {
 });
 
 ipcMain.handle("dialog:select-subtitle", async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
+  const result = await dialog.showOpenDialog(mainWindow!, {
     title: "选择已翻译字幕",
     properties: ["openFile"],
     filters: [
@@ -93,7 +96,7 @@ ipcMain.handle("dialog:select-subtitle", async () => {
 });
 
 ipcMain.handle("dialog:select-config", async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
+  const result = await dialog.showOpenDialog(mainWindow!, {
     title: "选择配置 YAML",
     properties: ["openFile"],
     filters: [
@@ -105,7 +108,7 @@ ipcMain.handle("dialog:select-config", async () => {
 });
 
 ipcMain.handle("dialog:select-directory", async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
+  const result = await dialog.showOpenDialog(mainWindow!, {
     title: "选择文件夹",
     properties: ["openDirectory", "createDirectory"],
   });
@@ -113,7 +116,7 @@ ipcMain.handle("dialog:select-directory", async () => {
 });
 
 ipcMain.handle("dialog:save-srt", async (_event, defaultName = "output.srt") => {
-  const result = await dialog.showSaveDialog(mainWindow, {
+  const result = await dialog.showSaveDialog(mainWindow!, {
     title: "选择输出字幕位置",
     defaultPath: defaultName,
     filters: [
@@ -124,15 +127,15 @@ ipcMain.handle("dialog:save-srt", async (_event, defaultName = "output.srt") => 
   return result.canceled ? null : result.filePath;
 });
 
-ipcMain.handle("job:start", async (event, request) => {
+ipcMain.handle("job:start", async (event, request: DesktopJobRequest) => {
   return runtime.startJob(event.sender, request);
 });
 
-ipcMain.handle("job:cancel", async (_event, jobId) => {
+ipcMain.handle("job:cancel", async (_event, jobId: string) => {
   return runtime.cancelJob(jobId);
 });
 
-ipcMain.handle("shell:open-path", async (_event, filePath) => {
+ipcMain.handle("shell:open-path", async (_event, filePath: string) => {
   const target = runtime.resolveUserPath(filePath);
   if (!target) {
     return { ok: false, error: "路径为空" };
@@ -141,7 +144,7 @@ ipcMain.handle("shell:open-path", async (_event, filePath) => {
   return { ok: !error, error };
 });
 
-ipcMain.handle("shell:show-in-folder", async (_event, filePath) => {
+ipcMain.handle("shell:show-in-folder", async (_event, filePath: string) => {
   const target = runtime.resolveUserPath(filePath);
   if (!target) {
     return { ok: false, error: "路径为空" };
