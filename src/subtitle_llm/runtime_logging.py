@@ -11,7 +11,7 @@ RUN_LOG_ENV = "SUBTITLE_LLM_RUN_LOG"
 def configure_run_logging(command_name: str, log_dir: str | Path = Path("data/logs")) -> Path:
     log_path = _new_log_path(command_name, Path(log_dir))
     _install_file_handler(log_path)
-    os.environ[RUN_LOG_ENV] = str(log_path)
+    os.environ[RUN_LOG_ENV] = str(log_path.resolve())
     logging.getLogger(__name__).info(
         "运行日志已启动: command=%s cwd=%s log_file=%s",
         command_name,

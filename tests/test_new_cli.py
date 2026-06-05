@@ -23,6 +23,7 @@ class TestNewCLI(unittest.TestCase):
             output_file="output.srt",
             checkpoint_file="output_checkpoint.json",
             context_file="output_context.txt",
+            llm_trace_dir="data/logs/demo_llm_trace",
             total_entries=1,
             processed_entries=1,
             total_chunks=1,
@@ -49,6 +50,8 @@ class TestNewCLI(unittest.TestCase):
 
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertIn("翻译完成", result.output)
+            self.assertIn("LLM诊断：data/logs/demo_llm_trace", result.output)
+            self.assertIn('"llm_trace_dir": "data/logs/demo_llm_trace"', result.output)
             self.assertIn("日志文件：", result.output)
             log_text = self._single_log("translate").read_text(encoding="utf-8")
             self.assertIn("用户操作: translate", log_text)

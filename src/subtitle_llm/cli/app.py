@@ -121,6 +121,9 @@ def translate(
     except Exception:
         logger.exception("命令失败: translate")
         typer.secho(f"日志文件：{log_path}", fg=typer.colors.YELLOW, err=True)
+        trace_dir = log_path.with_name(f"{log_path.stem}_llm_trace")
+        if trace_dir.exists():
+            typer.secho(f"LLM诊断：{trace_dir}", fg=typer.colors.YELLOW, err=True)
         raise
     logger.info(
         "命令完成: translate output=%s entries=%s chunks=%s failed_chunks=%s total_tokens=%s",
@@ -271,6 +274,8 @@ def _print_report(report) -> None:
         typer.echo(f"视频封装：{report.embedded_video_error}")
     typer.echo(f"上下文文件：{report.context_file}")
     typer.echo(f"断点文件：{report.checkpoint_file}")
+    if report.llm_trace_dir:
+        typer.echo(f"LLM诊断：{report.llm_trace_dir}")
     typer.echo(f"输出格式：{report.output_format}")
     typer.echo(
         f"字幕条数：{report.total_entries}，已处理：{report.processed_entries}，短句保留：{report.short_entries}"
@@ -295,6 +300,7 @@ def _print_report(report) -> None:
         embedded_video_error=report.embedded_video_error,
         context_file=report.context_file,
         checkpoint_file=report.checkpoint_file,
+        llm_trace_dir=report.llm_trace_dir,
         output_format=report.output_format,
     )
 

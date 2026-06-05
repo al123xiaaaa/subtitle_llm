@@ -84,6 +84,28 @@ class AlignmentDriftClient(RecordingLLMClient):
         return super().create_completion(config, messages)
 
 
+class InlineIndexClient(FakeLLMClient):
+    def create_completion(self, config, messages):
+        prompt = messages[-1]["content"]
+        if "Analyze the following subtitle content" in prompt:
+            return super().create_completion(config, messages)
+        if "refine a rough translation" in prompt:
+            count = self._entry_count(prompt)
+            body = "\n".join([f"[{i}] 同行译文{i}" for i in range(1, count + 1)])
+            return CompletionResult(
+                content=body,
+                usage=CompletionUsage(prompt_tokens=2, completion_tokens=2, total_tokens=4),
+            )
+        if "Previous flawed translation" in prompt:
+            count = self._entry_count(prompt)
+            body = "\n".join([f"[{i}]\n修复译文{i}" for i in range(1, count + 1)])
+            return CompletionResult(
+                content=f"<response><translation>\n{body}\n</translation></response>",
+                usage=CompletionUsage(prompt_tokens=2, completion_tokens=2, total_tokens=4),
+            )
+        return super().create_completion(config, messages)
+
+
 class TimeoutAfterBadTranslationClient(FakeLLMClient):
     def create_completion(self, config, messages):
         prompt = messages[-1]["content"]
@@ -175,6 +197,48 @@ class TestNewPipeline(unittest.TestCase):
             self.assertEqual(result.report.failed_chunks, [])
             self.assertTrue(Path(result.report.context_file).exists())
             self.assertTrue(Path(result.report.checkpoint_file).exists())
+            trace_dir = Path(result.report.llm_trace_dir or "")
+            self.assertTrue(trace_dir.exists())
+            trace_json_files = sorted(trace_dir.glob("*.json"))
+            self.assertEqual(len(trace_json_files), 3)
+            self.assertTrue(any("summary-context" in path.name for path in trace_json_files))
+            self.assertTrue(any("chunk-001-rough-ok" in path.name for path in trace_json_files))
+            self.assertTrue(any("chunk-001-refine-ok" in path.name for path in trace_json_files))
+
+    def test_llm_trace_marks_inline_index_response_shape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.srt"
+            output_path = Path(tmp) / "output.srt"
+            input_path.write_text(
+                "1\n00:00:01,000 --> 00:00:02,000\nHello world.\n\n"
+                "2\n00:00:03,000 --> 00:00:04,000\nThis is a second line.\n\n",
+                encoding="utf-8",
+            )
+            service = TranslationService(
+                make_config(),
+                translation_client=InlineIndexClient(),
+                summary_client=FakeLLMClient(),
+            )
+
+            result = service.translate(
+                TranslationRequest(
+                    input_file=str(input_path),
+                    output_file=str(output_path),
+                    target_language="Chinese",
+                )
+            )
+
+            import json
+
+            trace_dir = Path(result.report.llm_trace_dir or "")
+            refine_trace = next(path for path in trace_dir.glob("*chunk-001-refine-failed.json"))
+            data = json.loads(refine_trace.read_text(encoding="utf-8"))
+            self.assertEqual(data["status"], "failed")
+            self.assertEqual(data["parse"]["parsed_count"], 0)
+            self.assertEqual(data["parse"]["placeholder_count"], 2)
+            self.assertEqual(data["response_shape"]["inline_index_markers"], 2)
+            response_path = trace_dir / data["files"]["response"]
+            self.assertIn("[1] 同行译文1", response_path.read_text(encoding="utf-8"))
 
     def test_failed_auto_repair_replaces_partial_placeholders_with_source_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:

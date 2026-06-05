@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from pathlib import Path
 
 from subtitle_llm.llm.types import ChatClient, CompletionUsage
+from subtitle_llm.pipeline.llm_trace import LlmTraceRecorder
 from subtitle_llm.pipeline.prompts import GENERATE_SUMMARY_PROMPT
 from subtitle_llm.settings import ModelConfig
 
@@ -32,14 +34,39 @@ class InputWithTimeout:
 
 
 class ContextService:
-    def __init__(self, client: ChatClient, model_config: ModelConfig, review_enabled: bool = False):
+    def __init__(
+        self,
+        client: ChatClient,
+        model_config: ModelConfig,
+        review_enabled: bool = False,
+        trace_recorder: LlmTraceRecorder | None = None,
+    ):
         self.client = client
         self.model_config = model_config
         self.review_enabled = review_enabled
+        self.trace_recorder = trace_recorder
 
     def build_context(self, source_text: str, target_language: str) -> tuple[str, CompletionUsage]:
         prompt = GENERATE_SUMMARY_PROMPT.format(target_language=target_language, content=source_text)
-        result = self.client.create_completion(self.model_config, [{"role": "user", "content": prompt}])
+        started_at = time.perf_counter()
+        try:
+            result = self.client.create_completion(self.model_config, [{"role": "user", "content": prompt}])
+        except Exception as exc:
+            self._record_trace(
+                prompt=prompt,
+                response="",
+                usage=CompletionUsage(),
+                duration_ms=elapsed_ms(started_at),
+                status="failed",
+                error=str(exc),
+            )
+            raise
+        self._record_trace(
+            prompt=prompt,
+            response=result.content,
+            usage=result.usage,
+            duration_ms=elapsed_ms(started_at),
+        )
 
         try:
             summary, terms = result.content.split("短语术语:")
@@ -88,3 +115,30 @@ class ContextService:
                 edited_context = "\n".join(edited_lines)
                 return edited_context or context
             print("Invalid input. Please enter 'Y', 'E', or 'A'.")
+
+    def _record_trace(
+        self,
+        *,
+        prompt: str,
+        response: str,
+        usage: CompletionUsage,
+        duration_ms: int,
+        status: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        if self.trace_recorder is None:
+            return
+        self.trace_recorder.record_call(
+            stage="summary-context",
+            prompt=prompt,
+            response=response,
+            model_config=self.model_config,
+            usage=usage,
+            duration_ms=duration_ms,
+            status=status,  # type: ignore[arg-type]
+            error=error,
+        )
+
+
+def elapsed_ms(started_at: float) -> int:
+    return max(0, round((time.perf_counter() - started_at) * 1000))

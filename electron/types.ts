@@ -177,6 +177,7 @@ export interface CliResultEvent {
   embedded_video_error?: string | null;
   context_file?: string | null;
   checkpoint_file?: string | null;
+  llm_trace_dir?: string | null;
   output_format?: OutputFormat | string | null;
 }
 

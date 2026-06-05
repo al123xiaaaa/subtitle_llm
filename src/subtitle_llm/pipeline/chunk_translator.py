@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from subtitle_llm.domain import SubtitleEntry
-from subtitle_llm.llm.types import ChatClient, CompletionUsage
+from subtitle_llm.llm.types import ChatClient, CompletionResult, CompletionUsage
+from subtitle_llm.pipeline.llm_trace import LlmTraceRecorder
 from subtitle_llm.pipeline.prompts import (
     ALIGNMENT_DRIFT_RETRANSLATE_PROMPT,
     FIX_MISSING_TRANSLATIONS_PROMPT,
@@ -26,12 +28,27 @@ class ChunkTranslationResult:
     chunk: list[SubtitleEntry]
     translation: str
     usage: CompletionUsage
+    final_trace_id: str | None = None
+
+
+@dataclass
+class TracedTranslationText:
+    text: str
+    trace_id: str | None
 
 
 class ChunkTranslator:
-    def __init__(self, client: ChatClient, model_config: ModelConfig):
+    def __init__(
+        self,
+        client: ChatClient,
+        model_config: ModelConfig,
+        trace_recorder: LlmTraceRecorder | None = None,
+        total_chunks: int | None = None,
+    ):
         self.client = client
         self.model_config = model_config
+        self.trace_recorder = trace_recorder
+        self.total_chunks = total_chunks
 
     def translate_and_refine(
         self,
@@ -39,11 +56,35 @@ class ChunkTranslator:
         context: str,
         target_language: str,
         boundary_context: str,
+        chunk_index: int | None = None,
+        stage_prefix: str = "",
     ) -> ChunkTranslationResult:
         usage = CompletionUsage()
-        rough_translation = self.translate_chunk(chunk, context, target_language, boundary_context, usage)
-        refined_translation = self.refine_translation(chunk, rough_translation, context, target_language, boundary_context, usage)
-        return ChunkTranslationResult(chunk=chunk, translation=refined_translation, usage=usage)
+        rough_translation = self.translate_chunk(
+            chunk,
+            context,
+            target_language,
+            boundary_context,
+            usage,
+            chunk_index=chunk_index,
+            stage=join_stage(stage_prefix, "rough"),
+        )
+        refined_translation = self.refine_translation(
+            chunk,
+            rough_translation.text,
+            context,
+            target_language,
+            boundary_context,
+            usage,
+            chunk_index=chunk_index,
+            stage=join_stage(stage_prefix, "refine"),
+        )
+        return ChunkTranslationResult(
+            chunk=chunk,
+            translation=refined_translation.text,
+            usage=usage,
+            final_trace_id=refined_translation.trace_id,
+        )
 
     def translate_chunk(
         self,
@@ -52,7 +93,9 @@ class ChunkTranslator:
         target_language: str,
         boundary_context: str,
         usage: CompletionUsage,
-    ) -> str:
+        chunk_index: int | None = None,
+        stage: str = "rough",
+    ) -> TracedTranslationText:
         original_text = format_chunk(chunk)
         prompt = TRANSLATE_CHUNK_PROMPT.format(
             target_language=target_language,
@@ -61,9 +104,20 @@ class ChunkTranslator:
             chunk_text=original_text,
             chunk_size=len(chunk),
         )
-        result = self.client.create_completion(self.model_config, [{"role": "user", "content": prompt}])
+        result, duration_ms = self._create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
         usage.add(result.usage)
-        return process_translation(original_text, result.content, chunk)
+        processed_translation = process_translation(original_text, result.content, chunk)
+        trace_id = self._record_trace(
+            stage=stage,
+            prompt=prompt,
+            response=result.content,
+            usage=result.usage,
+            duration_ms=duration_ms,
+            chunk=chunk,
+            chunk_index=chunk_index,
+            processed_translation=processed_translation,
+        )
+        return TracedTranslationText(processed_translation, trace_id)
 
     def refine_translation(
         self,
@@ -73,7 +127,9 @@ class ChunkTranslator:
         target_language: str,
         boundary_context: str,
         usage: CompletionUsage,
-    ) -> str:
+        chunk_index: int | None = None,
+        stage: str = "refine",
+    ) -> TracedTranslationText:
         original_text = format_chunk(chunk)
         prompt = REFINE_TRANSLATION_PROMPT.format(
             target_language=target_language,
@@ -83,9 +139,20 @@ class ChunkTranslator:
             rough_translation=rough_translation,
             chunk_size=len(chunk),
         )
-        result = self.client.create_completion(self.model_config, [{"role": "user", "content": prompt}])
+        result, duration_ms = self._create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
         usage.add(result.usage)
-        return process_translation(original_text, result.content, chunk)
+        processed_translation = process_translation(original_text, result.content, chunk)
+        trace_id = self._record_trace(
+            stage=stage,
+            prompt=prompt,
+            response=result.content,
+            usage=result.usage,
+            duration_ms=duration_ms,
+            chunk=chunk,
+            chunk_index=chunk_index,
+            processed_translation=processed_translation,
+        )
+        return TracedTranslationText(processed_translation, trace_id)
 
     def repair_translation(
         self,
@@ -96,6 +163,25 @@ class ChunkTranslator:
         quality_report: str = "",
     ) -> str:
         return self.re_translate(chunk, translation, target_language, usage, quality_report=quality_report)
+
+    def repair_translation_traced(
+        self,
+        chunk: list[SubtitleEntry],
+        translation: str,
+        target_language: str,
+        usage: CompletionUsage,
+        quality_report: str = "",
+        chunk_index: int | None = None,
+    ) -> TracedTranslationText:
+        return self._re_translate_traced(
+            chunk,
+            translation,
+            target_language,
+            usage,
+            quality_report=quality_report,
+            chunk_index=chunk_index,
+            stage="repair",
+        )
 
     def fix_missing_translations(
         self,
@@ -139,8 +225,17 @@ class ChunkTranslator:
             missing_lines_formatted=missing_lines_formatted,
             example_format=example_format,
         )
-        result = self.client.create_completion(self.model_config, [{"role": "user", "content": prompt}])
+        result, duration_ms = self._create_completion(prompt, stage="missing-fix", chunk=chunk)
         usage.add(result.usage)
+        self._record_trace(
+            stage="missing-fix",
+            prompt=prompt,
+            response=result.content,
+            usage=result.usage,
+            duration_ms=duration_ms,
+            chunk=chunk,
+            processed_translation=result.content,
+        )
         return result.content
 
     def re_translate(
@@ -151,6 +246,24 @@ class ChunkTranslator:
         usage: CompletionUsage,
         quality_report: str = "",
     ) -> str:
+        return self._re_translate_traced(
+            chunk,
+            translation,
+            target_language,
+            usage,
+            quality_report=quality_report,
+        ).text
+
+    def _re_translate_traced(
+        self,
+        chunk: list[SubtitleEntry],
+        translation: str,
+        target_language: str,
+        usage: CompletionUsage,
+        quality_report: str = "",
+        chunk_index: int | None = None,
+        stage: str = "repair",
+    ) -> TracedTranslationText:
         original_text = format_chunk(chunk)
         prompt = RE_TRANSLATE_PROMPT.format(
             target_language=target_language,
@@ -159,9 +272,21 @@ class ChunkTranslator:
             quality_report=quality_report or "No structured quality report was provided.",
             chunk_size=len(chunk),
         )
-        result = self.client.create_completion(self.model_config, [{"role": "user", "content": prompt}])
+        result, duration_ms = self._create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
         usage.add(result.usage)
-        return process_translation(original_text, extract_translation_block(result.content), chunk)
+        extracted_response = extract_translation_block(result.content)
+        processed_translation = process_translation(original_text, extracted_response, chunk)
+        trace_id = self._record_trace(
+            stage=stage,
+            prompt=prompt,
+            response=result.content,
+            usage=result.usage,
+            duration_ms=duration_ms,
+            chunk=chunk,
+            chunk_index=chunk_index,
+            processed_translation=processed_translation,
+        )
+        return TracedTranslationText(processed_translation, trace_id)
 
     def retranslate_alignment_drift(
         self,
@@ -172,6 +297,25 @@ class ChunkTranslator:
         boundary_context: str,
         usage: CompletionUsage,
     ) -> str:
+        return self.retranslate_alignment_drift_traced(
+            drift_chunk,
+            stable_anchors,
+            context,
+            target_language,
+            boundary_context,
+            usage,
+        ).text
+
+    def retranslate_alignment_drift_traced(
+        self,
+        drift_chunk: list[SubtitleEntry],
+        stable_anchors: list[SubtitleEntry],
+        context: str,
+        target_language: str,
+        boundary_context: str,
+        usage: CompletionUsage,
+        chunk_index: int | None = None,
+    ) -> TracedTranslationText:
         original_text = format_chunk(drift_chunk)
         prompt = ALIGNMENT_DRIFT_RETRANSLATE_PROMPT.format(
             target_language=target_language,
@@ -182,6 +326,87 @@ class ChunkTranslator:
             translation_reference=format_translation_reference(drift_chunk),
             chunk_size=len(drift_chunk),
         )
-        result = self.client.create_completion(self.model_config, [{"role": "user", "content": prompt}])
+        result, duration_ms = self._create_completion(prompt, stage="drift", chunk=drift_chunk, chunk_index=chunk_index)
         usage.add(result.usage)
-        return process_translation(original_text, extract_translation_block(result.content), drift_chunk)
+        extracted_response = extract_translation_block(result.content)
+        processed_translation = process_translation(original_text, extracted_response, drift_chunk)
+        trace_id = self._record_trace(
+            stage="drift",
+            prompt=prompt,
+            response=result.content,
+            usage=result.usage,
+            duration_ms=duration_ms,
+            chunk=drift_chunk,
+            chunk_index=chunk_index,
+            processed_translation=processed_translation,
+        )
+        return TracedTranslationText(processed_translation, trace_id)
+
+    def _create_completion(
+        self,
+        prompt: str,
+        *,
+        stage: str,
+        chunk: list[SubtitleEntry] | None = None,
+        chunk_index: int | None = None,
+    ) -> tuple[CompletionResult, int]:
+        started_at = time.perf_counter()
+        try:
+            result = self.client.create_completion(self.model_config, [{"role": "user", "content": prompt}])
+        except Exception as exc:
+            duration_ms = elapsed_ms(started_at)
+            if self.trace_recorder is not None:
+                self.trace_recorder.record_call(
+                    stage="llm-error",
+                    prompt=prompt,
+                    response="",
+                    model_config=self.model_config,
+                    usage=CompletionUsage(),
+                    duration_ms=duration_ms,
+                    chunk=chunk,
+                    chunk_index=chunk_index,
+                    total_chunks=self.total_chunks,
+                    expected_count=len(chunk) if chunk is not None else None,
+                    status="failed",
+                    error=str(exc),
+                )
+            raise
+        return result, elapsed_ms(started_at)
+
+    def _record_trace(
+        self,
+        *,
+        stage: str,
+        prompt: str,
+        response: str,
+        usage: CompletionUsage,
+        duration_ms: int,
+        chunk: list[SubtitleEntry],
+        chunk_index: int | None = None,
+        processed_translation: str | None = None,
+        error: str | None = None,
+    ) -> str | None:
+        if self.trace_recorder is None:
+            return None
+        return self.trace_recorder.record_call(
+            stage=stage,
+            prompt=prompt,
+            response=response,
+            model_config=self.model_config,
+            usage=usage,
+            duration_ms=duration_ms,
+            chunk=chunk,
+            chunk_index=chunk_index,
+            total_chunks=self.total_chunks,
+            processed_translation=processed_translation,
+            expected_count=len(chunk),
+            error=error,
+        )
+
+
+def elapsed_ms(started_at: float) -> int:
+    return max(0, round((time.perf_counter() - started_at) * 1000))
+
+
+def join_stage(prefix: str, stage: str) -> str:
+    return f"{prefix}-{stage}" if prefix else stage

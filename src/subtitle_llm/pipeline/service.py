@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -14,6 +14,7 @@ from subtitle_llm.pipeline.checkpoint import CheckpointStore, file_fingerprint, 
 from subtitle_llm.pipeline.chunk_translator import ChunkTranslationResult, ChunkTranslator
 from subtitle_llm.pipeline.chunks import ChunkPlanner, PlannedChunk
 from subtitle_llm.pipeline.context import ContextService
+from subtitle_llm.pipeline.llm_trace import LlmTraceRecorder
 from subtitle_llm.pipeline.quality import QualityGate
 from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.pipeline.text import parse_translation_results
@@ -38,6 +39,12 @@ class TranslationRequest:
 class TranslationResult:
     subtitle: Subtitle
     report: TranslationReport
+
+
+@dataclass
+class TuiReviewOutcome:
+    retranslated: bool
+    trace_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -86,6 +93,9 @@ class TranslationService:
             output_format=output_format,
             source_video_file=resolved_input.video_file,
         )
+        trace_recorder = LlmTraceRecorder.for_run(output_file)
+        report.llm_trace_dir = str(trace_recorder.trace_dir)
+        logger.info("LLM诊断目录已准备: %s", trace_recorder.trace_dir)
         logger.info(
             "翻译文件已准备: resolved_input=%s output=%s checkpoint=%s context=%s",
             input_file,
@@ -117,6 +127,7 @@ class TranslationService:
             self.summary_client,
             self.config.summary_model,
             review_enabled=self.config.pipeline.context_review,
+            trace_recorder=trace_recorder,
         )
         context_source = "\n".join(
             [entry.original_text for entry in subtitle.entries if len(entry.original_text) >= 10]
@@ -158,7 +169,12 @@ class TranslationService:
             report.boundary_risk_count,
         )
 
-        translator = ChunkTranslator(self.translation_client, self.config.translation_model)
+        translator = ChunkTranslator(
+            self.translation_client,
+            self.config.translation_model,
+            trace_recorder=trace_recorder,
+            total_chunks=report.total_chunks,
+        )
         quality_gate = QualityGate()
         review_mode = request.review_mode or self.config.pipeline.review_mode
         review_port = self._review_port(review_mode)
@@ -220,6 +236,7 @@ class TranslationService:
                     context,
                     target_language,
                     planned.boundary_context,
+                    planned.index,
                 ): planned
                 for planned in planned_chunks
             }
@@ -280,6 +297,8 @@ class TranslationService:
             translation=translation,
             target_language=target_language,
         )
+        if translator.trace_recorder:
+            translator.trace_recorder.update_quality(result.final_trace_id, diagnosis)
         quality_gate.apply_diagnosis(planned.entries, diagnosis)
         if diagnosis.has_issues:
             logger.warning(
@@ -292,13 +311,15 @@ class TranslationService:
         if diagnosis.has_issues:
             if isinstance(review_port, AutoReviewPort):
                 repair_usage = CompletionUsage()
-                repaired = translator.repair_translation(
+                repaired_result = translator.repair_translation_traced(
                     planned.entries,
                     translation,
                     target_language,
                     usage=repair_usage,
                     quality_report=diagnosis.to_prompt_report(),
+                    chunk_index=planned.index,
                 )
+                repaired = repaired_result.text
                 report.token_usage.add_usage(repair_usage.to_dict())
                 for entry, refined_text in parse_translation_results(repaired, planned.entries):
                     entry.needs_retranslation = False
@@ -308,6 +329,11 @@ class TranslationService:
                     translation=repaired,
                     target_language=target_language,
                 )
+                if translator.trace_recorder:
+                    translator.trace_recorder.update_quality(
+                        repaired_result.trace_id,
+                        repaired_diagnosis,
+                    )
                 quality_gate.apply_diagnosis(planned.entries, repaired_diagnosis)
                 logger.info(
                     "chunk自动重译完成: chunk=%s reliability=%s flagged=%s",
@@ -357,7 +383,7 @@ class TranslationService:
                 review_result.alignment_drift_start_index,
             )
 
-            retranslated = self._apply_tui_review_result(
+            outcome = self._apply_tui_review_result(
                 planned,
                 review_result,
                 translator,
@@ -365,13 +391,16 @@ class TranslationService:
                 target_language,
                 report,
             )
-            if not retranslated:
+            if not outcome.retranslated:
                 for entry in planned.entries:
                     entry.needs_retranslation = False
                 logger.info("TUI审核接受当前chunk: chunk=%s round=%s", planned.index + 1, review_round)
                 return
 
             diagnosis = quality_gate.diagnose_chunk(planned.entries, target_language=target_language)
+            if translator.trace_recorder:
+                for trace_id in outcome.trace_ids:
+                    translator.trace_recorder.update_quality(trace_id, diagnosis)
             quality_gate.apply_diagnosis(planned.entries, diagnosis)
             if not diagnosis.has_issues:
                 logger.info("TUI重译后质量检查通过: chunk=%s round=%s", planned.index + 1, review_round)
@@ -386,6 +415,9 @@ class TranslationService:
                 diagnosis.summary,
             )
 
+        if translator.trace_recorder:
+            for trace_id in outcome.trace_ids:
+                translator.trace_recorder.update_quality(trace_id, diagnosis, status="failed")
         logger.warning("TUI复核达到上限，接受当前结果继续: chunk=%s", planned.index + 1)
 
     def _apply_tui_review_result(
@@ -396,7 +428,7 @@ class TranslationService:
         context: str,
         target_language: str,
         report: TranslationReport,
-    ) -> bool:
+    ) -> TuiReviewOutcome:
         drift_start = review_result.alignment_drift_start_index
         ordinary_indices = {entry.index for entry in review_result.entries_to_retranslate}
         ordinary_entries = [
@@ -406,13 +438,15 @@ class TranslationService:
             and not (drift_start is not None and entry.index >= drift_start)
         ]
 
-        did_retranslate = False
+        outcome = TuiReviewOutcome(retranslated=False)
         if ordinary_entries:
             selected_result = translator.translate_and_refine(
                 ordinary_entries,
                 context,
                 target_language,
                 planned.boundary_context,
+                planned.index,
+                "tui-ordinary",
             )
             report.token_usage.add_usage(selected_result.usage.to_dict())
             for entry, refined_text in parse_translation_results(
@@ -426,25 +460,29 @@ class TranslationService:
                 planned.index + 1,
                 len(ordinary_entries),
             )
-            did_retranslate = True
+            outcome.retranslated = True
+            if selected_result.final_trace_id:
+                outcome.trace_ids.append(selected_result.final_trace_id)
 
         if drift_start is not None:
             drift_position = self._entry_position(planned.entries, drift_start)
             if drift_position is None:
                 logger.warning("TUI漂移起点不存在，跳过漂移重译: chunk=%s drift_start=%s", planned.index + 1, drift_start)
-                return did_retranslate
+                return outcome
 
             stable_anchors = planned.entries[max(0, drift_position - 6):drift_position]
             drift_entries = planned.entries[drift_position:]
             drift_usage = CompletionUsage()
-            drift_translation = translator.retranslate_alignment_drift(
+            drift_result = translator.retranslate_alignment_drift_traced(
                 drift_entries,
                 stable_anchors,
                 context,
                 target_language,
                 planned.boundary_context,
                 drift_usage,
+                chunk_index=planned.index,
             )
+            drift_translation = drift_result.text
             report.token_usage.add_usage(drift_usage.to_dict())
             for entry, refined_text in parse_translation_results(drift_translation, drift_entries):
                 entry.needs_retranslation = False
@@ -456,9 +494,11 @@ class TranslationService:
                 len(drift_entries),
                 len(stable_anchors),
             )
-            did_retranslate = True
+            outcome.retranslated = True
+            if drift_result.trace_id:
+                outcome.trace_ids.append(drift_result.trace_id)
 
-        return did_retranslate
+        return outcome
 
     def _entry_position(self, entries: list[SubtitleEntry], entry_index: int) -> int | None:
         for position, entry in enumerate(entries):

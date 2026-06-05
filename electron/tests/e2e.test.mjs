@@ -49,6 +49,7 @@ setTimeout(() => {
       embedded_video_error: null,
       context_file: "data/output/youtube.zh_context.txt",
       checkpoint_file: "data/output/youtube.zh_checkpoint.json",
+      llm_trace_dir: "data/logs/e2e_translate_llm_trace",
       output_format: "source-first",
     }));
     console.log("日志文件：data/logs/e2e_translate.log");
@@ -119,6 +120,7 @@ async function testYoutubeTranslateWithMkv() {
 
     await page.locator("#subtitleResultPath", { hasText: "data/output/youtube.zh.srt" }).waitFor();
     await page.locator("#videoResultPath", { hasText: "data/output/youtube.zh.mkv" }).waitFor();
+    await page.locator("#traceResultPath", { hasText: "data/logs/e2e_translate_llm_trace" }).waitFor();
 
     const commands = readCommands(commandLogPath);
     assert.equal(commands.length, 1);

@@ -38,6 +38,7 @@ class TranslationReport(BaseModel):
     boundary_risks: list[dict] = Field(default_factory=list)
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     output_format: str = "source-first"
+    llm_trace_dir: str | None = None
     source_video_file: str | None = None
     embedded_video_file: str | None = None
     embedded_video_error: str | None = None

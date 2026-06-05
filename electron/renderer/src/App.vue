@@ -26,9 +26,11 @@ const {
   ffmpegAvailable,
   hasAnyResult,
   hasSubtitleResult,
+  hasTraceResult,
   hasVideoResult,
   isBusy,
   lastEmbeddedVideoPath,
+  lastLlmTraceDir,
   lastOutputPath,
   lastSubtitlePath,
   logBody,
@@ -876,6 +878,33 @@ const {
                 type="button"
                 data-show-result="video"
                 @click="showResult('video')"
+              >
+                定位
+              </button>
+            </div>
+          </div>
+          <div
+            id="traceResultRow"
+            :class="['result-file-row', { 'is-hidden': !hasTraceResult }]"
+          >
+            <div>
+              <strong>LLM 诊断</strong>
+              <span id="traceResultPath">{{ lastLlmTraceDir }}</span>
+            </div>
+            <div class="result-actions">
+              <button
+                class="secondary-button"
+                type="button"
+                data-open-result="trace"
+                @click="openResult('trace')"
+              >
+                打开
+              </button>
+              <button
+                class="secondary-button"
+                type="button"
+                data-show-result="trace"
+                @click="showResult('trace')"
               >
                 定位
               </button>

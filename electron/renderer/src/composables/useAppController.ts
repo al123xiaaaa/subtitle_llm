@@ -14,7 +14,7 @@ import type {
 const RESULT_EVENT_PREFIX = "SUBTITLE_LLM_RESULT ";
 
 type TaskTab = "translate" | "download" | "transcribe" | "settings";
-type ResultTarget = "subtitle" | "video";
+type ResultTarget = "subtitle" | "trace" | "video";
 
 const taskTabs: Array<{ id: TaskTab; label: string }> = [
   { id: "translate", label: "翻译字幕" },
@@ -54,6 +54,7 @@ export function useAppController() {
   const lastOutputPath = ref("");
   const lastSubtitlePath = ref("");
   const lastEmbeddedVideoPath = ref("");
+  const lastLlmTraceDir = ref("");
   const lastSourceVideoPath = ref("");
 
   const selectedProviderId = ref("deepseek");
@@ -160,7 +161,8 @@ export function useAppController() {
   );
   const hasSubtitleResult = computed(() => Boolean(lastSubtitlePath.value));
   const hasVideoResult = computed(() => Boolean(lastEmbeddedVideoPath.value));
-  const hasAnyResult = computed(() => hasSubtitleResult.value || hasVideoResult.value);
+  const hasTraceResult = computed(() => Boolean(lastLlmTraceDir.value));
+  const hasAnyResult = computed(() => hasSubtitleResult.value || hasVideoResult.value || hasTraceResult.value);
 
   watch(
     () => translateForm.targetLanguage,
@@ -271,6 +273,14 @@ export function useAppController() {
     setOutputPath(cleaned);
   }
 
+  function setLlmTraceDir(filePath: unknown): void {
+    const cleaned = cleanString(filePath);
+    if (!cleaned) {
+      return;
+    }
+    lastLlmTraceDir.value = cleaned;
+  }
+
   function parseResultEvents(text: string): void {
     for (const line of text.split(/\r?\n/)) {
       parseResultEvent(line);
@@ -288,6 +298,7 @@ export function useAppController() {
       setSourceVideoPath(event.source_video_file);
       setEmbeddedVideoPath(event.embedded_video_file);
       setEmbeddedVideoPath(event.output_video_file);
+      setLlmTraceDir(event.llm_trace_dir);
       return true;
     } catch (error) {
       appendLog(`结果事件解析失败：${error instanceof Error ? error.message : String(error)}\n`, "stderr");
@@ -583,17 +594,27 @@ export function useAppController() {
   }
 
   async function openResult(target: ResultTarget): Promise<void> {
-    const filePath = target === "video" ? lastEmbeddedVideoPath.value : lastSubtitlePath.value;
+    const filePath = resultPath(target);
     if (filePath) {
       await api.openPath(filePath);
     }
   }
 
   async function showResult(target: ResultTarget): Promise<void> {
-    const filePath = target === "video" ? lastEmbeddedVideoPath.value : lastSubtitlePath.value;
+    const filePath = resultPath(target);
     if (filePath) {
       await api.showInFolder(filePath);
     }
+  }
+
+  function resultPath(target: ResultTarget): string {
+    if (target === "video") {
+      return lastEmbeddedVideoPath.value;
+    }
+    if (target === "trace") {
+      return lastLlmTraceDir.value;
+    }
+    return lastSubtitlePath.value;
   }
 
   async function openOutput(): Promise<void> {
@@ -673,9 +694,11 @@ export function useAppController() {
     ffmpegAvailable,
     hasAnyResult,
     hasSubtitleResult,
+    hasTraceResult,
     hasVideoResult,
     isBusy,
     lastEmbeddedVideoPath,
+    lastLlmTraceDir,
     lastOutputPath,
     lastSourceVideoPath,
     lastSubtitlePath,
