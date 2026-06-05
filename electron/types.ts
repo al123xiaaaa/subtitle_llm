@@ -61,6 +61,16 @@ export interface AppState {
 export type CommandName = "translate" | "download" | "transcribe" | "mux";
 export type OutputFormat = "source-first" | "target-first" | "target-only" | "source-only" | "bilingual";
 export type ReviewMode = "auto" | "config" | "tui";
+export type ProgressStageStatus = "waiting" | "running" | "done" | "warning" | "failed" | "skipped";
+export type ChunkProgressStatus =
+  | "waiting"
+  | "running"
+  | "review"
+  | "repairing"
+  | "done"
+  | "warning"
+  | "failed"
+  | "skipped";
 
 export interface ModelSelection {
   mode: "service";
@@ -179,6 +189,47 @@ export interface CliResultEvent {
   checkpoint_file?: string | null;
   llm_trace_dir?: string | null;
   output_format?: OutputFormat | string | null;
+}
+
+export interface CliProgressChunk {
+  index?: number | null;
+  total?: number | null;
+  entry_start?: number | null;
+  entry_end?: number | null;
+  entry_count?: number | null;
+  status?: ChunkProgressStatus | string | null;
+  detail?: string | null;
+  issue_summary?: string | null;
+  reason?: string | null;
+}
+
+export interface CliProgressModel {
+  provider?: string | null;
+  name?: string | null;
+  endpoint?: string | null;
+}
+
+export interface CliProgressUsage {
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+}
+
+export interface CliProgressEvent {
+  command: CommandName;
+  stage: string;
+  detail: string;
+  status?: ProgressStageStatus | string | null;
+  label?: string | null;
+  message?: string | null;
+  elapsed_ms?: number | null;
+  duration_ms?: number | null;
+  created_at?: string | null;
+  chunk?: CliProgressChunk | null;
+  model?: CliProgressModel | null;
+  usage?: CliProgressUsage | null;
+  trace_id?: string | null;
+  total_chunks?: number | null;
 }
 
 export interface ShellResult {

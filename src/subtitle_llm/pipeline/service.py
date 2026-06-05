@@ -18,6 +18,7 @@ from subtitle_llm.pipeline.llm_trace import LlmTraceRecorder
 from subtitle_llm.pipeline.quality import QualityGate
 from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.pipeline.text import parse_translation_results
+from subtitle_llm.progress_events import ProgressEmitter, chunk_payload
 from subtitle_llm.review import AutoReviewPort, ReviewPort, ReviewResult, TuiReviewPort
 from subtitle_llm.settings import AppConfig
 
@@ -66,7 +67,19 @@ class TranslationService:
         self.summary_client = summary_client or create_chat_client(config.summary_model)
         self.review_port = review_port
 
-    def translate(self, request: TranslationRequest) -> TranslationResult:
+    def translate(
+        self,
+        request: TranslationRequest,
+        progress: ProgressEmitter | None = None,
+        emit_complete: bool = True,
+    ) -> TranslationResult:
+        progress = progress or ProgressEmitter("translate")
+        progress.emit(
+            stage="startup",
+            detail="prepare_task",
+            label="启动任务",
+            message="正在准备翻译任务",
+        )
         logger.info(
             "翻译任务开始: input=%s target_language=%s source_language=%s resume=%s review_mode=%s",
             request.input_file,
@@ -75,12 +88,18 @@ class TranslationService:
             request.resume,
             request.review_mode or self.config.pipeline.review_mode,
         )
-        resolved_input = self._resolve_input(request.input_file, request.source_language)
+        resolved_input = self._resolve_input(request.input_file, request.source_language, progress)
         input_file = resolved_input.subtitle_file
         output_file = request.output_file or self._default_output_file(
             input_file,
             request.target_language,
             request.source_language,
+        )
+        progress.emit(
+            stage="prepare_translation",
+            detail="resolve_output",
+            label="确定输出路径",
+            message=f"字幕输出将写入 {output_file}",
         )
         output_format = request.output_format or self.config.default_output_format
         checkpoint_file = sidecar_path(output_file, "_checkpoint.json")
@@ -95,6 +114,12 @@ class TranslationService:
         )
         trace_recorder = LlmTraceRecorder.for_run(output_file)
         report.llm_trace_dir = str(trace_recorder.trace_dir)
+        progress.emit(
+            stage="startup",
+            detail="prepare_diagnostics",
+            label="准备诊断目录",
+            message=f"LLM 诊断目录：{trace_recorder.trace_dir}",
+        )
         logger.info("LLM诊断目录已准备: %s", trace_recorder.trace_dir)
         logger.info(
             "翻译文件已准备: resolved_input=%s output=%s checkpoint=%s context=%s",
@@ -104,12 +129,25 @@ class TranslationService:
             context_file,
         )
 
+        progress.emit(
+            stage="prepare_input",
+            detail="read_subtitle",
+            label="读取字幕",
+            message=f"正在读取字幕：{input_file}",
+        )
         subtitle = SubtitleIO.read(
             input_file,
             max_chars=self.config.pipeline.max_chars,
             max_duration=self.config.pipeline.max_duration,
         )
         report.total_entries = len(subtitle.entries)
+        progress.emit(
+            stage="prepare_input",
+            detail="read_subtitle",
+            status="done",
+            label="读取字幕",
+            message=f"已读取 {report.total_entries} 条字幕",
+        )
         logger.info("字幕读取完成: entries=%s", report.total_entries)
 
         checkpoint = CheckpointStore(
@@ -120,9 +158,23 @@ class TranslationService:
             config_version=self.config.config_version,
         )
         resumed_indices = self._restore_checkpoint(request, subtitle, checkpoint, report)
+        progress.emit(
+            stage="prepare_translation",
+            detail="restore_checkpoint",
+            status="done" if resumed_indices else "skipped",
+            label="加载断点",
+            message=f"从断点恢复 {len(resumed_indices)} 条字幕" if resumed_indices else "没有可恢复断点，本次从头处理",
+        )
         if resumed_indices:
             logger.info("断点恢复完成: resumed_entries=%s", len(resumed_indices))
 
+        progress.emit(
+            stage="prepare_translation",
+            detail="generate_context",
+            label="生成上下文",
+            message="正在生成全局摘要和术语上下文",
+            model=self.config.summary_model,
+        )
         context_service = ContextService(
             self.summary_client,
             self.config.summary_model,
@@ -135,6 +187,15 @@ class TranslationService:
         context, context_usage = context_service.build_context(context_source, request.target_language)
         report.token_usage.add_usage(context_usage.to_dict())
         context_service.save_context(context, context_file)
+        progress.emit(
+            stage="prepare_translation",
+            detail="generate_context",
+            status="done",
+            label="生成上下文",
+            message=f"上下文已写入 {context_file}",
+            model=self.config.summary_model,
+            usage=context_usage,
+        )
         logger.info(
             "上下文生成完成: context_file=%s context_tokens=%s",
             context_file,
@@ -162,6 +223,14 @@ class TranslationService:
                 boundary_risks_by_key[(risk["before_index"], risk["after_index"])] = risk
         report.boundary_risks = list(boundary_risks_by_key.values())
         report.boundary_risk_count = len(report.boundary_risks)
+        progress.emit(
+            stage="prepare_translation",
+            detail="plan_chunks",
+            status="done",
+            label="规划片段",
+            message=f"已规划 {report.total_chunks} 个片段，短句保留 {report.short_entries} 条",
+            total_chunks=report.total_chunks,
+        )
         logger.info(
             "chunk规划完成: chunks=%s short_entries=%s boundary_risks=%s",
             report.total_chunks,
@@ -174,10 +243,18 @@ class TranslationService:
             self.config.translation_model,
             trace_recorder=trace_recorder,
             total_chunks=report.total_chunks,
+            progress=progress,
         )
         quality_gate = QualityGate()
         review_mode = request.review_mode or self.config.pipeline.review_mode
         review_port = self._review_port(review_mode)
+        progress.emit(
+            stage="processing_chunks",
+            detail="start_chunk_pool",
+            label="处理片段",
+            message=f"开始并发处理 {report.total_chunks} 个片段，并发数 {self.config.pipeline.threads}",
+            total_chunks=report.total_chunks,
+        )
         logger.info("审核模式: %s", review_mode)
         translated_entries: list[SubtitleEntry] = [
             entry for entry in subtitle.entries if entry.index in resumed_indices
@@ -197,11 +274,39 @@ class TranslationService:
                 report,
             )
 
+            progress.emit(
+                stage="generate_result",
+                detail="finalize_subtitle",
+                label="汇总字幕",
+                message="正在汇总所有字幕片段",
+            )
             self._finalize_subtitle(subtitle, translated_entries)
             report.stage = "完成"
             report.processed_entries = len(subtitle.entries)
             checkpoint.save(subtitle, report)
+            progress.emit(
+                stage="generate_result",
+                detail="write_srt",
+                label="写出字幕",
+                message=f"正在写出字幕：{output_file}",
+            )
             SubtitleIO.write_srt(subtitle, output_file, output_format=output_format)
+            progress.emit(
+                stage="generate_result",
+                detail="write_srt",
+                status="done",
+                label="写出字幕",
+                message=f"字幕已写出：{output_file}",
+            )
+            if emit_complete:
+                progress.emit(
+                    stage="complete",
+                    detail="complete",
+                    status="done",
+                    label="完成",
+                    message="翻译任务完成",
+                    total_chunks=report.total_chunks,
+                )
             logger.info(
                 "翻译任务完成: output=%s failed_chunks=%s total_tokens=%s",
                 output_file,
@@ -228,6 +333,22 @@ class TranslationService:
         report: TranslationReport,
     ) -> None:
         done_futures: set[concurrent.futures.Future] = set()
+        for planned in planned_chunks:
+            report_event_chunk = chunk_payload(
+                planned.entries,
+                chunk_index=planned.index,
+                total_chunks=report.total_chunks,
+                status="waiting",
+                detail="waiting",
+            )
+            translator_progress(translator).emit(
+                stage="processing_chunks",
+                detail="queue_chunk",
+                label="等待处理",
+                message=f"片段 {planned.index + 1}/{report.total_chunks} 已加入队列",
+                chunk=report_event_chunk,
+                total_chunks=report.total_chunks,
+            )
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.config.pipeline.threads) as executor:
             future_to_chunk = {
                 executor.submit(
@@ -269,11 +390,26 @@ class TranslationService:
                             planned.index + 1,
                             [entry.index for entry in planned.entries],
                         )
-                        self._handle_chunk_failure(planned, translated_entries, report, exc)
+                        self._handle_chunk_failure(planned, translated_entries, report, exc, translator.progress)
                     finally:
                         report.completed_chunks += 1
                         report.processed_entries = len({entry.index for entry in translated_entries})
                         checkpoint.save(subtitle, report)
+                        translator_progress(translator).emit(
+                            stage="processing_chunks",
+                            detail="checkpoint",
+                            status="done",
+                            label="保存断点",
+                            message=f"已保存片段 {planned.index + 1}/{report.total_chunks} 的进度",
+                            chunk=chunk_payload(
+                                planned.entries,
+                                chunk_index=planned.index,
+                                total_chunks=report.total_chunks,
+                                status="done" if not planned.entries or not any(entry.needs_retranslation for entry in planned.entries) else "warning",
+                                detail="checkpoint",
+                            ),
+                            total_chunks=report.total_chunks,
+                        )
 
     def _accept_chunk(
         self,
@@ -300,6 +436,21 @@ class TranslationService:
         if translator.trace_recorder:
             translator.trace_recorder.update_quality(result.final_trace_id, diagnosis)
         quality_gate.apply_diagnosis(planned.entries, diagnosis)
+        translator_progress(translator).emit(
+            stage="processing_chunks",
+            detail="quality",
+            status="running",
+            label="质量检查",
+            message=chunk_quality_message(planned.index, report.total_chunks, diagnosis),
+            chunk=chunk_payload(
+                planned.entries,
+                chunk_index=planned.index,
+                total_chunks=report.total_chunks,
+                status=quality_chunk_status(diagnosis, review_port),
+                detail="quality",
+                issue_summary=diagnosis.summary if diagnosis.has_issues else "",
+            ),
+        )
         if diagnosis.has_issues:
             logger.warning(
                 "chunk质量诊断命中: chunk=%s reliability=%s flagged=%s summary=%s",
@@ -335,6 +486,21 @@ class TranslationService:
                         repaired_diagnosis,
                     )
                 quality_gate.apply_diagnosis(planned.entries, repaired_diagnosis)
+                translator_progress(translator).emit(
+                    stage="processing_chunks",
+                    detail="quality",
+                    status="warning" if repaired_diagnosis.has_issues else "done",
+                    label="质量检查",
+                    message=chunk_quality_message(planned.index, report.total_chunks, repaired_diagnosis),
+                    chunk=chunk_payload(
+                        planned.entries,
+                        chunk_index=planned.index,
+                        total_chunks=report.total_chunks,
+                        status="warning" if repaired_diagnosis.has_issues else "done",
+                        detail="quality",
+                        issue_summary=repaired_diagnosis.summary if repaired_diagnosis.has_issues else "",
+                    ),
+                )
                 logger.info(
                     "chunk自动重译完成: chunk=%s reliability=%s flagged=%s",
                     planned.index + 1,
@@ -354,6 +520,21 @@ class TranslationService:
 
         for entry in planned.entries:
             translated_entries.append(entry)
+        final_status = "warning" if any(entry.needs_retranslation for entry in planned.entries) else "done"
+        translator_progress(translator).emit(
+            stage="processing_chunks",
+            detail="accept_chunk",
+            status=final_status,
+            label="接受片段",
+            message=f"片段 {planned.index + 1}/{report.total_chunks} 已接受",
+            chunk=chunk_payload(
+                planned.entries,
+                chunk_index=planned.index,
+                total_chunks=report.total_chunks,
+                status=final_status,
+                detail="accept_chunk",
+            ),
+        )
         logger.info("chunk接受完成: chunk=%s entries=%s", planned.index + 1, len(planned.entries))
 
     def _review_chunk_with_tui(
@@ -368,6 +549,20 @@ class TranslationService:
     ) -> None:
         max_rounds = 2
         for review_round in range(1, max_rounds + 1):
+            translator_progress(translator).emit(
+                stage="processing_chunks",
+                detail="tui_wait",
+                status="running",
+                label="等待复核",
+                message=f"片段 {planned.index + 1}/{report.total_chunks} 等待 TUI 复核",
+                chunk=chunk_payload(
+                    planned.entries,
+                    chunk_index=planned.index,
+                    total_chunks=report.total_chunks,
+                    status="review",
+                    detail="tui_wait",
+                ),
+            )
             review_result = review_port.review(
                 planned.entries,
                 planned.index,
@@ -394,6 +589,20 @@ class TranslationService:
             if not outcome.retranslated:
                 for entry in planned.entries:
                     entry.needs_retranslation = False
+                translator_progress(translator).emit(
+                    stage="processing_chunks",
+                    detail="tui_accept",
+                    status="done",
+                    label="复核完成",
+                    message=f"片段 {planned.index + 1}/{report.total_chunks} 已由用户接受",
+                    chunk=chunk_payload(
+                        planned.entries,
+                        chunk_index=planned.index,
+                        total_chunks=report.total_chunks,
+                        status="done",
+                        detail="tui_accept",
+                    ),
+                )
                 logger.info("TUI审核接受当前chunk: chunk=%s round=%s", planned.index + 1, review_round)
                 return
 
@@ -403,6 +612,20 @@ class TranslationService:
                     translator.trace_recorder.update_quality(trace_id, diagnosis)
             quality_gate.apply_diagnosis(planned.entries, diagnosis)
             if not diagnosis.has_issues:
+                translator_progress(translator).emit(
+                    stage="processing_chunks",
+                    detail="tui_quality",
+                    status="done",
+                    label="复核后质检",
+                    message=f"片段 {planned.index + 1}/{report.total_chunks} 复核后通过质量检查",
+                    chunk=chunk_payload(
+                        planned.entries,
+                        chunk_index=planned.index,
+                        total_chunks=report.total_chunks,
+                        status="done",
+                        detail="tui_quality",
+                    ),
+                )
                 logger.info("TUI重译后质量检查通过: chunk=%s round=%s", planned.index + 1, review_round)
                 return
 
@@ -418,6 +641,21 @@ class TranslationService:
         if translator.trace_recorder:
             for trace_id in outcome.trace_ids:
                 translator.trace_recorder.update_quality(trace_id, diagnosis, status="failed")
+        translator_progress(translator).emit(
+            stage="processing_chunks",
+            detail="tui_warning",
+            status="warning",
+            label="带风险继续",
+            message=f"片段 {planned.index + 1}/{report.total_chunks} 复核达到上限，带风险继续",
+            chunk=chunk_payload(
+                planned.entries,
+                chunk_index=planned.index,
+                total_chunks=report.total_chunks,
+                status="warning",
+                detail="tui_warning",
+                issue_summary=diagnosis.summary,
+            ),
+        )
         logger.warning("TUI复核达到上限，接受当前结果继续: chunk=%s", planned.index + 1)
 
     def _apply_tui_review_result(
@@ -440,6 +678,19 @@ class TranslationService:
 
         outcome = TuiReviewOutcome(retranslated=False)
         if ordinary_entries:
+            translator_progress(translator).emit(
+                stage="processing_chunks",
+                detail="tui_ordinary",
+                label="TUI 普通重译",
+                message=f"片段 {planned.index + 1}/{report.total_chunks} 正在重译 {len(ordinary_entries)} 行",
+                chunk=chunk_payload(
+                    ordinary_entries,
+                    chunk_index=planned.index,
+                    total_chunks=report.total_chunks,
+                    status="repairing",
+                    detail="tui_ordinary",
+                ),
+            )
             selected_result = translator.translate_and_refine(
                 ordinary_entries,
                 context,
@@ -473,6 +724,19 @@ class TranslationService:
             stable_anchors = planned.entries[max(0, drift_position - 6):drift_position]
             drift_entries = planned.entries[drift_position:]
             drift_usage = CompletionUsage()
+            translator_progress(translator).emit(
+                stage="processing_chunks",
+                detail="drift",
+                label="对齐漂移重译",
+                message=f"片段 {planned.index + 1}/{report.total_chunks} 从字幕 {drift_start} 开始重译",
+                chunk=chunk_payload(
+                    drift_entries,
+                    chunk_index=planned.index,
+                    total_chunks=report.total_chunks,
+                    status="repairing",
+                    detail="drift",
+                ),
+            )
             drift_result = translator.retranslate_alignment_drift_traced(
                 drift_entries,
                 stable_anchors,
@@ -512,8 +776,25 @@ class TranslationService:
         translated_entries: list[SubtitleEntry],
         report: TranslationReport,
         exc: Exception,
+        progress: ProgressEmitter | None,
     ) -> None:
         report.mark_failed(planned.index, [entry.index for entry in planned.entries], exc)
+        if progress is not None:
+            progress.emit(
+                stage="processing_chunks",
+                detail="chunk_failed",
+                status="failed",
+                label="片段失败",
+                message=f"片段 {planned.index + 1} 处理失败：{exc}",
+                chunk=chunk_payload(
+                    planned.entries,
+                    chunk_index=planned.index,
+                    total_chunks=report.total_chunks,
+                    status="failed",
+                    detail="chunk_failed",
+                    issue_summary=str(exc),
+                ),
+            )
         if self.config.pipeline.fallback_on_chunk_error == "abort":
             logger.error("chunk失败且配置为中止: chunk=%s error=%s", planned.index + 1, exc)
             raise exc
@@ -573,15 +854,27 @@ class TranslationService:
             return TuiReviewPort()
         return AutoReviewPort()
 
-    def _resolve_input(self, input_file: str, source_language: str) -> ResolvedInput:
+    def _resolve_input(self, input_file: str, source_language: str, progress: ProgressEmitter) -> ResolvedInput:
         if not self._is_url(input_file):
+            progress.emit(
+                stage="prepare_input",
+                detail="local_input",
+                label="准备输入",
+                message=f"使用本地输入：{input_file}",
+            )
             return ResolvedInput(subtitle_file=input_file)
 
         from subtitle_llm.media import download, transcribe
 
+        progress.emit(
+            stage="prepare_input",
+            detail="url_input",
+            label="准备输入",
+            message="检测到视频 URL，准备获取字幕或音频",
+        )
         logger.info("检测到URL输入，准备下载或复用媒体: url=%s source_language=%s", input_file, source_language)
         output_dir = Path.cwd() / "data" / "input"
-        result = download(input_file, output_dir, source_language)
+        result = download(input_file, output_dir, source_language, progress=progress)
         if len(result) == 3:
             _video_path, subtitle_path, audio_path = result
         else:
@@ -589,6 +882,13 @@ class TranslationService:
             audio_path = None
 
         if subtitle_path:
+            progress.emit(
+                stage="prepare_input",
+                detail="subtitle_ready",
+                status="done",
+                label="字幕就绪",
+                message=f"已获取字幕：{subtitle_path}",
+            )
             logger.info("URL输入解析到字幕: subtitle=%s video=%s", subtitle_path, _video_path)
             return ResolvedInput(subtitle_file=subtitle_path, video_file=_video_path)
         if not audio_path:
@@ -596,7 +896,14 @@ class TranslationService:
 
         srt_path = output_dir / f"{Path(audio_path).stem}.srt"
         logger.info("URL输入未找到字幕，准备ASR转写: audio=%s output=%s", audio_path, srt_path)
-        transcribed_path = transcribe(audio_path, source_language, srt_path, self.config.asr)
+        transcribed_path = transcribe(audio_path, source_language, srt_path, self.config.asr, progress=progress)
+        progress.emit(
+            stage="prepare_input",
+            detail="asr_ready",
+            status="done",
+            label="ASR 完成",
+            message=f"已生成字幕：{transcribed_path}",
+        )
         logger.info("ASR转写完成: srt=%s", transcribed_path)
         return ResolvedInput(subtitle_file=transcribed_path, video_file=_video_path)
 
@@ -630,3 +937,24 @@ class TranslationService:
         }
         normalized = language.strip().lower()
         return mapping.get(normalized, normalized[:2] or "translated")
+
+
+def translator_progress(translator: ChunkTranslator) -> ProgressEmitter:
+    return translator.progress or ProgressEmitter("translate")
+
+
+def chunk_quality_message(chunk_index: int, total_chunks: int, diagnosis) -> str:
+    if diagnosis.has_issues:
+        return (
+            f"片段 {chunk_index + 1}/{total_chunks} 质量检查发现 "
+            f"{diagnosis.flagged_entries} 行疑似问题：{diagnosis.summary}"
+        )
+    return f"片段 {chunk_index + 1}/{total_chunks} 质量检查通过"
+
+
+def quality_chunk_status(diagnosis, review_port: ReviewPort) -> str:
+    if not diagnosis.has_issues:
+        return "done"
+    if isinstance(review_port, AutoReviewPort):
+        return "repairing"
+    return "review"

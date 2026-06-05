@@ -20,6 +20,7 @@ from subtitle_llm.pipeline.text import (
     format_translation_reference,
     process_translation,
 )
+from subtitle_llm.progress_events import ProgressEmitter, chunk_payload
 from subtitle_llm.settings import ModelConfig
 
 
@@ -44,11 +45,13 @@ class ChunkTranslator:
         model_config: ModelConfig,
         trace_recorder: LlmTraceRecorder | None = None,
         total_chunks: int | None = None,
+        progress: ProgressEmitter | None = None,
     ):
         self.client = client
         self.model_config = model_config
         self.trace_recorder = trace_recorder
         self.total_chunks = total_chunks
+        self.progress = progress
 
     def translate_and_refine(
         self,
@@ -117,6 +120,14 @@ class ChunkTranslator:
             chunk_index=chunk_index,
             processed_translation=processed_translation,
         )
+        self._emit_chunk_progress(
+            stage,
+            "running",
+            f"{chunk_stage_label(stage)}响应已解析",
+            chunk,
+            chunk_index,
+            trace_id=trace_id,
+        )
         return TracedTranslationText(processed_translation, trace_id)
 
     def refine_translation(
@@ -151,6 +162,14 @@ class ChunkTranslator:
             chunk=chunk,
             chunk_index=chunk_index,
             processed_translation=processed_translation,
+        )
+        self._emit_chunk_progress(
+            stage,
+            "running",
+            f"{chunk_stage_label(stage)}响应已解析",
+            chunk,
+            chunk_index,
+            trace_id=trace_id,
         )
         return TracedTranslationText(processed_translation, trace_id)
 
@@ -236,6 +255,15 @@ class ChunkTranslator:
             chunk=chunk,
             processed_translation=result.content,
         )
+        self._emit_chunk_progress(
+            "missing-fix",
+            "repairing",
+            "缺失翻译修复响应已解析",
+            chunk,
+            None,
+            usage=result.usage,
+            duration_ms=duration_ms,
+        )
         return result.content
 
     def re_translate(
@@ -285,6 +313,14 @@ class ChunkTranslator:
             chunk=chunk,
             chunk_index=chunk_index,
             processed_translation=processed_translation,
+        )
+        self._emit_chunk_progress(
+            stage,
+            "repairing",
+            f"{chunk_stage_label(stage)}响应已解析",
+            chunk,
+            chunk_index,
+            trace_id=trace_id,
         )
         return TracedTranslationText(processed_translation, trace_id)
 
@@ -340,6 +376,14 @@ class ChunkTranslator:
             chunk_index=chunk_index,
             processed_translation=processed_translation,
         )
+        self._emit_chunk_progress(
+            "drift",
+            "repairing",
+            "对齐漂移重译响应已解析",
+            drift_chunk,
+            chunk_index,
+            trace_id=trace_id,
+        )
         return TracedTranslationText(processed_translation, trace_id)
 
     def _create_completion(
@@ -351,10 +395,26 @@ class ChunkTranslator:
         chunk_index: int | None = None,
     ) -> tuple[CompletionResult, int]:
         started_at = time.perf_counter()
+        self._emit_chunk_progress(
+            stage,
+            chunk_visual_status(stage),
+            f"正在{chunk_stage_label(stage)}"
+            + chunk_position_text(chunk_index, self.total_chunks),
+            chunk,
+            chunk_index,
+        )
         try:
             result = self.client.create_completion(self.model_config, [{"role": "user", "content": prompt}])
         except Exception as exc:
             duration_ms = elapsed_ms(started_at)
+            self._emit_chunk_progress(
+                stage,
+                "failed",
+                f"{chunk_stage_label(stage)}失败：{exc}",
+                chunk,
+                chunk_index,
+                duration_ms=duration_ms,
+            )
             if self.trace_recorder is not None:
                 self.trace_recorder.record_call(
                     stage="llm-error",
@@ -371,7 +431,17 @@ class ChunkTranslator:
                     error=str(exc),
                 )
             raise
-        return result, elapsed_ms(started_at)
+        duration_ms = elapsed_ms(started_at)
+        self._emit_chunk_progress(
+            stage,
+            chunk_visual_status(stage),
+            f"{chunk_stage_label(stage)}返回，耗时 {duration_ms / 1000:.1f}s",
+            chunk,
+            chunk_index,
+            usage=result.usage,
+            duration_ms=duration_ms,
+        )
+        return result, duration_ms
 
     def _record_trace(
         self,
@@ -403,6 +473,39 @@ class ChunkTranslator:
             error=error,
         )
 
+    def _emit_chunk_progress(
+        self,
+        detail: str,
+        visual_status: str,
+        message: str,
+        chunk: list[SubtitleEntry] | None,
+        chunk_index: int | None,
+        *,
+        usage: CompletionUsage | None = None,
+        duration_ms: int | None = None,
+        trace_id: str | None = None,
+    ) -> None:
+        if self.progress is None or chunk is None:
+            return
+        self.progress.emit(
+            stage="processing_chunks",
+            detail=detail_key(detail),
+            status="running" if visual_status != "failed" else "failed",
+            label=chunk_stage_label(detail),
+            message=message,
+            chunk=chunk_payload(
+                chunk,
+                chunk_index=chunk_index,
+                total_chunks=self.total_chunks,
+                status=visual_status,
+                detail=detail_key(detail),
+            ),
+            model=self.model_config,
+            usage=usage,
+            trace_id=trace_id,
+            duration_ms=duration_ms,
+        )
+
 
 def elapsed_ms(started_at: float) -> int:
     return max(0, round((time.perf_counter() - started_at) * 1000))
@@ -410,3 +513,37 @@ def elapsed_ms(started_at: float) -> int:
 
 def join_stage(prefix: str, stage: str) -> str:
     return f"{prefix}-{stage}" if prefix else stage
+
+
+def detail_key(stage: str) -> str:
+    return stage.replace("-", "_")
+
+
+def chunk_stage_label(stage: str) -> str:
+    normalized = detail_key(stage)
+    labels = {
+        "rough": "初译",
+        "refine": "润色",
+        "repair": "自动修复",
+        "missing_fix": "补齐缺失翻译",
+        "drift": "对齐漂移重译",
+        "tui_ordinary_rough": "TUI 普通重译初译",
+        "tui_ordinary_refine": "TUI 普通重译润色",
+        "llm_error": "模型请求",
+    }
+    return labels.get(normalized, normalized.replace("_", " "))
+
+
+def chunk_visual_status(stage: str) -> str:
+    normalized = detail_key(stage)
+    if "repair" in normalized or "drift" in normalized or "tui" in normalized or "missing_fix" in normalized:
+        return "repairing"
+    return "running"
+
+
+def chunk_position_text(chunk_index: int | None, total_chunks: int | None) -> str:
+    if chunk_index is None:
+        return ""
+    if total_chunks:
+        return f"第 {chunk_index + 1}/{total_chunks} 个片段"
+    return f"第 {chunk_index + 1} 个片段"

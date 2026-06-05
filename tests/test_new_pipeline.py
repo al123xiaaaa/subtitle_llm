@@ -1,3 +1,6 @@
+import contextlib
+import io
+import json
 import sys
 import os
 import tempfile
@@ -16,6 +19,7 @@ from subtitle_llm.pipeline import TranslationRequest, TranslationService
 from subtitle_llm.pipeline.checkpoint import CheckpointMismatch, CheckpointStore, file_fingerprint
 from subtitle_llm.pipeline.chunk_translator import ChunkTranslator
 from subtitle_llm.pipeline.quality import QualityGate
+from subtitle_llm.progress_events import PROGRESS_EVENT_PREFIX
 from subtitle_llm.review.tui import TuiReviewPort
 from subtitle_llm.settings import AppConfig, ModelConfig, ModelProvider, PipelineConfig
 
@@ -239,6 +243,53 @@ class TestNewPipeline(unittest.TestCase):
             self.assertEqual(data["response_shape"]["inline_index_markers"], 2)
             response_path = trace_dir / data["files"]["response"]
             self.assertIn("[1] 同行译文1", response_path.read_text(encoding="utf-8"))
+
+    def test_translation_emits_user_visible_work_progress_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.srt"
+            output_path = Path(tmp) / "output.srt"
+            input_path.write_text(
+                "1\n00:00:01,000 --> 00:00:02,000\nHello world.\n\n"
+                "2\n00:00:03,000 --> 00:00:04,000\nThis is a second line.\n\n",
+                encoding="utf-8",
+            )
+            service = TranslationService(
+                make_config(),
+                translation_client=FakeLLMClient(),
+                summary_client=FakeLLMClient(),
+            )
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                service.translate(
+                    TranslationRequest(
+                        input_file=str(input_path),
+                        output_file=str(output_path),
+                        target_language="Chinese",
+                    )
+                )
+
+            events = [
+                json.loads(line.removeprefix(PROGRESS_EVENT_PREFIX))
+                for line in stdout.getvalue().splitlines()
+                if line.startswith(PROGRESS_EVENT_PREFIX)
+            ]
+            details = {event["detail"] for event in events}
+            self.assertIn("prepare_task", details)
+            self.assertIn("generate_context", details)
+            self.assertIn("plan_chunks", details)
+            self.assertIn("rough", details)
+            self.assertIn("refine", details)
+            self.assertIn("quality", details)
+            self.assertIn("write_srt", details)
+            self.assertIn("complete", details)
+            self.assertTrue(
+                any(
+                    event.get("chunk", {}).get("status") == "done"
+                    for event in events
+                    if event["detail"] in {"quality", "accept_chunk", "checkpoint"}
+                )
+            )
 
     def test_failed_auto_repair_replaces_partial_placeholders_with_source_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:

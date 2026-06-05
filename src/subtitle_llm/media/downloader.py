@@ -8,13 +8,26 @@ from typing import Any, cast
 
 from yt_dlp import YoutubeDL
 
+from subtitle_llm.progress_events import ProgressEmitter
+
 logger = logging.getLogger(__name__)
 
 
-def download(url: str, output_dir: str | Path, source_language: str = "en"):
+def download(
+    url: str,
+    output_dir: str | Path,
+    source_language: str = "en",
+    progress: ProgressEmitter | None = None,
+):
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
+    emit_progress(
+        progress,
+        "metadata",
+        "读取视频元信息",
+        "正在读取视频元信息",
+    )
     logger.info("读取视频元信息: url=%s output_dir=%s source_language=%s", url, output_path, source_language)
     with YoutubeDL({"quiet": True}) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -31,13 +44,33 @@ def download(url: str, output_dir: str | Path, source_language: str = "en"):
     audio_path = _find_file(output_path, title, ".wav")
 
     if subtitle_path:
+        emit_progress(
+            progress,
+            "reuse_subtitle",
+            "复用字幕",
+            f"复用已下载字幕：{subtitle_path}",
+            status="done",
+        )
         logger.info("复用已下载字幕: title=%s video=%s subtitle=%s", title, video_path, subtitle_path)
         return video_path, subtitle_path
     if audio_path:
+        emit_progress(
+            progress,
+            "reuse_audio",
+            "复用音频",
+            f"复用已下载音频：{audio_path}",
+            status="done",
+        )
         logger.info("复用已下载音频: title=%s video=%s audio=%s", title, video_path, audio_path)
         return video_path, None, audio_path
 
     if has_manual or has_auto:
+        emit_progress(
+            progress,
+            "download_subtitle",
+            "下载字幕",
+            f"正在下载视频和{'人工' if has_manual else '自动'}字幕",
+        )
         logger.info("开始下载视频和字幕: title=%s lang=%s manual_subtitle=%s", title, lang_code, has_manual)
         ydl_opts = {
             "format": "bestvideo+bestaudio/best",
@@ -54,9 +87,22 @@ def download(url: str, output_dir: str | Path, source_language: str = "en"):
             _find_file(output_path, title, ".mp4", ".mkv", ".webm"),
             _find_file(output_path, title, f".{lang_code}.srt", ".srt"),
         )
+        emit_progress(
+            progress,
+            "download_subtitle",
+            "下载字幕",
+            "视频和字幕下载完成",
+            status="done",
+        )
         logger.info("视频和字幕下载完成: title=%s result=%s", title, result)
         return result
 
+    emit_progress(
+        progress,
+        "extract_audio",
+        "提取音频",
+        "未找到字幕，正在下载视频并提取音频",
+    )
     logger.info("开始下载视频并提取音频: title=%s", title)
     ydl_opts = {
         "format": "bestvideo+bestaudio/best",
@@ -72,8 +118,34 @@ def download(url: str, output_dir: str | Path, source_language: str = "en"):
         None,
         _find_file(output_path, title, ".wav"),
     )
+    emit_progress(
+        progress,
+        "extract_audio",
+        "提取音频",
+        "视频和音频下载完成",
+        status="done",
+    )
     logger.info("视频和音频下载完成: title=%s result=%s", title, result)
     return result
+
+
+def emit_progress(
+    progress: ProgressEmitter | None,
+    detail: str,
+    label: str,
+    message: str,
+    *,
+    status: str = "running",
+) -> None:
+    if progress is None:
+        return
+    progress.emit(
+        stage="prepare_input" if progress.command == "translate" else "download",
+        detail=detail,
+        status=status,
+        label=label,
+        message=message,
+    )
 
 
 def _sanitize_filename(name: str) -> str:

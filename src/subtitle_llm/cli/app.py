@@ -14,6 +14,7 @@ from subtitle_llm.media.muxer import MuxError
 from subtitle_llm.media import transcribe as transcribe_audio
 from subtitle_llm.pipeline import TranslationRequest, TranslationService
 from subtitle_llm.pipeline.report import TranslationReport
+from subtitle_llm.progress_events import ProgressEmitter
 from subtitle_llm.runtime_logging import configure_run_logging
 from subtitle_llm.settings import ConfigError, load_config
 
@@ -83,6 +84,13 @@ def translate(
 ) -> None:
     """Translate an SRT file, word-level JSON transcript, or video URL."""
     log_path = configure_run_logging("translate")
+    progress = ProgressEmitter("translate")
+    progress.emit(
+        stage="startup",
+        detail="load_config",
+        label="加载配置",
+        message="正在加载模型和翻译配置",
+    )
     logger.info(
         "用户操作: translate input=%s output=%s target_language=%s source_language=%s config=%s format=%s resume=%s review=%s embed_video=%s video=%s video_output=%s",
         input_file,
@@ -108,7 +116,9 @@ def translate(
                 output_format=output_format,
                 resume=resume,
                 review_mode=None if review is None else ("tui" if review else "auto"),
-            )
+            ),
+            progress=progress,
+            emit_complete=not embed_video,
         )
         if embed_video:
             _embed_translated_subtitle(
@@ -117,6 +127,19 @@ def translate(
                 video_output=video_output,
                 target_language=target_language,
                 ffmpeg=ffmpeg,
+                progress=progress,
+            )
+            progress.emit(
+                stage="complete",
+                detail="complete",
+                status="warning" if result.report.embedded_video_error else "done",
+                label="完成",
+                message=(
+                    f"翻译完成，MKV 未生成：{result.report.embedded_video_error}"
+                    if result.report.embedded_video_error
+                    else "翻译和 MKV 生成已完成"
+                ),
+                total_chunks=result.report.total_chunks,
             )
     except Exception:
         logger.exception("命令失败: translate")
@@ -150,6 +173,13 @@ def mux(
 ) -> None:
     """Mux translated SRT as the default soft subtitle track in an MKV."""
     log_path = configure_run_logging("mux")
+    progress = ProgressEmitter("mux")
+    progress.emit(
+        stage="mux",
+        detail="validate_input",
+        label="检查输入",
+        message="正在检查视频和字幕文件",
+    )
     logger.info(
         "用户操作: mux video=%s subtitle=%s output=%s target_language=%s ffmpeg=%s",
         video,
@@ -159,6 +189,12 @@ def mux(
         ffmpeg,
     )
     try:
+        progress.emit(
+            stage="mux",
+            detail="run_ffmpeg",
+            label="执行 FFmpeg",
+            message="正在生成 MKV 软字幕视频",
+        )
         result = mux_subtitle_track(
             video_file=video,
             subtitle_file=subtitle,
@@ -167,11 +203,25 @@ def mux(
             ffmpeg=ffmpeg,
         )
     except MuxError as exc:
+        progress.emit(
+            stage="mux",
+            detail="run_ffmpeg",
+            status="failed",
+            label="生成失败",
+            message=str(exc),
+        )
         logger.exception("命令失败: mux")
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         typer.secho(f"日志文件：{log_path}", fg=typer.colors.YELLOW, err=True)
         raise typer.Exit(2) from exc
     logger.info("命令完成: mux output=%s", result.output_file)
+    progress.emit(
+        stage="complete",
+        detail="complete",
+        status="done",
+        label="完成",
+        message=f"MKV 已生成：{result.output_file}",
+    )
     typer.echo("===== MKV 生成完成 =====")
     typer.echo(f"输出视频：{result.output_file}")
     emit_result_event("mux", output_video_file=result.output_file)
@@ -188,6 +238,13 @@ def download(
 ) -> None:
     """Download a video and available subtitles."""
     log_path = configure_run_logging("download")
+    progress = ProgressEmitter("download")
+    progress.emit(
+        stage="startup",
+        detail="prepare_task",
+        label="启动任务",
+        message="正在准备下载任务",
+    )
     logger.info(
         "用户操作: download url=%s output_dir=%s source_language=%s",
         url,
@@ -195,12 +252,19 @@ def download(
         source_language,
     )
     try:
-        result = download_media(url, output_dir, source_language)
+        result = download_media(url, output_dir, source_language, progress=progress)
     except Exception:
         logger.exception("命令失败: download")
         typer.secho(f"日志文件：{log_path}", fg=typer.colors.YELLOW, err=True)
         raise
     logger.info("命令完成: download result=%s", result)
+    progress.emit(
+        stage="complete",
+        detail="complete",
+        status="done",
+        label="完成",
+        message="下载任务完成",
+    )
     typer.echo(result)
     typer.echo(f"日志文件：{log_path}")
 
@@ -214,6 +278,13 @@ def transcribe(
 ) -> None:
     """Transcribe audio to SRT with the configured ASR model."""
     log_path = configure_run_logging("transcribe")
+    progress = ProgressEmitter("transcribe")
+    progress.emit(
+        stage="startup",
+        detail="load_config",
+        label="加载配置",
+        message="正在加载转写配置",
+    )
     logger.info(
         "用户操作: transcribe audio=%s output=%s language=%s config=%s",
         audio,
@@ -223,12 +294,19 @@ def transcribe(
     )
     try:
         app_config = load_config(config)
-        transcribe_audio(audio, language, output, app_config.asr)
+        transcribe_audio(audio, language, output, app_config.asr, progress=progress)
     except Exception:
         logger.exception("命令失败: transcribe")
         typer.secho(f"日志文件：{log_path}", fg=typer.colors.YELLOW, err=True)
         raise
     logger.info("命令完成: transcribe output=%s", output)
+    progress.emit(
+        stage="complete",
+        detail="complete",
+        status="done",
+        label="完成",
+        message=f"字幕已生成：{output}",
+    )
     typer.echo(f"日志文件：{log_path}")
 
 
@@ -238,14 +316,30 @@ def _embed_translated_subtitle(
     video_output: Path | None,
     target_language: str,
     ffmpeg: str,
+    progress: ProgressEmitter | None = None,
 ) -> None:
     source_video = str(video_file) if video_file else report.source_video_file
     if not source_video:
         report.embedded_video_error = "未选择视频，跳过生成 MKV"
+        if progress is not None:
+            progress.emit(
+                stage="generate_result",
+                detail="mux_skipped",
+                status="skipped",
+                label="生成 MKV",
+                message=report.embedded_video_error,
+            )
         logger.warning("视频封装跳过: %s", report.embedded_video_error)
         return
 
     try:
+        if progress is not None:
+            progress.emit(
+                stage="generate_result",
+                detail="mux_video",
+                label="生成 MKV",
+                message="正在将字幕作为软字幕轨道嵌入视频",
+            )
         result = mux_subtitle_track(
             video_file=source_video,
             subtitle_file=report.output_file,
@@ -255,10 +349,26 @@ def _embed_translated_subtitle(
         )
     except MuxError as exc:
         report.embedded_video_error = str(exc)
+        if progress is not None:
+            progress.emit(
+                stage="generate_result",
+                detail="mux_video",
+                status="failed",
+                label="生成 MKV",
+                message=str(exc),
+            )
         logger.exception("视频封装失败: video=%s subtitle=%s", source_video, report.output_file)
         return
 
     report.embedded_video_file = result.output_file
+    if progress is not None:
+        progress.emit(
+            stage="generate_result",
+            detail="mux_video",
+            status="done",
+            label="生成 MKV",
+            message=f"MKV 已生成：{result.output_file}",
+        )
     logger.info("视频封装完成: output=%s", result.output_file)
 
 

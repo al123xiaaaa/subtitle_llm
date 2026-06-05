@@ -7,6 +7,15 @@ import { buildEnv, buildPythonArgs } from "../../dist/electron/lib/cliCommands.j
 import { createDesktopRuntime } from "../../dist/electron/lib/desktopRuntime.js";
 import { createFfmpegDetector } from "../../dist/electron/lib/ffmpegStatus.js";
 import { buildDesktopModelConfigContent } from "../../dist/electron/lib/modelConfig.js";
+import {
+  applyProgressEvent,
+  chunkSummary,
+  createInitialJobProgressState,
+  finishProgress,
+  selectProgressChunk,
+  selectedChunk,
+  startProgress,
+} from "../../dist/electron/lib/progressModel.js";
 import { getProvider, listProviders, resolveModelId } from "../../dist/electron/lib/providerCatalog.js";
 import {
   clearApiKey,
@@ -166,6 +175,68 @@ assert.equal(detectFfmpeg().available, true);
 assert.equal(detectFfmpeg().executable, "/tmp/fake-ffmpeg");
 assert.equal(ffmpegChecks, 1);
 assert.equal(createFfmpegDetector({ env: { SUBTITLE_LLM_DISABLE_FFMPEG_DETECT: "1" } })().available, false);
+
+let progress = startProgress("translate", 1000);
+progress = applyProgressEvent(
+  progress,
+  {
+    command: "translate",
+    stage: "prepare_translation",
+    detail: "plan_chunks",
+    status: "done",
+    label: "规划片段",
+    message: "已规划 3 个片段",
+    total_chunks: 3,
+  },
+  1100,
+);
+assert.equal(progress.chunks.length, 3);
+assert.equal(progress.chunks[0].status, "waiting");
+progress = applyProgressEvent(
+  progress,
+  {
+    command: "translate",
+    stage: "processing_chunks",
+    detail: "quality",
+    status: "done",
+    label: "质量检查",
+    message: "片段 2 通过",
+    chunk: { index: 2, total: 3, status: "done", entry_start: 10, entry_end: 20 },
+  },
+  1200,
+);
+progress = applyProgressEvent(
+  progress,
+  {
+    command: "translate",
+    stage: "processing_chunks",
+    detail: "drift",
+    status: "running",
+    label: "对齐漂移重译",
+    message: "片段 2 回退到重译",
+    chunk: { index: 2, total: 3, status: "repairing" },
+  },
+  1300,
+);
+assert.equal(progress.chunks[1].status, "repairing");
+progress = applyProgressEvent(
+  progress,
+  {
+    command: "translate",
+    stage: "processing_chunks",
+    detail: "tui_warning",
+    status: "warning",
+    label: "带风险继续",
+    message: "片段 2 带风险继续",
+    chunk: { index: 2, total: 3, status: "warning", issue_summary: "仍有疑似缺失" },
+  },
+  1400,
+);
+progress = selectProgressChunk(progress, 2);
+assert.equal(selectedChunk(progress).issueSummary, "仍有疑似缺失");
+assert.match(chunkSummary(progress.chunks), /1 个带风险/);
+assert.equal(finishProgress(progress, true, 1500).currentStatus, "done");
+assert.equal(createInitialJobProgressState().currentLabel, "等待任务");
 
 const runtimeProjectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "subtitle-llm-runtime-"));
 const runtimeUserData = path.join(runtimeProjectRoot, "userData");

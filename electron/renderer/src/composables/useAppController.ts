@@ -2,6 +2,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import type {
   AppState,
   CliResultEvent,
+  CliProgressEvent,
   CommandName,
   DesktopJobRequest,
   JobEvent,
@@ -10,8 +11,10 @@ import type {
   ProviderSummary,
   ReviewMode,
 } from "../../../types";
+import { useJobProgress } from "./useJobProgress";
 
 const RESULT_EVENT_PREFIX = "SUBTITLE_LLM_RESULT ";
+const PROGRESS_EVENT_PREFIX = "SUBTITLE_LLM_PROGRESS ";
 
 type TaskTab = "translate" | "download" | "transcribe" | "settings";
 type ResultTarget = "subtitle" | "trace" | "video";
@@ -50,6 +53,21 @@ export function useAppController() {
   const runStatus = ref("空闲");
   const logText = ref("");
   const logBody = ref<HTMLElement | null>(null);
+  const {
+    chunkStatusLabel,
+    chunkTooltip,
+    finishJobProgress,
+    progressChunkSummary,
+    progressChunks,
+    progressLongWaitHint,
+    progressStages,
+    progressState,
+    progressWaitText,
+    recordProgress,
+    resetProgress,
+    selectChunk,
+    selectedProgressChunk,
+  } = useJobProgress();
 
   const lastOutputPath = ref("");
   const lastSubtitlePath = ref("");
@@ -281,9 +299,25 @@ export function useAppController() {
     lastLlmTraceDir.value = cleaned;
   }
 
-  function parseResultEvents(text: string): void {
-    for (const line of text.split(/\r?\n/)) {
-      parseResultEvent(line);
+  function parseStructuredEvent(line: string): boolean {
+    if (parseProgressEvent(line)) {
+      return true;
+    }
+    return parseResultEvent(line);
+  }
+
+  function parseProgressEvent(line: string): boolean {
+    if (!line.startsWith(PROGRESS_EVENT_PREFIX)) {
+      return false;
+    }
+
+    try {
+      const event = JSON.parse(line.slice(PROGRESS_EVENT_PREFIX.length)) as CliProgressEvent;
+      recordProgress(event);
+      return true;
+    } catch (error) {
+      appendLog(`进度事件解析失败：${error instanceof Error ? error.message : String(error)}\n`, "stderr");
+      return true;
     }
   }
 
@@ -304,6 +338,25 @@ export function useAppController() {
       appendLog(`结果事件解析失败：${error instanceof Error ? error.message : String(error)}\n`, "stderr");
       return true;
     }
+  }
+
+  function consumeStructuredStdout(text: string): string {
+    const trailingNewline = /\r?\n$/.test(text);
+    const visibleLines: string[] = [];
+    const lines = text.split(/\r?\n/);
+    lines.forEach((line, index) => {
+      if (index === lines.length - 1 && line === "" && trailingNewline) {
+        return;
+      }
+      if (parseStructuredEvent(line)) {
+        return;
+      }
+      visibleLines.push(line);
+    });
+    if (!visibleLines.length) {
+      return "";
+    }
+    return `${visibleLines.join("\n")}${trailingNewline ? "\n" : ""}`;
   }
 
   function syncEmbedDefault(): void {
@@ -375,6 +428,7 @@ export function useAppController() {
     try {
       setBusy(true);
       setStatus("启动中");
+      resetProgress(request.command);
       appendLog(`\n$ subtitle-llm ${request.command}\n`);
       const response = await api.startJob(request);
       activeJobId.value = response.jobId;
@@ -382,6 +436,7 @@ export function useAppController() {
     } catch (error) {
       setBusy(false);
       setStatus("启动失败");
+      finishJobProgress(false);
       appendLog(`${error instanceof Error ? error.message : String(error)}\n`, "stderr");
     }
   }
@@ -632,22 +687,27 @@ export function useAppController() {
   function handleJobEvent(event: JobEvent): void {
     if (event.type === "started") {
       setStatus("运行中");
+      resetProgress(event.command);
       appendLog(`Python: ${event.pythonExecutable}\n工作目录: ${event.cwd}\n`);
       if (event.generatedConfigPath) {
         appendLog(`模型配置: ${event.generatedConfigPath}\n`);
       }
     } else if (event.type === "stdout") {
-      appendLog(event.text);
-      parseResultEvents(event.text);
+      const visibleText = consumeStructuredStdout(event.text);
+      if (visibleText) {
+        appendLog(visibleText);
+      }
     } else if (event.type === "stderr") {
       appendLog(event.text, "stderr");
     } else if (event.type === "error") {
       setBusy(false);
       setStatus("失败");
+      finishJobProgress(false);
       appendLog(`${event.message}\n`, "stderr");
     } else if (event.type === "finished") {
       setBusy(false);
       setStatus(event.code === 0 ? "完成" : `退出码 ${event.code}`);
+      finishJobProgress(event.code === 0);
       appendLog(`\n任务结束：code=${event.code} signal=${event.signal || "none"}\n`, event.code === 0 ? "stdout" : "stderr");
     }
   }
@@ -675,6 +735,8 @@ export function useAppController() {
     canStartMux,
     canStartTranslate,
     cancelJob,
+    chunkStatusLabel,
+    chunkTooltip,
     chooseAudio,
     chooseDownloadDir,
     chooseInput,
@@ -720,13 +782,21 @@ export function useAppController() {
     providerModels,
     providers,
     persistProviderPreference,
+    progressChunkSummary,
+    progressChunks,
+    progressLongWaitHint,
+    progressStages,
+    progressState,
+    progressWaitText,
     runStatus,
     runtimeInfo,
     saveOnboardingKey,
     saveSettingsKey,
+    selectChunk,
     selectedModelId,
     selectedOnboardingProviderId,
     selectedProviderId,
+    selectedProgressChunk,
     selectOnboardingProvider,
     setActiveTab,
     showConfigureProvider,

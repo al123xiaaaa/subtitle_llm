@@ -24,6 +24,14 @@ function optionValue(flag) {
   return index >= 0 ? args[index + 1] : "";
 }
 
+function progress(event) {
+  console.log("SUBTITLE_LLM_PROGRESS " + JSON.stringify({
+    command,
+    elapsed_ms: 10,
+    ...event,
+  }));
+}
+
 if (commandLog) {
   fs.appendFileSync(commandLog, JSON.stringify({
     args,
@@ -39,6 +47,65 @@ if (commandLog) {
 setTimeout(() => {
   if (command === "translate") {
     const output = optionValue("--output") || "data/output/youtube.zh.srt";
+    progress({
+      stage: "startup",
+      detail: "load_config",
+      status: "done",
+      label: "加载配置",
+      message: "配置已加载",
+    });
+    progress({
+      stage: "prepare_translation",
+      detail: "plan_chunks",
+      status: "done",
+      label: "规划片段",
+      message: "已规划 4 个片段",
+      total_chunks: 4,
+    });
+    progress({
+      stage: "processing_chunks",
+      detail: "rough",
+      status: "running",
+      label: "初译",
+      message: "正在初译第 2/4 个片段",
+      total_chunks: 4,
+      chunk: { index: 2, total: 4, status: "running", entry_start: 20, entry_end: 39, detail: "rough" },
+      model: { provider: "deepseek", name: "deepseek-v4-pro" },
+    });
+    progress({
+      stage: "processing_chunks",
+      detail: "tui_warning",
+      status: "warning",
+      label: "带风险继续",
+      message: "片段 2 复核达到上限，带风险继续",
+      total_chunks: 4,
+      chunk: {
+        index: 2,
+        total: 4,
+        status: "warning",
+        entry_start: 20,
+        entry_end: 39,
+        issue_summary: "仍有疑似缺失",
+      },
+      trace_id: "000002",
+    });
+    progress({
+      stage: "processing_chunks",
+      detail: "quality",
+      status: "done",
+      label: "质量检查",
+      message: "片段 1/4 质量检查通过",
+      total_chunks: 4,
+      chunk: { index: 1, total: 4, status: "done", entry_start: 1, entry_end: 19 },
+    });
+    progress({
+      stage: "generate_result",
+      detail: "write_srt",
+      status: "done",
+      label: "写出字幕",
+      message: "字幕已写出：" + output,
+      total_chunks: 4,
+    });
     console.log("\\n===== 翻译完成 =====");
     console.log("输出格式：source-first");
     console.log("SUBTITLE_LLM_RESULT " + JSON.stringify({
@@ -58,6 +125,20 @@ setTimeout(() => {
 
   if (command === "mux") {
     const output = optionValue("--output") || "data/output/manual.zh.mkv";
+    progress({
+      stage: "mux",
+      detail: "run_ffmpeg",
+      status: "running",
+      label: "执行 FFmpeg",
+      message: "正在生成 MKV 软字幕视频",
+    });
+    progress({
+      stage: "complete",
+      detail: "complete",
+      status: "done",
+      label: "完成",
+      message: "MKV 已生成：" + output,
+    });
     console.log("===== MKV 生成完成 =====");
     console.log("SUBTITLE_LLM_RESULT " + JSON.stringify({ command: "mux", output_video_file: output }));
     console.log("日志文件：data/logs/e2e_mux.log");
@@ -118,6 +199,10 @@ async function testYoutubeTranslateWithMkv() {
     await page.locator("#startTranslate").click();
     await waitForRunStatus(page, "完成");
 
+    await page.locator("#progressCurrentMessage", { hasText: "任务已完成" }).waitFor();
+    await page.locator("#chunkActivitySummary", { hasText: "4 个片段" }).waitFor();
+    await page.locator("#chunkActivity .chunk-cell.is-warning").click();
+    await page.locator("#chunkActivityDetail", { hasText: "仍有疑似缺失" }).waitFor();
     await page.locator("#subtitleResultPath", { hasText: "data/output/youtube.zh.srt" }).waitFor();
     await page.locator("#videoResultPath", { hasText: "data/output/youtube.zh.mkv" }).waitFor();
     await page.locator("#traceResultPath", { hasText: "data/logs/e2e_translate_llm_trace" }).waitFor();

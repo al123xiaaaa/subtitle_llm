@@ -8,6 +8,7 @@ from typing import Any, Final
 
 from subtitle_llm.domain import Subtitle, SubtitleEntry
 from subtitle_llm.io import SubtitleIO, seconds_to_srt_time
+from subtitle_llm.progress_events import ProgressEmitter
 from subtitle_llm.settings import ASRConfig
 
 # FunASR SenseVoiceSmall 支持的语言代码映射
@@ -214,6 +215,7 @@ def transcribe(
     language: str | None,
     output_path: str | Path,
     config: ASRConfig | None = None,
+    progress: ProgressEmitter | None = None,
 ) -> str:
     """使用 FunASR SenseVoiceSmall 将音频转写为 SRT 字幕文件。
 
@@ -226,6 +228,13 @@ def transcribe(
 
     config = config or ASRConfig()
     asr_language = normalize_asr_language(language)
+    emit_progress(
+        progress,
+        "normalize_language",
+        "识别语言",
+        f"ASR 语言：{'自动识别' if asr_language is None else asr_language}",
+        status="done",
+    )
 
     if asr_language != language:
         display_language = "自动识别" if asr_language is None else asr_language
@@ -235,17 +244,20 @@ def transcribe(
     device = config.device or "cpu"
 
     # Step 1: VAD 获取语音片段时间戳
+    emit_progress(progress, "vad", "VAD 检测", "正在检测语音片段")
     print("正在运行 VAD 检测语音片段...")
     vad_model = AutoModel(
         model=config.vad_model, device=device, disable_update=True
     )
     vad_result = vad_model.generate(input=str(audio_path), batch_size=1)
     vad_segments = vad_result[0]["value"]  # [[start_ms, end_ms], ...]
+    emit_progress(progress, "vad", "VAD 检测", f"检测到 {len(vad_segments)} 个语音片段", status="done")
     print(f"VAD 检测到 {len(vad_segments)} 个语音片段")
 
     # Step 2: ASR + VAD 组合调用获取文本
     # SenseVoiceSmall + VAD 会对每个 VAD 片段独立转写，
     # 输出合并为一条文本，每个片段以 <|lang|> 标签开头
+    emit_progress(progress, "load_asr", "加载 ASR", f"正在加载 FunASR 模型 ({config.model})")
     print(f"正在加载 FunASR 模型 ({config.model})...")
     asr_model = AutoModel(
         model=config.model,
@@ -255,6 +267,7 @@ def transcribe(
         disable_update=True,
     )
 
+    emit_progress(progress, "transcribe_audio", "转写音频", f"正在转写：{audio_path.name}")
     print(f"正在转写：{audio_path.name}...")
     funasr_lang = _to_funasr_language(asr_language)
     generate_kwargs: dict[str, Any] = {"batch_size": 1}
@@ -263,6 +276,7 @@ def transcribe(
 
     asr_result = asr_model.generate(input=str(audio_path), **generate_kwargs)
     raw_text = asr_result[0].get("text", "")
+    emit_progress(progress, "transcribe_audio", "转写音频", "音频转写完成", status="done")
 
     # Step 3: 按 <|lang|> 标签分割文本
     # SenseVoiceSmall 输出格式: <|en|><|EMO_UNKNOWN|><|Speech|><|woitn|>text ...
@@ -310,6 +324,27 @@ def transcribe(
                 )
             )
 
+    emit_progress(progress, "write_srt", "写出字幕", f"正在写出字幕：{output_path}")
     SubtitleIO.write_srt(subtitle, output_path, output_format="source-only")
+    emit_progress(progress, "write_srt", "写出字幕", f"字幕已生成：{output_path}", status="done")
     print(f"字幕已生成：{output_path}（{len(subtitle.entries)} 条）")
     return str(output_path)
+
+
+def emit_progress(
+    progress: ProgressEmitter | None,
+    detail: str,
+    label: str,
+    message: str,
+    *,
+    status: str = "running",
+) -> None:
+    if progress is None:
+        return
+    progress.emit(
+        stage="prepare_input" if progress.command == "translate" else "transcribe",
+        detail=detail,
+        status=status,
+        label=label,
+        message=message,
+    )

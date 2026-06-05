@@ -7,6 +7,8 @@ const {
   canStartMux,
   canStartTranslate,
   cancelJob,
+  chunkStatusLabel,
+  chunkTooltip,
   chooseAudio,
   chooseDownloadDir,
   chooseInput,
@@ -51,10 +53,18 @@ const {
   providerCredentialStatus,
   providerModels,
   providers,
+  progressChunkSummary,
+  progressChunks,
+  progressLongWaitHint,
+  progressStages,
+  progressState,
+  progressWaitText,
   runStatus,
   runtimeInfo,
   saveOnboardingKey,
   saveSettingsKey,
+  selectChunk,
+  selectedProgressChunk,
   selectedModelId,
   selectedOnboardingProviderId,
   selectedProviderId,
@@ -781,7 +791,7 @@ const {
         <div class="run-heading">
           <div>
             <h2 id="runTitle">
-              任务日志
+              工作进度
             </h2>
             <p id="runStatus">
               {{ runStatus }}
@@ -824,6 +834,96 @@ const {
               清空
             </button>
           </div>
+        </div>
+        <div
+          id="progressDashboard"
+          class="progress-dashboard"
+        >
+          <div class="current-progress">
+            <div>
+              <span class="progress-kicker">{{ progressState.currentLabel }}</span>
+              <strong id="progressCurrentMessage">{{ progressState.currentMessage }}</strong>
+            </div>
+            <span
+              id="progressWaitText"
+              class="progress-wait"
+            >{{ progressWaitText }}</span>
+          </div>
+          <p
+            id="progressLongWaitHint"
+            :class="['progress-hint', { 'is-hidden': !progressLongWaitHint }]"
+          >
+            {{ progressLongWaitHint }}
+          </p>
+          <div
+            id="progressTimeline"
+            class="progress-timeline"
+            aria-label="任务阶段"
+          >
+            <div
+              v-for="stage in progressStages"
+              :key="stage.id"
+              :class="['progress-stage', `is-${stage.status}`]"
+            >
+              <span class="stage-dot" />
+              <span>{{ stage.label }}</span>
+            </div>
+          </div>
+          <section
+            id="chunkActivity"
+            :class="['chunk-activity', { 'is-hidden': progressChunks.length === 0 }]"
+            aria-labelledby="chunkActivityTitle"
+          >
+            <div class="chunk-activity-heading">
+              <div>
+                <h3 id="chunkActivityTitle">
+                  片段活动
+                </h3>
+                <p id="chunkActivitySummary">
+                  {{ progressChunkSummary }}
+                </p>
+              </div>
+              <span class="status-pill is-env">并发</span>
+            </div>
+            <div
+              class="chunk-grid"
+              role="list"
+              aria-label="Chunk activity"
+            >
+              <button
+                v-for="chunk in progressChunks"
+                :key="chunk.index"
+                type="button"
+                :class="['chunk-cell', `is-${chunk.status}`, { 'is-selected': selectedProgressChunk?.index === chunk.index }]"
+                :title="chunkTooltip(chunk)"
+                :aria-label="chunkTooltip(chunk)"
+                @click="selectChunk(chunk.index)"
+              />
+            </div>
+            <div
+              v-if="selectedProgressChunk"
+              id="chunkActivityDetail"
+              class="chunk-detail"
+            >
+              <div>
+                <strong>Chunk {{ selectedProgressChunk.index }} / {{ selectedProgressChunk.total }}</strong>
+                <span>{{ chunkStatusLabel(selectedProgressChunk.status) }}</span>
+              </div>
+              <p>{{ selectedProgressChunk.message }}</p>
+              <p>
+                字幕
+                {{ selectedProgressChunk.entryStart || "?" }}
+                -
+                {{ selectedProgressChunk.entryEnd || "?" }}
+                <span v-if="selectedProgressChunk.model"> · {{ selectedProgressChunk.model }}</span>
+                <span v-if="selectedProgressChunk.durationMs"> · {{ (selectedProgressChunk.durationMs / 1000).toFixed(1) }}s</span>
+                <span v-if="selectedProgressChunk.traceId"> · trace {{ selectedProgressChunk.traceId }}</span>
+              </p>
+              <p v-if="selectedProgressChunk.issueSummary">
+                {{ selectedProgressChunk.issueSummary }}
+              </p>
+            </div>
+          </section>
         </div>
         <div
           id="resultFiles"
@@ -911,11 +1011,17 @@ const {
             </div>
           </div>
         </div>
-        <pre
-          id="logBody"
-          ref="logBody"
-          aria-live="polite"
-        >{{ logText }}</pre>
+        <details
+          id="logDetails"
+          class="log-details"
+        >
+          <summary>详细日志</summary>
+          <pre
+            id="logBody"
+            ref="logBody"
+            aria-live="polite"
+          >{{ logText }}</pre>
+        </details>
       </section>
     </main>
   </div>
