@@ -41,6 +41,7 @@ class TuiReviewPort:
         alignment_drift_start_index = data.get("alignment_drift_start_index")
         cascade_start_index = data.get("cascade_start_index")
         updated_by_index = {entry.index: entry for entry in chunk}
+        removed_indices: set[int] = set()
 
         for merge_op in merge_map:
             merged_index = merge_op.get("merged_index")
@@ -64,7 +65,9 @@ class TuiReviewPort:
             )
             updated_by_index[merged_index] = merged_entry
             for index in merged_from_indices[1:]:
-                updated_by_index.pop(index, None)
+                if index in updated_by_index:
+                    removed_indices.add(int(index))
+                    updated_by_index.pop(index, None)
 
         for item in selected_dicts:
             entry = SubtitleEntry.from_dict(item)
@@ -92,6 +95,7 @@ class TuiReviewPort:
             ],
             alignment_drift_start_index=drift_start,
             cascade_start_index=cascade_start,
+            removed_entry_indices=sorted(removed_indices),
         )
 
     def stop(self) -> None:

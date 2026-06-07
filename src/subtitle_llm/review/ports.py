@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from subtitle_llm.domain import SubtitleEntry
@@ -12,6 +12,7 @@ class ReviewResult:
     entries_to_retranslate: list[SubtitleEntry]
     alignment_drift_start_index: int | None = None
     cascade_start_index: int | None = None
+    removed_entry_indices: list[int] = field(default_factory=list)
 
 
 class ReviewPort(Protocol):

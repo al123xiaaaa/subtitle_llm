@@ -44,6 +44,7 @@ class TranslationReport(BaseModel):
     semantic_translation_applied: bool = False
     semantic_units: int = 0
     semantic_multi_cue_units: int = 0
+    removed_entry_indices: list[int] = Field(default_factory=list)
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     output_format: str = "source-first"
     llm_trace_dir: str | None = None

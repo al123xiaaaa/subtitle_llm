@@ -161,6 +161,33 @@ class DriftReviewPort:
         self.stopped = True
 
 
+class MergeAcceptReviewPort:
+    def __init__(self):
+        self.calls = 0
+        self.stopped = False
+
+    def review(self, chunk, chunk_index, total_chunks, completed_chunks=0):
+        from subtitle_llm.domain import SubtitleEntry
+        from subtitle_llm.review.ports import ReviewResult
+
+        self.calls += 1
+        merged_entry = SubtitleEntry(
+            index=chunk[0].index,
+            start_time=chunk[0].start_time,
+            end_time=chunk[-1].end_time,
+            original_text=" ".join(entry.original_text for entry in chunk),
+            translated_text=" ".join(entry.translated_text for entry in chunk if entry.translated_text),
+        )
+        return ReviewResult(
+            chunk=[merged_entry],
+            entries_to_retranslate=[],
+            removed_entry_indices=[entry.index for entry in chunk[1:]],
+        )
+
+    def stop(self):
+        self.stopped = True
+
+
 def make_config():
     model = ModelConfig(type=ModelProvider.CUSTOM, api_key_env="FAKE_KEY", model="fake", endpoint="https://fake.test")
     return AppConfig(
@@ -556,6 +583,126 @@ class TestNewPipeline(unittest.TestCase):
             self.assertTrue(review_port.stopped)
             self.assertEqual(result.report.failed_chunks, [])
 
+    def test_tui_merge_accept_removes_merged_rows_from_final_subtitle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.srt"
+            output_path = Path(tmp) / "output.srt"
+            input_path.write_text(
+                "1\n00:00:01,000 --> 00:00:02,000\nFirst sentence.\n\n"
+                "2\n00:00:03,000 --> 00:00:04,000\nSecond sentence.\n\n"
+                "3\n00:00:05,000 --> 00:00:06,000\nThird sentence.\n\n",
+                encoding="utf-8",
+            )
+            config = make_config()
+            config.pipeline.review_mode = "tui"
+            config.pipeline.chunk_size = 3
+            config.pipeline.semantic_translation = "off"
+            client = AlignmentDriftClient()
+            review_port = MergeAcceptReviewPort()
+            service = TranslationService(
+                config,
+                translation_client=client,
+                summary_client=client,
+                review_port=review_port,
+            )
+
+            result = service.translate(
+                TranslationRequest(
+                    input_file=str(input_path),
+                    output_file=str(output_path),
+                    target_language="Chinese",
+                )
+            )
+
+            output_text = output_path.read_text(encoding="utf-8")
+            self.assertEqual(review_port.calls, 1)
+            self.assertTrue(review_port.stopped)
+            self.assertEqual(len(result.subtitle.entries), 1)
+            self.assertEqual(result.subtitle.entries[0].start_time, "00:00:01,000")
+            self.assertEqual(result.subtitle.entries[0].end_time, "00:00:06,000")
+            self.assertEqual(
+                result.subtitle.entries[0].original_text,
+                "First sentence. Second sentence. Third sentence.",
+            )
+            self.assertIn("First sentence. Second sentence. Third sentence.", output_text)
+            self.assertNotIn("\n2\n00:00:03,000 --> 00:00:04,000", output_text)
+
+    def test_checkpoint_resume_preserves_tui_merge_removals(self):
+        from subtitle_llm.domain import Subtitle, SubtitleEntry
+        from subtitle_llm.pipeline.report import TranslationReport
+
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.srt"
+            output_path = Path(tmp) / "output.srt"
+            checkpoint_path = Path(tmp) / "checkpoint.json"
+            input_path.write_text("checkpoint source", encoding="utf-8")
+            checkpoint = CheckpointStore(
+                checkpoint_path,
+                file_fingerprint(input_path),
+                "Chinese",
+                "source-first",
+                "2",
+            )
+            service = TranslationService(
+                make_config(),
+                translation_client=FakeLLMClient(),
+                summary_client=FakeLLMClient(),
+            )
+            subtitle = Subtitle([
+                SubtitleEntry(1, "00:00:01,000", "00:00:02,000", "First sentence.", "旧译文一"),
+                SubtitleEntry(2, "00:00:03,000", "00:00:04,000", "Second sentence.", "旧译文二"),
+                SubtitleEntry(3, "00:00:05,000", "00:00:06,000", "Third sentence.", "旧译文三"),
+            ])
+            merged_entry = SubtitleEntry(
+                1,
+                "00:00:01,000",
+                "00:00:06,000",
+                "First sentence. Second sentence. Third sentence.",
+                "合并译文",
+            )
+            report = TranslationReport(
+                input_file=str(input_path),
+                output_file=str(output_path),
+                checkpoint_file=str(checkpoint_path),
+                context_file=str(Path(tmp) / "context.txt"),
+            )
+
+            service._save_checkpoint(checkpoint, subtitle, report, [merged_entry], {2, 3})
+
+            resumed_subtitle = Subtitle([
+                SubtitleEntry(1, "00:00:01,000", "00:00:02,000", "First sentence."),
+                SubtitleEntry(2, "00:00:03,000", "00:00:04,000", "Second sentence."),
+                SubtitleEntry(3, "00:00:05,000", "00:00:06,000", "Third sentence."),
+            ])
+            resume_report = TranslationReport(
+                input_file=str(input_path),
+                output_file=str(output_path),
+                checkpoint_file=str(checkpoint_path),
+                context_file=str(Path(tmp) / "context.txt"),
+            )
+            resumed_indices, removed_indices = service._restore_checkpoint(
+                TranslationRequest(
+                    input_file=str(input_path),
+                    output_file=str(output_path),
+                    target_language="Chinese",
+                    resume=True,
+                ),
+                resumed_subtitle,
+                checkpoint,
+                resume_report,
+            )
+
+            self.assertEqual(resumed_indices, {1})
+            self.assertEqual(removed_indices, {2, 3})
+            self.assertEqual(resume_report.removed_entry_indices, [2, 3])
+            self.assertEqual(len(resumed_subtitle.entries), 1)
+            self.assertEqual(resumed_subtitle.entries[0].end_time, "00:00:06,000")
+            self.assertEqual(
+                resumed_subtitle.entries[0].original_text,
+                "First sentence. Second sentence. Third sentence.",
+            )
+            self.assertEqual(resumed_subtitle.entries[0].translated_text, "合并译文")
+
     def test_checkpoint_rejects_mismatched_fingerprint(self):
         with tempfile.TemporaryDirectory() as tmp:
             input_path = Path(tmp) / "input.srt"
@@ -731,6 +878,7 @@ class TestNewPipeline(unittest.TestCase):
         self.assertEqual(result.chunk[0].original_text, "Hello world again")
         self.assertEqual(result.chunk[0].translated_text, "你好 世界 又来了")
         self.assertEqual(result.entries_to_retranslate, [])
+        self.assertEqual(result.removed_entry_indices, [2, 3])
 
 
 if __name__ == "__main__":
