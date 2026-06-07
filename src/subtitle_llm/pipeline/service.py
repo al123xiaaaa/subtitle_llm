@@ -21,11 +21,12 @@ from subtitle_llm.pipeline.normalization import (
     write_normalization_map,
 )
 from subtitle_llm.pipeline.quality import QualityGate
-from subtitle_llm.pipeline.report import TranslationReport
+from subtitle_llm.pipeline.report import AutoLayoutRepair, TranslationReport
 from subtitle_llm.pipeline.semantic_units import (
     SemanticUnit,
     apply_semantic_translation,
     build_semantic_units,
+    is_orphan_punctuation,
     make_unit,
     semantic_entries,
 )
@@ -419,6 +420,7 @@ class TranslationService:
             self._finalize_subtitle(subtitle, translated_entries, removed_entry_indices)
             report.stage = "完成"
             report.processed_entries = len(subtitle.entries)
+            report.final_output_entries = len(subtitle.entries)
             self._save_checkpoint(checkpoint, subtitle, report, translated_entries, removed_entry_indices)
             progress.emit(
                 stage="generate_result",
@@ -749,6 +751,14 @@ class TranslationService:
                 target_language=target_language,
             ))
 
+        source_entries = self._repair_semantic_layout(
+            planned,
+            source_entries,
+            semantic_units,
+            removed_entry_indices,
+            report,
+            target_language,
+        )
         source_diagnosis = quality_gate.diagnose_chunk(source_entries, target_language=target_language)
         quality_gate.apply_diagnosis(source_entries, source_diagnosis)
         if source_diagnosis.has_issues and not isinstance(review_port, AutoReviewPort):
@@ -877,6 +887,14 @@ class TranslationService:
                 )
                 return current_entries
 
+            current_entries = self._repair_semantic_layout(
+                planned,
+                current_entries,
+                semantic_units,
+                removed_entry_indices,
+                report,
+                target_language,
+            )
             diagnosis = quality_gate.diagnose_chunk(current_entries, target_language=target_language)
             if translator.trace_recorder:
                 for trace_id in outcome.trace_ids:
@@ -927,6 +945,59 @@ class TranslationService:
             ),
         )
         return current_entries
+
+    def _repair_semantic_layout(
+        self,
+        planned: PlannedChunk,
+        source_entries: list[SubtitleEntry],
+        semantic_units: list[SemanticUnit],
+        removed_entry_indices: set[int],
+        report: TranslationReport,
+        target_language: str,
+    ) -> list[SubtitleEntry]:
+        source_by_index = {entry.index: entry for entry in source_entries}
+        removed_in_chunk: set[int] = set()
+
+        for unit in semantic_units:
+            last_kept: SubtitleEntry | None = None
+            for unit_entry in unit.entries:
+                entry = source_by_index.get(unit_entry.index)
+                if entry is None or entry.index in removed_in_chunk:
+                    continue
+
+                reason = semantic_layout_repair_reason(entry)
+                if reason and last_kept is not None:
+                    last_kept.end_time = entry.end_time
+                    last_kept.original_text = join_non_empty_text(last_kept.original_text, entry.original_text)
+                    last_kept.translated_text = join_translated_text(
+                        last_kept.translated_text,
+                        entry.translated_text,
+                        target_language,
+                    )
+                    last_kept.needs_retranslation = last_kept.needs_retranslation or entry.needs_retranslation
+                    removed_in_chunk.add(entry.index)
+                    removed_entry_indices.add(entry.index)
+                    repair = AutoLayoutRepair(
+                        merged_index=last_kept.index,
+                        removed_index=entry.index,
+                        reason=reason,
+                    )
+                    report.auto_layout_repairs.append(repair)
+                    logger.info(
+                        "语义布局自动合并: chunk=%s semantic_unit=%s merged_index=%s removed_index=%s reason=%s",
+                        planned.index + 1,
+                        unit.index,
+                        repair.merged_index,
+                        repair.removed_index,
+                        repair.reason,
+                    )
+                    continue
+
+                last_kept = entry
+
+        if not removed_in_chunk:
+            return source_entries
+        return [entry for entry in source_entries if entry.index not in removed_in_chunk]
 
     def _apply_semantic_tui_review_result(
         self,
@@ -1645,6 +1716,11 @@ class TranslationService:
         subtitle.entries = restored_entries
         report.resumed_entries = len(resumed_indices)
         report.removed_entry_indices = sorted(removed_entry_indices)
+        report.auto_layout_repairs = [
+            AutoLayoutRepair(**item)
+            for item in report_data.get("auto_layout_repairs", [])
+        ]
+        report.final_output_entries = int(report_data.get("final_output_entries", 0) or 0)
         return resumed_indices, removed_entry_indices
 
     def _use_semantic_translation(self, _review_mode: str, units: list[SemanticUnit]) -> bool:
@@ -1781,6 +1857,40 @@ class TranslationService:
 
 def translator_progress(translator: ChunkTranslator) -> ProgressEmitter:
     return translator.progress or ProgressEmitter("translate")
+
+
+def semantic_layout_repair_reason(entry: SubtitleEntry) -> str | None:
+    translated = entry.translated_text.strip()
+    if is_orphan_punctuation(translated):
+        return "punctuation_or_quote_tail"
+    return None
+
+
+def join_non_empty_text(*values: str) -> str:
+    return " ".join(value.strip() for value in values if value.strip())
+
+
+def join_translated_text(left: str, right: str, target_language: str) -> str:
+    left = left.strip()
+    right = right.strip()
+    if not left:
+        return right
+    if not right:
+        return left
+    if is_orphan_punctuation(right) or is_cjk_language(target_language):
+        return f"{left}{right}"
+    return f"{left} {right}"
+
+
+def is_cjk_language(language: str) -> bool:
+    normalized = language.strip().lower()
+    return (
+        normalized in {"zh", "zh-cn", "zh_cn", "ja", "jp", "ko"}
+        or "chinese" in normalized
+        or "中文" in normalized
+        or "japanese" in normalized
+        or "korean" in normalized
+    )
 
 
 def chunk_quality_message(chunk_index: int, total_chunks: int, diagnosis) -> str:

@@ -21,6 +21,13 @@ class FailedChunk(BaseModel):
     error: str
 
 
+class AutoLayoutRepair(BaseModel):
+    merged_index: int
+    removed_index: int
+    reason: str
+    source: str = "semantic_layout"
+
+
 class TranslationReport(BaseModel):
     input_file: str
     output_file: str
@@ -45,6 +52,8 @@ class TranslationReport(BaseModel):
     semantic_units: int = 0
     semantic_multi_cue_units: int = 0
     removed_entry_indices: list[int] = Field(default_factory=list)
+    final_output_entries: int = 0
+    auto_layout_repairs: list[AutoLayoutRepair] = Field(default_factory=list)
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     output_format: str = "source-first"
     llm_trace_dir: str | None = None

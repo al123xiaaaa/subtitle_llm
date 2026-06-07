@@ -149,9 +149,10 @@ def translate(
             typer.secho(f"LLM诊断：{trace_dir}", fg=typer.colors.YELLOW, err=True)
         raise
     logger.info(
-        "命令完成: translate output=%s entries=%s chunks=%s failed_chunks=%s total_tokens=%s",
+        "命令完成: translate output=%s source_entries=%s final_output_entries=%s chunks=%s failed_chunks=%s total_tokens=%s",
         result.report.output_file,
         result.report.total_entries,
+        result.report.final_output_entries or result.report.processed_entries,
         result.report.total_chunks,
         len(result.report.failed_chunks),
         result.report.token_usage.total_tokens,
@@ -387,9 +388,12 @@ def _print_report(report) -> None:
     if report.llm_trace_dir:
         typer.echo(f"LLM诊断：{report.llm_trace_dir}")
     typer.echo(f"输出格式：{report.output_format}")
+    final_output_entries = report.final_output_entries or report.processed_entries
     typer.echo(
-        f"字幕条数：{report.total_entries}，已处理：{report.processed_entries}，短句保留：{report.short_entries}"
+        f"字幕条数：源 {report.total_entries}，输出 {final_output_entries}，短句保留：{report.short_entries}"
     )
+    if report.auto_layout_repairs:
+        typer.echo(f"语义布局自动修复：{len(report.auto_layout_repairs)} 处")
     typer.echo(f"Chunk：成功 {successful_chunks} / {report.total_chunks}，失败 {len(report.failed_chunks)}")
     typer.echo(f"疑似跨 Chunk 断句边界：{report.boundary_risk_count}")
     typer.echo(

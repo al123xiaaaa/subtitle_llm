@@ -8,6 +8,7 @@ from subtitle_llm.pipeline.text import is_sentence_complete
 
 
 CJK_PUNCTUATION = set("，。！？；：、,.!?;:")
+CJK_ORPHAN_PUNCTUATION = set("，。！？；：、,.!?;:“”‘’\"'）】》」』)]}>…—-")
 WHITESPACE_RE = re.compile(r"\s+")
 
 
@@ -136,6 +137,11 @@ def split_word_text(text: str, weights: list[int]) -> list[str]:
         start = split_at
     pieces.append(" ".join(words[start:]).strip())
     return rebalance_empty_pieces(pieces)
+
+
+def is_orphan_punctuation(value: str) -> bool:
+    stripped = value.strip()
+    return bool(stripped) and all(char in CJK_ORPHAN_PUNCTUATION for char in stripped)
 
 
 def weighted_boundaries(total_length: int, weights: list[int]) -> list[int]:
