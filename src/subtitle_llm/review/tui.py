@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from subtitle_llm.domain import SubtitleEntry
 from subtitle_llm.review.ports import ReviewResult
+
+logger = logging.getLogger(__name__)
 
 
 class TuiReviewPort:
@@ -35,6 +39,7 @@ class TuiReviewPort:
         selected_dicts = data.get("selected_subtitle_entries", [])
         merge_map = data.get("merge_map", [])
         alignment_drift_start_index = data.get("alignment_drift_start_index")
+        cascade_start_index = data.get("cascade_start_index")
         updated_by_index = {entry.index: entry for entry in chunk}
 
         for merge_op in merge_map:
@@ -66,6 +71,16 @@ class TuiReviewPort:
             updated_by_index[entry.index] = entry
 
         drift_start = int(alignment_drift_start_index) if alignment_drift_start_index else None
+        cascade_start = normalize_start_index(cascade_start_index)
+        if "cascade_start_index" not in data:
+            cascade_start = infer_cascade_start(selected_dicts, drift_start=drift_start)
+        if drift_start is not None and cascade_start is not None:
+            logger.warning(
+                "TUI同时返回普通重译起点和对齐漂移起点，优先使用对齐漂移: cascade_start=%s drift_start=%s",
+                cascade_start,
+                drift_start,
+            )
+            cascade_start = None
         updated_chunk = sorted(updated_by_index.values(), key=lambda item: item.index)
         return ReviewResult(
             chunk=updated_chunk,
@@ -76,6 +91,7 @@ class TuiReviewPort:
                 and not (drift_start is not None and int(item["index"]) >= drift_start)
             ],
             alignment_drift_start_index=drift_start,
+            cascade_start_index=cascade_start,
         )
 
     def stop(self) -> None:
@@ -84,3 +100,19 @@ class TuiReviewPort:
 
 def join_non_empty_text(*values: str) -> str:
     return " ".join(value.strip() for value in values if value.strip())
+
+
+def normalize_start_index(value) -> int | None:
+    if value in (None, ""):
+        return None
+    return int(value)
+
+
+def infer_cascade_start(selected_dicts: list[dict], *, drift_start: int | None) -> int | None:
+    indices = [
+        int(item["index"])
+        for item in selected_dicts
+        if item.get("needs_retranslation", False)
+        and not (drift_start is not None and int(item["index"]) >= drift_start)
+    ]
+    return min(indices) if indices else None

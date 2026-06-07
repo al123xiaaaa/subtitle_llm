@@ -76,6 +76,15 @@ class QualityGate:
         "Translated text",
         "翻译缺失",
     )
+    commentary_markers = (
+        "承接上文",
+        "接上文",
+        "续上",
+        "同上",
+        "前文所述",
+        "as above",
+        "continued from above",
+    )
     punctuation = set("，。？！：；“”‘’\"'、,.?!:;()-[]{}<>…—- ")
     consecutive_failure_threshold = 5
     low_reliability_ratio = 0.3
@@ -117,6 +126,8 @@ class QualityGate:
         issues.extend(self.diagnose_duplicate_translations(chunk))
 
         flagged_indices = sorted({issue.index for issue in issues if 1 <= issue.index <= len(chunk)})
+        if not flagged_indices and issues and chunk:
+            flagged_indices = [max(1, min(issues[0].index, len(chunk)))]
         issue_groups = self.group_issues(issues, total_entries=len(chunk), flagged_indices=flagged_indices)
         reliability = self.score_reliability(issue_groups, len(chunk), len(flagged_indices))
         summary = self.build_summary(reliability, len(chunk), len(flagged_indices), issue_groups)
@@ -228,6 +239,18 @@ class QualityGate:
                 )
             )
             return issues
+
+        if any(marker.lower() in translated.lower() for marker in self.commentary_markers):
+            issues.append(
+                TranslationIssue(
+                    index=index,
+                    issue_type="commentary_marker",
+                    severity="high",
+                    description="Translation contains explanatory carry-over text that should not appear in subtitles.",
+                    original_text=original,
+                    translated_text=translated,
+                )
+            )
 
         if self.is_punctuation_only(translated):
             issues.append(
@@ -481,6 +504,7 @@ class QualityGate:
             "index_order_error",
             "missing_translation",
             "placeholder_translation",
+            "commentary_marker",
             "punctuation_only",
             "duplicate_translation",
             "too_short",
@@ -523,6 +547,7 @@ class QualityGate:
             "index_order_error": "Output indices are out of order, so alignment is unreliable.",
             "missing_translation": f"{indices} are empty translations ({count} entries).",
             "placeholder_translation": f"{indices} contain placeholder text instead of real translations.",
+            "commentary_marker": f"{indices} contain explanatory carry-over text that should not appear in subtitles.",
             "punctuation_only": f"{indices} contain only punctuation.",
             "duplicate_translation": f"{indices} reuse the same or highly similar translation while source lines differ.",
             "too_short": f"{indices} are much shorter than their source lines.",

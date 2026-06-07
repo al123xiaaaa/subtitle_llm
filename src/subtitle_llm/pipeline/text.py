@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -150,6 +151,17 @@ def format_chunk(chunk: list[SubtitleEntry]) -> str:
     return "\n".join([f"[{i + 1}]\n[{entry.original_text}]" for i, entry in enumerate(chunk)])
 
 
+def format_semantic_units_json(chunk: list[SubtitleEntry]) -> str:
+    data = [
+        {
+            "unit_id": index,
+            "source": entry.original_text,
+        }
+        for index, entry in enumerate(chunk, start=1)
+    ]
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
 def format_translation_reference(entries: list[SubtitleEntry]) -> str:
     if not entries:
         return "(none)"
@@ -220,6 +232,39 @@ def parse_translation_results(translation: str, chunk: list[SubtitleEntry]) -> l
     return results
 
 
+def process_semantic_json_translation(content: str, chunk: list[SubtitleEntry]) -> str:
+    payload = extract_json_payload(content)
+    data = json.loads(payload)
+    rows = data.get("translations") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        raise ValueError("semantic translation JSON must contain a translations list")
+
+    translations: dict[int, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("semantic translation item must be an object")
+        unit_id = int(row["unit_id"])
+        translation = str(row.get("translation", "")).strip()
+        if unit_id in translations:
+            raise ValueError(f"duplicate semantic unit_id: {unit_id}")
+        translations[unit_id] = translation
+
+    expected = set(range(1, len(chunk) + 1))
+    observed = set(translations)
+    if observed != expected:
+        missing = sorted(expected - observed)
+        extra = sorted(observed - expected)
+        raise ValueError(f"semantic translation unit_id mismatch: missing={missing}, extra={extra}")
+
+    lines: list[str] = []
+    for index, entry in enumerate(chunk, start=1):
+        translated = translations[index].strip()
+        entry.set_translated_text(translated)
+        lines.append(f"[{index}]")
+        lines.append(translated)
+    return "\n".join(lines)
+
+
 def combine_translations_by_index(original_translation: str, fixed_translation: str) -> str:
     original_lines = original_translation.strip().split("\n")
     fixed_lines = [line for line in fixed_translation.strip().split("\n") if line.strip()]
@@ -246,3 +291,22 @@ def combine_translations_by_index(original_translation: str, fixed_translation: 
 def extract_translation_block(content: str) -> str:
     match = re.search(r"<translation>(.*?)</translation>", content, re.DOTALL)
     return match.group(1).strip() if match else content.strip()
+
+
+def extract_json_payload(content: str) -> str:
+    stripped = content.strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", stripped, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        stripped = fenced.group(1).strip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        return stripped
+    start_candidates = [index for index in [stripped.find("{"), stripped.find("[")] if index >= 0]
+    if not start_candidates:
+        raise ValueError("no JSON object or array found in semantic translation response")
+    start = min(start_candidates)
+    opener = stripped[start]
+    closer = "}" if opener == "{" else "]"
+    end = stripped.rfind(closer)
+    if end < start:
+        raise ValueError("semantic translation response contains incomplete JSON")
+    return stripped[start:end + 1]

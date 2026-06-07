@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { App, WebContents } from "electron";
 import type {
   AppState,
@@ -21,7 +21,27 @@ interface DesktopRuntimeOptions {
   projectRoot: string;
   env?: NodeJS.ProcessEnv;
   spawnFn?: typeof spawn;
+  spawnSyncFn?: typeof spawnSync;
   detectFfmpeg?: () => FfmpegStatus;
+}
+
+interface PythonModuleRequirement {
+  moduleName: string;
+  packageName: string;
+  installExtra?: string;
+}
+
+const BASE_PYTHON_MODULES: PythonModuleRequirement[] = [
+  { moduleName: "pysubs2", packageName: "pysubs2" },
+  { moduleName: "pysbd", packageName: "pysbd" },
+];
+
+const TRANSCRIBE_PYTHON_MODULES: PythonModuleRequirement[] = [
+  { moduleName: "funasr", packageName: "funasr", installExtra: ".[asr]" },
+];
+
+function cleanText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 interface ActiveJob {
@@ -45,6 +65,7 @@ export function createDesktopRuntime({
   projectRoot,
   env = process.env,
   spawnFn = spawn,
+  spawnSyncFn = spawnSync,
   detectFfmpeg = createFfmpegDetector({ env }),
 }: DesktopRuntimeOptions) {
   const activeJobs = new Map<string, ActiveJob>();
@@ -107,10 +128,11 @@ export function createDesktopRuntime({
       throw new Error(`未找到 Python 入口：${mainPy}`);
     }
 
+    const pythonExecutable = resolvePythonExecutable();
+    assertPythonEnvironmentReady(pythonExecutable, request.command);
     const runRequest = prepareRequestForRun(request);
     const args = buildPythonArgs(runRequest);
     const childEnv = buildEnv(env, runRequest.envOverrides);
-    const pythonExecutable = resolvePythonExecutable();
     const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const child = spawnFn(pythonExecutable, args, {
       cwd: projectRoot,
@@ -185,6 +207,87 @@ export function createDesktopRuntime({
 
   function hasRunningJob(): boolean {
     return Array.from(activeJobs.values()).some((job) => !job.finished);
+  }
+
+  function assertPythonEnvironmentReady(pythonExecutable: string, command: DesktopJobRequest["command"]): void {
+    const requirements = pythonRequirementsForCommand(command);
+    if (requirements.length === 0) {
+      return;
+    }
+
+    const moduleNames = requirements.map((requirement) => requirement.moduleName);
+    const checkScript = [
+      "import importlib.util, json, sys",
+      `modules = ${JSON.stringify(moduleNames)}`,
+      "missing = [name for name in modules if importlib.util.find_spec(name) is None]",
+      "print(json.dumps(missing, ensure_ascii=False))",
+      "sys.exit(1 if missing else 0)",
+    ].join("\n");
+    const result = spawnSyncFn(pythonExecutable, ["-c", checkScript], {
+      cwd: projectRoot,
+      env: buildEnv(env),
+      encoding: "utf8",
+    });
+
+    if (result.error) {
+      throw new Error(`无法运行 Python：${result.error.message}\n当前 GUI 使用的 Python：${pythonExecutable}`);
+    }
+    if (result.status === 0) {
+      return;
+    }
+
+    const missingModules = parseMissingPythonModules(result.stdout);
+    if (missingModules.length > 0) {
+      throw new Error(buildMissingDependencyMessage(pythonExecutable, requirements, missingModules));
+    }
+
+    const stderr = cleanText(result.stderr);
+    throw new Error(
+      [
+        "Python 环境检查失败，请先确认本地环境可用。",
+        `当前 GUI 使用的 Python：${pythonExecutable}`,
+        stderr ? `错误信息：${stderr}` : "",
+      ].filter(Boolean).join("\n"),
+    );
+  }
+
+  function pythonRequirementsForCommand(command: DesktopJobRequest["command"]): PythonModuleRequirement[] {
+    if (command === "transcribe") {
+      return [...BASE_PYTHON_MODULES, ...TRANSCRIBE_PYTHON_MODULES];
+    }
+    return BASE_PYTHON_MODULES;
+  }
+
+  function parseMissingPythonModules(stdout: string | Buffer | null | undefined): string[] {
+    const text = String(stdout || "").trim();
+    if (!text) {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(text);
+      return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function buildMissingDependencyMessage(
+    pythonExecutable: string,
+    requirements: PythonModuleRequirement[],
+    missingModules: string[],
+  ): string {
+    const missingPackages = requirements
+      .filter((requirement) => missingModules.includes(requirement.moduleName))
+      .map((requirement) => requirement.packageName);
+    const hasOptionalExtra = requirements.some(
+      (requirement) => missingModules.includes(requirement.moduleName) && requirement.installExtra,
+    );
+    const installTarget = hasOptionalExtra ? ".[asr]" : ".";
+    return [
+      `Python 环境缺少依赖：${missingPackages.join(", ") || missingModules.join(", ")}`,
+      `请在项目目录运行：${pythonExecutable} -m pip install -e "${installTarget}"`,
+      `当前 GUI 使用的 Python：${pythonExecutable}`,
+    ].join("\n");
   }
 
   function prepareRequestForRun(request: DesktopJobRequest): PreparedDesktopJobRequest {

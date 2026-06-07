@@ -10,14 +10,18 @@ from subtitle_llm.pipeline.prompts import (
     ALIGNMENT_DRIFT_RETRANSLATE_PROMPT,
     FIX_MISSING_TRANSLATIONS_PROMPT,
     REFINE_TRANSLATION_PROMPT,
+    REFINE_SEMANTIC_UNITS_PROMPT,
     RE_TRANSLATE_PROMPT,
+    TRANSLATE_SEMANTIC_UNITS_PROMPT,
     TRANSLATE_CHUNK_PROMPT,
 )
 from subtitle_llm.pipeline.text import (
     extract_translation_block,
     format_alignment_anchors,
     format_chunk,
+    format_semantic_units_json,
     format_translation_reference,
+    process_semantic_json_translation,
     process_translation,
 )
 from subtitle_llm.progress_events import ProgressEmitter, chunk_payload
@@ -88,6 +92,142 @@ class ChunkTranslator:
             usage=usage,
             final_trace_id=refined_translation.trace_id,
         )
+
+    def translate_semantic_and_refine(
+        self,
+        chunk: list[SubtitleEntry],
+        context: str,
+        target_language: str,
+        boundary_context: str,
+        chunk_index: int | None = None,
+        stage_prefix: str = "",
+    ) -> ChunkTranslationResult:
+        usage = CompletionUsage()
+        rough_translation = self.translate_semantic_units(
+            chunk,
+            context,
+            target_language,
+            boundary_context,
+            usage,
+            chunk_index=chunk_index,
+            stage=join_stage(stage_prefix, "semantic-rough"),
+        )
+        refined_translation = self.refine_semantic_units(
+            chunk,
+            rough_translation.text,
+            context,
+            target_language,
+            boundary_context,
+            usage,
+            chunk_index=chunk_index,
+            stage=join_stage(stage_prefix, "semantic-refine"),
+        )
+        return ChunkTranslationResult(
+            chunk=chunk,
+            translation=refined_translation.text,
+            usage=usage,
+            final_trace_id=refined_translation.trace_id,
+        )
+
+    def translate_semantic_units(
+        self,
+        chunk: list[SubtitleEntry],
+        context: str,
+        target_language: str,
+        boundary_context: str,
+        usage: CompletionUsage,
+        chunk_index: int | None = None,
+        stage: str = "semantic-rough",
+    ) -> TracedTranslationText:
+        unit_text = format_semantic_units_json(chunk)
+        prompt = TRANSLATE_SEMANTIC_UNITS_PROMPT.format(
+            target_language=target_language,
+            context=context,
+            boundary_context=boundary_context,
+            unit_text=unit_text,
+            chunk_size=len(chunk),
+        )
+        result, duration_ms = self._create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
+        usage.add(result.usage)
+        processed_translation = self._process_semantic_json_response(
+            result.content,
+            chunk,
+            stage=stage,
+            prompt=prompt,
+            usage=result.usage,
+            duration_ms=duration_ms,
+            chunk_index=chunk_index,
+        )
+        trace_id = self._record_trace(
+            stage=stage,
+            prompt=prompt,
+            response=result.content,
+            usage=result.usage,
+            duration_ms=duration_ms,
+            chunk=chunk,
+            chunk_index=chunk_index,
+            processed_translation=processed_translation,
+        )
+        self._emit_chunk_progress(
+            stage,
+            "running",
+            f"{chunk_stage_label(stage)}响应已解析",
+            chunk,
+            chunk_index,
+            trace_id=trace_id,
+        )
+        return TracedTranslationText(processed_translation, trace_id)
+
+    def refine_semantic_units(
+        self,
+        chunk: list[SubtitleEntry],
+        rough_translation: str,
+        context: str,
+        target_language: str,
+        boundary_context: str,
+        usage: CompletionUsage,
+        chunk_index: int | None = None,
+        stage: str = "semantic-refine",
+    ) -> TracedTranslationText:
+        unit_text = format_semantic_units_json(chunk)
+        prompt = REFINE_SEMANTIC_UNITS_PROMPT.format(
+            target_language=target_language,
+            context=context,
+            boundary_context=boundary_context,
+            unit_text=unit_text,
+            rough_translation=rough_translation,
+            chunk_size=len(chunk),
+        )
+        result, duration_ms = self._create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
+        usage.add(result.usage)
+        processed_translation = self._process_semantic_json_response(
+            result.content,
+            chunk,
+            stage=stage,
+            prompt=prompt,
+            usage=result.usage,
+            duration_ms=duration_ms,
+            chunk_index=chunk_index,
+        )
+        trace_id = self._record_trace(
+            stage=stage,
+            prompt=prompt,
+            response=result.content,
+            usage=result.usage,
+            duration_ms=duration_ms,
+            chunk=chunk,
+            chunk_index=chunk_index,
+            processed_translation=processed_translation,
+        )
+        self._emit_chunk_progress(
+            stage,
+            "running",
+            f"{chunk_stage_label(stage)}响应已解析",
+            chunk,
+            chunk_index,
+            trace_id=trace_id,
+        )
+        return TracedTranslationText(processed_translation, trace_id)
 
     def translate_chunk(
         self,
@@ -386,6 +526,33 @@ class ChunkTranslator:
         )
         return TracedTranslationText(processed_translation, trace_id)
 
+    def _process_semantic_json_response(
+        self,
+        response: str,
+        chunk: list[SubtitleEntry],
+        *,
+        stage: str,
+        prompt: str,
+        usage: CompletionUsage,
+        duration_ms: int,
+        chunk_index: int | None,
+    ) -> str:
+        try:
+            return process_semantic_json_translation(response, chunk)
+        except Exception as exc:
+            self._record_trace(
+                stage=stage,
+                prompt=prompt,
+                response=response,
+                usage=usage,
+                duration_ms=duration_ms,
+                chunk=chunk,
+                chunk_index=chunk_index,
+                processed_translation="",
+                error=str(exc),
+            )
+            raise
+
     def _create_completion(
         self,
         prompt: str,
@@ -524,6 +691,11 @@ def chunk_stage_label(stage: str) -> str:
     labels = {
         "rough": "初译",
         "refine": "润色",
+        "semantic_rough": "语义初译",
+        "semantic_refine": "语义润色",
+        "tui_semantic": "TUI 语义重译",
+        "tui_semantic_semantic_rough": "TUI 语义重译初译",
+        "tui_semantic_semantic_refine": "TUI 语义重译润色",
         "repair": "自动修复",
         "missing_fix": "补齐缺失翻译",
         "drift": "对齐漂移重译",

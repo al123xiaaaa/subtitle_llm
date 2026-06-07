@@ -209,6 +209,58 @@ class TestNewPipeline(unittest.TestCase):
             self.assertTrue(any("chunk-001-rough-ok" in path.name for path in trace_json_files))
             self.assertTrue(any("chunk-001-refine-ok" in path.name for path in trace_json_files))
 
+    def test_translation_normalizes_rolling_caption_before_chunking(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "demo.en.srt"
+            output_path = Path(tmp) / "demo.zh.srt"
+            input_path.write_text(
+                "1\n00:00:00,000 --> 00:00:04,760\nA few months ago, I wrote a few\n\n"
+                "2\n00:00:02,240 --> 00:00:06,120\nsentences, about four sentences, that\n\n"
+                "3\n00:00:04,760 --> 00:00:09,040\nhave turned out to be the most\n\n"
+                "4\n00:00:06,120 --> 00:00:10,760\ninfluential four sentences I've ever\n\n"
+                "5\n00:00:09,040 --> 00:00:13,120\nwritten. I packaged these four sentences\n\n"
+                "6\n00:00:10,760 --> 00:00:15,800\nup into the Grill Me skill, which is a\n\n"
+                "7\n00:00:13,120 --> 00:00:17,560\nskill that you can use to get the LLM to\n\n"
+                "8\n00:00:15,800 --> 00:00:19,560\ninterview you relentlessly.\n\n",
+                encoding="utf-8",
+            )
+            service = TranslationService(
+                AppConfig(
+                    summary_model=make_config().summary_model,
+                    translation_model=make_config().translation_model,
+                    pipeline=PipelineConfig(
+                        chunk_size=10,
+                        threads=1,
+                        context_window_size=1,
+                        review_mode="auto",
+                        normalize_max_cue_chars=220,
+                        normalize_max_duration=30,
+                    ),
+                ),
+                translation_client=FakeLLMClient(),
+                summary_client=FakeLLMClient(),
+            )
+
+            result = service.translate(
+                TranslationRequest(
+                    input_file=str(input_path),
+                    output_file=str(output_path),
+                    target_language="Chinese",
+                    source_language="en",
+                )
+            )
+
+            self.assertTrue(result.report.normalization_applied)
+            self.assertEqual(result.report.total_entries, 2)
+            self.assertTrue(Path(result.report.normalized_source_file or "").exists())
+            self.assertTrue(Path(result.report.normalization_map_file or "").exists())
+            normalized_text = Path(result.report.normalized_source_file or "").read_text(encoding="utf-8")
+            self.assertIn("A few months ago", normalized_text)
+            self.assertIn("interview you relentlessly.", " ".join(normalized_text.split()))
+            output_text = output_path.read_text(encoding="utf-8")
+            self.assertIn("译文1", output_text)
+            self.assertIn("译文2", output_text)
+
     def test_llm_trace_marks_inline_index_response_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
             input_path = Path(tmp) / "input.srt"
@@ -567,6 +619,85 @@ class TestNewPipeline(unittest.TestCase):
         self.assertEqual(result.chunk[0].original_text, "Hello world")
         self.assertEqual(len(result.entries_to_retranslate), 0)
         self.assertEqual(result.alignment_drift_start_index, 1)
+        self.assertIsNone(result.cascade_start_index)
+
+    def test_tui_adapter_reads_cascade_start_index(self):
+        from subtitle_llm.domain import SubtitleEntry
+
+        class FakeManager:
+            def submit_chunk(self, data, chunk_index, total_chunks, completed_chunks=0):
+                return {
+                    "selected_subtitle_entries": [
+                        {
+                            "index": 2,
+                            "start_time": "00:00:01,000",
+                            "end_time": "00:00:02,000",
+                            "original_text": "Second",
+                            "translated_text": "",
+                            "needs_retranslation": True,
+                        },
+                        {
+                            "index": 3,
+                            "start_time": "00:00:02,000",
+                            "end_time": "00:00:03,000",
+                            "original_text": "Third",
+                            "translated_text": "",
+                            "needs_retranslation": True,
+                        },
+                    ],
+                    "merge_map": [],
+                    "alignment_drift_start_index": None,
+                    "cascade_start_index": 2,
+                }
+
+        port = TuiReviewPort.__new__(TuiReviewPort)
+        port.manager = cast(Any, FakeManager())
+        result = port.review(
+            [
+                SubtitleEntry(1, "00:00:00,000", "00:00:01,000", "First"),
+                SubtitleEntry(2, "00:00:01,000", "00:00:02,000", "Second"),
+                SubtitleEntry(3, "00:00:02,000", "00:00:03,000", "Third"),
+            ],
+            0,
+            1,
+        )
+
+        self.assertEqual(result.cascade_start_index, 2)
+        self.assertIsNone(result.alignment_drift_start_index)
+        self.assertEqual([entry.index for entry in result.entries_to_retranslate], [2, 3])
+
+    def test_tui_adapter_infers_cascade_start_for_legacy_payload(self):
+        from subtitle_llm.domain import SubtitleEntry
+
+        class FakeManager:
+            def submit_chunk(self, data, chunk_index, total_chunks, completed_chunks=0):
+                return {
+                    "selected_subtitle_entries": [
+                        {
+                            "index": 2,
+                            "start_time": "00:00:01,000",
+                            "end_time": "00:00:02,000",
+                            "original_text": "Second",
+                            "translated_text": "",
+                            "needs_retranslation": True,
+                        },
+                    ],
+                    "merge_map": [],
+                    "alignment_drift_start_index": None,
+                }
+
+        port = TuiReviewPort.__new__(TuiReviewPort)
+        port.manager = cast(Any, FakeManager())
+        result = port.review(
+            [
+                SubtitleEntry(1, "00:00:00,000", "00:00:01,000", "First"),
+                SubtitleEntry(2, "00:00:01,000", "00:00:02,000", "Second"),
+            ],
+            0,
+            1,
+        )
+
+        self.assertEqual(result.cascade_start_index, 2)
 
     def test_tui_adapter_merges_translation_text_across_index_changes(self):
         from subtitle_llm.domain import SubtitleEntry

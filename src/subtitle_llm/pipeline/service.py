@@ -15,8 +15,20 @@ from subtitle_llm.pipeline.chunk_translator import ChunkTranslationResult, Chunk
 from subtitle_llm.pipeline.chunks import ChunkPlanner, PlannedChunk
 from subtitle_llm.pipeline.context import ContextService
 from subtitle_llm.pipeline.llm_trace import LlmTraceRecorder
+from subtitle_llm.pipeline.normalization import (
+    NormalizationOptions,
+    normalize_subtitle,
+    write_normalization_map,
+)
 from subtitle_llm.pipeline.quality import QualityGate
 from subtitle_llm.pipeline.report import TranslationReport
+from subtitle_llm.pipeline.semantic_units import (
+    SemanticUnit,
+    apply_semantic_translation,
+    build_semantic_units,
+    make_unit,
+    semantic_entries,
+)
 from subtitle_llm.pipeline.text import parse_translation_results
 from subtitle_llm.progress_events import ProgressEmitter, chunk_payload
 from subtitle_llm.review import AutoReviewPort, ReviewPort, ReviewResult, TuiReviewPort
@@ -150,9 +162,72 @@ class TranslationService:
         )
         logger.info("字幕读取完成: entries=%s", report.total_entries)
 
+        progress.emit(
+            stage="prepare_input",
+            detail="normalize_subtitle",
+            label="规范化字幕",
+            message="正在检查字幕是否需要重新断句和时间轴规范化",
+        )
+        normalization = normalize_subtitle(
+            subtitle,
+            NormalizationOptions(
+                mode=self.config.pipeline.normalize_subtitles,
+                max_cue_chars=self.config.pipeline.normalize_max_cue_chars,
+                max_line_chars=self.config.pipeline.normalize_max_line_chars,
+                max_duration_seconds=self.config.pipeline.normalize_max_duration,
+                min_duration_seconds=self.config.pipeline.normalize_min_duration,
+                sentence_language=request.source_language,
+            ),
+        )
+        report.normalization_applied = normalization.applied
+        report.normalization_reason = normalization.reason
+        report.normalization_stats = normalization.stats.to_dict()
+        checkpoint_input_file = input_file
+        if normalization.applied:
+            normalized_source_file = self._normalized_source_file(output_file, input_file, request.source_language)
+            normalization_map_file = sidecar_path(output_file, "_normalization_map.json")
+            SubtitleIO.write_srt(normalization.subtitle, normalized_source_file, output_format="source-only")
+            write_normalization_map(normalization, normalization_map_file)
+            subtitle = normalization.subtitle
+            report.normalized_source_file = str(normalized_source_file)
+            report.normalization_map_file = str(normalization_map_file)
+            checkpoint_input_file = str(normalized_source_file)
+            report.total_entries = len(subtitle.entries)
+            progress.emit(
+                stage="prepare_input",
+                detail="normalize_subtitle",
+                status="done",
+                label="规范化字幕",
+                message=(
+                    f"已将 rolling caption 从 {normalization.stats.original_entries} 条"
+                    f"规范化为 {len(subtitle.entries)} 条"
+                ),
+            )
+            logger.info(
+                "字幕规范化完成: input_entries=%s normalized_entries=%s normalized_file=%s map_file=%s stats=%s",
+                normalization.stats.original_entries,
+                len(subtitle.entries),
+                normalized_source_file,
+                normalization_map_file,
+                normalization.stats.to_dict(),
+            )
+        else:
+            progress.emit(
+                stage="prepare_input",
+                detail="normalize_subtitle",
+                status="skipped",
+                label="规范化字幕",
+                message=f"无需规范化字幕：{normalization.reason}",
+            )
+            logger.info(
+                "字幕规范化跳过: reason=%s stats=%s",
+                normalization.reason,
+                normalization.stats.to_dict(),
+            )
+
         checkpoint = CheckpointStore(
             checkpoint_file=checkpoint_file,
-            input_fingerprint=file_fingerprint(input_file),
+            input_fingerprint=file_fingerprint(checkpoint_input_file),
             target_language=request.target_language,
             output_format=output_format,
             config_version=self.config.config_version,
@@ -202,19 +277,65 @@ class TranslationService:
             context_usage.total_tokens,
         )
 
+        review_mode = request.review_mode or self.config.pipeline.review_mode
+        semantic_units_list = build_semantic_units(
+            subtitle.entries,
+            max_cues_per_unit=self.config.pipeline.semantic_max_cues_per_unit,
+        )
+        use_semantic_translation = self._use_semantic_translation(review_mode, semantic_units_list)
+        translation_entries = subtitle.entries
+        planner_resumed_indices = resumed_indices
+        semantic_unit_by_index: dict[int, SemanticUnit] = {}
+        if use_semantic_translation:
+            translation_entries = semantic_entries(semantic_units_list)
+            semantic_unit_by_index = {unit.index: unit for unit in semantic_units_list}
+            planner_resumed_indices = {
+                unit.index
+                for unit in semantic_units_list
+                if unit.entries and all(entry.index in resumed_indices for entry in unit.entries)
+            }
+            report.semantic_translation_applied = True
+            report.semantic_units = len(semantic_units_list)
+            report.semantic_multi_cue_units = len([unit for unit in semantic_units_list if len(unit.entries) > 1])
+            progress.emit(
+                stage="prepare_translation",
+                detail="plan_semantic_units",
+                status="done",
+                label="构建语义单元",
+                message=(
+                    f"已构建 {report.semantic_units} 个语义单元，"
+                    f"其中 {report.semantic_multi_cue_units} 个跨多条字幕"
+                ),
+            )
+            logger.info(
+                "语义翻译单元已启用: units=%s multi_cue_units=%s",
+                report.semantic_units,
+                report.semantic_multi_cue_units,
+            )
+        else:
+            report.semantic_units = len(semantic_units_list)
+            report.semantic_multi_cue_units = len([unit for unit in semantic_units_list if len(unit.entries) > 1])
+            progress.emit(
+                stage="prepare_translation",
+                detail="plan_semantic_units",
+                status="skipped",
+                label="构建语义单元",
+                message="当前任务继续使用逐字幕片段翻译",
+            )
+
         planner = ChunkPlanner(
             chunk_size=self.config.pipeline.chunk_size,
             context_window_size=self.config.pipeline.context_window_size,
             ignore_subtitle_length=self.config.pipeline.ignore_subtitle_length,
         )
-        planned_chunks = planner.plan(subtitle.entries, resumed_indices=resumed_indices)
+        planned_chunks = planner.plan(translation_entries, resumed_indices=planner_resumed_indices)
         report.total_chunks = len(planned_chunks)
         report.short_entries = len(
             [
                 entry
-                for entry in subtitle.entries
+                for entry in translation_entries
                 if len(entry.original_text.strip()) <= self.config.pipeline.ignore_subtitle_length
-                and entry.index not in resumed_indices
+                and entry.index not in planner_resumed_indices
             ]
         )
         boundary_risks_by_key: dict[tuple[int, int], dict] = {}
@@ -246,7 +367,6 @@ class TranslationService:
             progress=progress,
         )
         quality_gate = QualityGate()
-        review_mode = request.review_mode or self.config.pipeline.review_mode
         review_port = self._review_port(review_mode)
         progress.emit(
             stage="processing_chunks",
@@ -261,18 +381,33 @@ class TranslationService:
         ]
 
         try:
-            self._run_chunks(
-                planned_chunks,
-                translator,
-                quality_gate,
-                review_port,
-                context,
-                request.target_language,
-                subtitle,
-                translated_entries,
-                checkpoint,
-                report,
-            )
+            if use_semantic_translation:
+                self._run_semantic_chunks(
+                    planned_chunks,
+                    semantic_unit_by_index,
+                    translator,
+                    quality_gate,
+                    review_port,
+                    context,
+                    request.target_language,
+                    subtitle,
+                    translated_entries,
+                    checkpoint,
+                    report,
+                )
+            else:
+                self._run_chunks(
+                    planned_chunks,
+                    translator,
+                    quality_gate,
+                    review_port,
+                    context,
+                    request.target_language,
+                    subtitle,
+                    translated_entries,
+                    checkpoint,
+                    report,
+                )
 
             progress.emit(
                 stage="generate_result",
@@ -410,6 +545,572 @@ class TranslationService:
                             ),
                             total_chunks=report.total_chunks,
                         )
+
+    def _run_semantic_chunks(
+        self,
+        planned_chunks: list[PlannedChunk],
+        semantic_unit_by_index: dict[int, SemanticUnit],
+        translator: ChunkTranslator,
+        quality_gate: QualityGate,
+        review_port: ReviewPort,
+        context: str,
+        target_language: str,
+        subtitle: Subtitle,
+        translated_entries: list[SubtitleEntry],
+        checkpoint: CheckpointStore,
+        report: TranslationReport,
+    ) -> None:
+        done_futures: set[concurrent.futures.Future] = set()
+        for planned in planned_chunks:
+            translator_progress(translator).emit(
+                stage="processing_chunks",
+                detail="queue_chunk",
+                label="等待处理",
+                message=f"语义片段 {planned.index + 1}/{report.total_chunks} 已加入队列",
+                chunk=chunk_payload(
+                    planned.entries,
+                    chunk_index=planned.index,
+                    total_chunks=report.total_chunks,
+                    status="waiting",
+                    detail="waiting",
+                ),
+                total_chunks=report.total_chunks,
+            )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.config.pipeline.threads) as executor:
+            future_to_chunk = {
+                executor.submit(
+                    translator.translate_semantic_and_refine,
+                    planned.entries,
+                    context,
+                    target_language,
+                    planned.boundary_context,
+                    planned.index,
+                ): planned
+                for planned in planned_chunks
+            }
+            all_futures = set(future_to_chunk.keys())
+
+            while len(done_futures) < len(all_futures):
+                newly_done, _ = concurrent.futures.wait(
+                    all_futures - done_futures,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                for future in newly_done:
+                    done_futures.add(future)
+                    planned = future_to_chunk[future]
+                    try:
+                        result = future.result()
+                        self._accept_semantic_chunk(
+                            planned,
+                            result,
+                            semantic_unit_by_index,
+                            translator,
+                            quality_gate,
+                            review_port,
+                            context,
+                            target_language,
+                            translated_entries,
+                            report,
+                        )
+                    except Exception as exc:
+                        logger.exception(
+                            "语义chunk处理失败: chunk=%s units=%s",
+                            planned.index + 1,
+                            [entry.index for entry in planned.entries],
+                        )
+                        self._handle_semantic_chunk_failure(
+                            planned,
+                            semantic_unit_by_index,
+                            translated_entries,
+                            report,
+                            exc,
+                            translator.progress,
+                        )
+                    finally:
+                        report.completed_chunks += 1
+                        report.processed_entries = len({entry.index for entry in translated_entries})
+                        checkpoint.save(subtitle, report)
+                        translator_progress(translator).emit(
+                            stage="processing_chunks",
+                            detail="checkpoint",
+                            status="done",
+                            label="保存断点",
+                            message=f"已保存语义片段 {planned.index + 1}/{report.total_chunks} 的进度",
+                            chunk=chunk_payload(
+                                planned.entries,
+                                chunk_index=planned.index,
+                                total_chunks=report.total_chunks,
+                                status="done"
+                                if not planned.entries
+                                or not any(entry.needs_retranslation for entry in planned.entries)
+                                else "warning",
+                                detail="checkpoint",
+                            ),
+                            total_chunks=report.total_chunks,
+                        )
+
+    def _accept_semantic_chunk(
+        self,
+        planned: PlannedChunk,
+        result: ChunkTranslationResult,
+        semantic_unit_by_index: dict[int, SemanticUnit],
+        translator: ChunkTranslator,
+        quality_gate: QualityGate,
+        review_port: ReviewPort,
+        context: str,
+        target_language: str,
+        translated_entries: list[SubtitleEntry],
+        report: TranslationReport,
+    ) -> None:
+        report.token_usage.add_usage(result.usage.to_dict())
+        translation = result.translation
+        for entry, refined_text in parse_translation_results(translation, planned.entries):
+            entry.set_translated_text(refined_text.strip())
+
+        diagnosis = quality_gate.diagnose_chunk(
+            planned.entries,
+            translation=translation,
+            target_language=target_language,
+        )
+        if translator.trace_recorder:
+            translator.trace_recorder.update_quality(result.final_trace_id, diagnosis)
+        quality_gate.apply_diagnosis(planned.entries, diagnosis)
+        translator_progress(translator).emit(
+            stage="processing_chunks",
+            detail="quality",
+            status="running",
+            label="质量检查",
+            message=chunk_quality_message(planned.index, report.total_chunks, diagnosis),
+            chunk=chunk_payload(
+                planned.entries,
+                chunk_index=planned.index,
+                total_chunks=report.total_chunks,
+                status=quality_chunk_status(diagnosis, AutoReviewPort()),
+                detail="quality",
+                issue_summary=diagnosis.summary if diagnosis.has_issues else "",
+            ),
+        )
+        if diagnosis.has_issues:
+            repair_usage = CompletionUsage()
+            repaired_result = translator.repair_translation_traced(
+                planned.entries,
+                translation,
+                target_language,
+                usage=repair_usage,
+                quality_report=diagnosis.to_prompt_report(),
+                chunk_index=planned.index,
+            )
+            repaired = repaired_result.text
+            report.token_usage.add_usage(repair_usage.to_dict())
+            for entry, refined_text in parse_translation_results(repaired, planned.entries):
+                entry.needs_retranslation = False
+                entry.set_translated_text(refined_text.strip())
+            repaired_diagnosis = quality_gate.diagnose_chunk(
+                planned.entries,
+                translation=repaired,
+                target_language=target_language,
+            )
+            if translator.trace_recorder:
+                translator.trace_recorder.update_quality(
+                    repaired_result.trace_id,
+                    repaired_diagnosis,
+                )
+            quality_gate.apply_diagnosis(planned.entries, repaired_diagnosis)
+            diagnosis = repaired_diagnosis
+            translator_progress(translator).emit(
+                stage="processing_chunks",
+                detail="quality",
+                status="warning" if repaired_diagnosis.has_issues else "done",
+                label="质量检查",
+                message=chunk_quality_message(planned.index, report.total_chunks, repaired_diagnosis),
+                chunk=chunk_payload(
+                    planned.entries,
+                    chunk_index=planned.index,
+                    total_chunks=report.total_chunks,
+                    status="warning" if repaired_diagnosis.has_issues else "done",
+                    detail="quality",
+                    issue_summary=repaired_diagnosis.summary if repaired_diagnosis.has_issues else "",
+                ),
+            )
+
+        source_entries: list[SubtitleEntry] = []
+        semantic_units = [semantic_unit_by_index[semantic_entry.index] for semantic_entry in planned.entries]
+        for semantic_entry, unit in zip(planned.entries, semantic_units, strict=True):
+            source_entries.extend(apply_semantic_translation(
+                unit,
+                semantic_entry.translated_text,
+                target_language=target_language,
+            ))
+
+        source_diagnosis = quality_gate.diagnose_chunk(source_entries, target_language=target_language)
+        quality_gate.apply_diagnosis(source_entries, source_diagnosis)
+        if source_diagnosis.has_issues and not isinstance(review_port, AutoReviewPort):
+            logger.warning(
+                "语义chunk映射后质量诊断命中，进入TUI复核: chunk=%s reliability=%s flagged=%s summary=%s",
+                planned.index + 1,
+                source_diagnosis.reliability,
+                source_diagnosis.flagged_entries,
+                source_diagnosis.summary,
+            )
+            source_entries = self._review_semantic_chunk_with_tui(
+                planned,
+                source_entries,
+                semantic_units,
+                translator,
+                quality_gate,
+                review_port,
+                context,
+                target_language,
+                report,
+            )
+
+        translated_entries.extend(source_entries)
+
+        final_status = "warning" if diagnosis.has_issues or any(entry.needs_retranslation for entry in source_entries) else "done"
+        translator_progress(translator).emit(
+            stage="processing_chunks",
+            detail="accept_chunk",
+            status=final_status,
+            label="接受片段",
+            message=f"语义片段 {planned.index + 1}/{report.total_chunks} 已接受并映射回字幕",
+            chunk=chunk_payload(
+                planned.entries,
+                chunk_index=planned.index,
+                total_chunks=report.total_chunks,
+                status=final_status,
+                detail="accept_chunk",
+            ),
+        )
+        logger.info("语义chunk接受完成: chunk=%s units=%s", planned.index + 1, len(planned.entries))
+
+    def _review_semantic_chunk_with_tui(
+        self,
+        planned: PlannedChunk,
+        source_entries: list[SubtitleEntry],
+        semantic_units: list[SemanticUnit],
+        translator: ChunkTranslator,
+        quality_gate: QualityGate,
+        review_port: ReviewPort,
+        context: str,
+        target_language: str,
+        report: TranslationReport,
+    ) -> list[SubtitleEntry]:
+        max_rounds = 2
+        cue_to_unit = {
+            entry.index: unit
+            for unit in semantic_units
+            for entry in unit.entries
+        }
+        current_entries = source_entries
+        outcome = TuiReviewOutcome(retranslated=False)
+        diagnosis = quality_gate.diagnose_chunk(current_entries, target_language=target_language)
+
+        for review_round in range(1, max_rounds + 1):
+            translator_progress(translator).emit(
+                stage="processing_chunks",
+                detail="tui_wait",
+                status="running",
+                label="等待复核",
+                message=f"语义片段 {planned.index + 1}/{report.total_chunks} 等待 TUI 复核",
+                chunk=chunk_payload(
+                    current_entries,
+                    chunk_index=planned.index,
+                    total_chunks=report.total_chunks,
+                    status="review",
+                    detail="tui_wait",
+                ),
+            )
+            review_result = review_port.review(
+                current_entries,
+                planned.index,
+                report.total_chunks,
+                completed_chunks=report.completed_chunks,
+            )
+            current_entries = review_result.chunk
+            logger.info(
+                "语义TUI审核完成: chunk=%s round=%s selected_for_retranslation=%s cascade_start=%s drift_start=%s",
+                planned.index + 1,
+                review_round,
+                len(review_result.entries_to_retranslate),
+                review_result.cascade_start_index,
+                review_result.alignment_drift_start_index,
+            )
+
+            outcome = self._apply_semantic_tui_review_result(
+                planned,
+                current_entries,
+                semantic_units,
+                cue_to_unit,
+                review_result,
+                translator,
+                context,
+                target_language,
+                report,
+            )
+            if not outcome.retranslated:
+                for entry in current_entries:
+                    entry.needs_retranslation = False
+                translator_progress(translator).emit(
+                    stage="processing_chunks",
+                    detail="tui_accept",
+                    status="done",
+                    label="复核完成",
+                    message=f"语义片段 {planned.index + 1}/{report.total_chunks} 已由用户接受",
+                    chunk=chunk_payload(
+                        current_entries,
+                        chunk_index=planned.index,
+                        total_chunks=report.total_chunks,
+                        status="done",
+                        detail="tui_accept",
+                    ),
+                )
+                return current_entries
+
+            diagnosis = quality_gate.diagnose_chunk(current_entries, target_language=target_language)
+            if translator.trace_recorder:
+                for trace_id in outcome.trace_ids:
+                    translator.trace_recorder.update_quality(trace_id, diagnosis)
+            quality_gate.apply_diagnosis(current_entries, diagnosis)
+            if not diagnosis.has_issues:
+                translator_progress(translator).emit(
+                    stage="processing_chunks",
+                    detail="tui_quality",
+                    status="done",
+                    label="复核后质检",
+                    message=f"语义片段 {planned.index + 1}/{report.total_chunks} 复核后通过质量检查",
+                    chunk=chunk_payload(
+                        current_entries,
+                        chunk_index=planned.index,
+                        total_chunks=report.total_chunks,
+                        status="done",
+                        detail="tui_quality",
+                    ),
+                )
+                return current_entries
+
+            logger.warning(
+                "语义TUI重译后质量诊断仍命中: chunk=%s round=%s reliability=%s flagged=%s summary=%s",
+                planned.index + 1,
+                review_round,
+                diagnosis.reliability,
+                diagnosis.flagged_entries,
+                diagnosis.summary,
+            )
+
+        if translator.trace_recorder:
+            for trace_id in outcome.trace_ids:
+                translator.trace_recorder.update_quality(trace_id, diagnosis, status="failed")
+        translator_progress(translator).emit(
+            stage="processing_chunks",
+            detail="tui_warning",
+            status="warning",
+            label="带风险继续",
+            message=f"语义片段 {planned.index + 1}/{report.total_chunks} 复核达到上限，带风险继续",
+            chunk=chunk_payload(
+                current_entries,
+                chunk_index=planned.index,
+                total_chunks=report.total_chunks,
+                status="warning",
+                detail="tui_warning",
+                issue_summary=diagnosis.summary,
+            ),
+        )
+        return current_entries
+
+    def _apply_semantic_tui_review_result(
+        self,
+        planned: PlannedChunk,
+        current_entries: list[SubtitleEntry],
+        semantic_units: list[SemanticUnit],
+        cue_to_unit: dict[int, SemanticUnit],
+        review_result: ReviewResult,
+        translator: ChunkTranslator,
+        context: str,
+        target_language: str,
+        report: TranslationReport,
+    ) -> TuiReviewOutcome:
+        if review_result.alignment_drift_start_index is not None:
+            return self._apply_semantic_alignment_drift_review_result(
+                planned,
+                current_entries,
+                review_result.alignment_drift_start_index,
+                translator,
+                context,
+                target_language,
+                report,
+            )
+
+        affected_unit_indices = self._affected_semantic_unit_indices(
+            semantic_units,
+            cue_to_unit,
+            review_result,
+        )
+        outcome = TuiReviewOutcome(retranslated=False)
+        if not affected_unit_indices:
+            return outcome
+
+        current_by_index = {entry.index: entry for entry in current_entries}
+        units_to_translate = [
+            unit
+            for unit in (
+                self._current_semantic_unit(unit, current_by_index)
+                for unit in semantic_units
+                if unit.index in affected_unit_indices
+            )
+            if unit is not None
+        ]
+        if not units_to_translate:
+            return outcome
+
+        semantic_chunk = semantic_entries(units_to_translate)
+        write_back_start = review_result.cascade_start_index
+        write_back_indices = [
+            entry.index
+            for unit in units_to_translate
+            for entry in unit.entries
+            if write_back_start is None or entry.index >= write_back_start
+        ]
+        translator_progress(translator).emit(
+            stage="processing_chunks",
+            detail="tui_semantic",
+            label="TUI 语义重译",
+            message=(
+                f"语义片段 {planned.index + 1}/{report.total_chunks} "
+                f"正在按 {len(units_to_translate)} 个完整语义单元重译"
+            ),
+            chunk=chunk_payload(
+                current_entries,
+                chunk_index=planned.index,
+                total_chunks=report.total_chunks,
+                status="repairing",
+                detail="tui_semantic",
+            ),
+        )
+        selected_result = translator.translate_semantic_and_refine(
+            semantic_chunk,
+            context,
+            target_language,
+            planned.boundary_context,
+            planned.index,
+            "tui-semantic",
+        )
+        report.token_usage.add_usage(selected_result.usage.to_dict())
+        for semantic_entry, refined_text in parse_translation_results(
+            selected_result.translation,
+            selected_result.chunk,
+        ):
+            semantic_entry.set_translated_text(refined_text.strip())
+
+        for semantic_entry, unit in zip(semantic_chunk, units_to_translate, strict=True):
+            apply_semantic_translation(
+                unit,
+                semantic_entry.translated_text,
+                target_language=target_language,
+                write_back_from_index=write_back_start,
+            )
+
+        outcome.retranslated = True
+        if selected_result.final_trace_id:
+            outcome.trace_ids.append(selected_result.final_trace_id)
+        logger.info(
+            "TUI语义重译完成: chunk=%s semantic_context_units=%s cue_indices=%s cascade_start=%s write_back_indices=%s",
+            planned.index + 1,
+            len(units_to_translate),
+            [unit.cue_indices for unit in units_to_translate],
+            write_back_start,
+            write_back_indices,
+        )
+        return outcome
+
+    def _apply_semantic_alignment_drift_review_result(
+        self,
+        planned: PlannedChunk,
+        current_entries: list[SubtitleEntry],
+        drift_start: int,
+        translator: ChunkTranslator,
+        context: str,
+        target_language: str,
+        report: TranslationReport,
+    ) -> TuiReviewOutcome:
+        outcome = TuiReviewOutcome(retranslated=False)
+        drift_position = self._entry_position(current_entries, drift_start)
+        if drift_position is None:
+            logger.warning("语义TUI漂移起点不存在，跳过漂移重译: chunk=%s drift_start=%s", planned.index + 1, drift_start)
+            return outcome
+
+        stable_anchors = current_entries[max(0, drift_position - 6):drift_position]
+        drift_entries = current_entries[drift_position:]
+        drift_usage = CompletionUsage()
+        translator_progress(translator).emit(
+            stage="processing_chunks",
+            detail="drift",
+            label="对齐漂移重译",
+            message=f"语义片段 {planned.index + 1}/{report.total_chunks} 从字幕 {drift_start} 开始重译",
+            chunk=chunk_payload(
+                drift_entries,
+                chunk_index=planned.index,
+                total_chunks=report.total_chunks,
+                status="repairing",
+                detail="drift",
+            ),
+        )
+        drift_result = translator.retranslate_alignment_drift_traced(
+            drift_entries,
+            stable_anchors,
+            context,
+            target_language,
+            planned.boundary_context,
+            drift_usage,
+            chunk_index=planned.index,
+        )
+        report.token_usage.add_usage(drift_usage.to_dict())
+        for entry, refined_text in parse_translation_results(drift_result.text, drift_entries):
+            entry.needs_retranslation = False
+            entry.set_translated_text(refined_text.strip())
+
+        logger.info(
+            "语义TUI对齐漂移重译完成: chunk=%s drift_start=%s entries=%s anchors=%s write_back_indices=%s",
+            planned.index + 1,
+            drift_start,
+            len(drift_entries),
+            len(stable_anchors),
+            [entry.index for entry in drift_entries],
+        )
+        outcome.retranslated = True
+        if drift_result.trace_id:
+            outcome.trace_ids.append(drift_result.trace_id)
+        return outcome
+
+    def _affected_semantic_unit_indices(
+        self,
+        semantic_units: list[SemanticUnit],
+        cue_to_unit: dict[int, SemanticUnit],
+        review_result: ReviewResult,
+    ) -> set[int]:
+        affected = {
+            cue_to_unit[entry.index].index
+            for entry in review_result.entries_to_retranslate
+            if entry.index in cue_to_unit
+        }
+        cascade_start = review_result.cascade_start_index
+        if cascade_start is not None:
+            affected.update(
+                unit.index
+                for unit in semantic_units
+                if unit.entries and unit.entries[-1].index >= cascade_start
+            )
+        return affected
+
+    def _current_semantic_unit(
+        self,
+        unit: SemanticUnit,
+        current_by_index: dict[int, SubtitleEntry],
+    ) -> SemanticUnit | None:
+        entries = [current_by_index[index] for index in unit.cue_indices if index in current_by_index]
+        if not entries:
+            return None
+        return make_unit(unit.index, entries)
 
     def _accept_chunk(
         self,
@@ -571,10 +1272,11 @@ class TranslationService:
             )
             planned.entries = review_result.chunk
             logger.info(
-                "TUI审核完成: chunk=%s round=%s selected_for_retranslation=%s drift_start=%s",
+                "TUI审核完成: chunk=%s round=%s selected_for_retranslation=%s cascade_start=%s drift_start=%s",
                 planned.index + 1,
                 review_round,
                 len(review_result.entries_to_retranslate),
+                review_result.cascade_start_index,
                 review_result.alignment_drift_start_index,
             )
 
@@ -707,9 +1409,10 @@ class TranslationService:
                 entry.needs_retranslation = False
                 entry.set_translated_text(refined_text.strip())
             logger.info(
-                "TUI普通重译完成: chunk=%s selected=%s",
+                "TUI普通重译完成: chunk=%s selected=%s cascade_start=%s",
                 planned.index + 1,
                 len(ordinary_entries),
+                review_result.cascade_start_index,
             )
             outcome.retranslated = True
             if selected_result.final_trace_id:
@@ -804,6 +1507,46 @@ class TranslationService:
             entry.set_translated_text(entry.original_text.strip())
             translated_entries.append(entry)
 
+    def _handle_semantic_chunk_failure(
+        self,
+        planned: PlannedChunk,
+        semantic_unit_by_index: dict[int, SemanticUnit],
+        translated_entries: list[SubtitleEntry],
+        report: TranslationReport,
+        exc: Exception,
+        progress: ProgressEmitter | None,
+    ) -> None:
+        source_entries = [
+            entry
+            for semantic_entry in planned.entries
+            for entry in semantic_unit_by_index[semantic_entry.index].entries
+        ]
+        report.mark_failed(planned.index, [entry.index for entry in source_entries], exc)
+        if progress is not None:
+            progress.emit(
+                stage="processing_chunks",
+                detail="chunk_failed",
+                status="failed",
+                label="语义片段失败",
+                message=f"语义片段 {planned.index + 1} 处理失败：{exc}",
+                chunk=chunk_payload(
+                    planned.entries,
+                    chunk_index=planned.index,
+                    total_chunks=report.total_chunks,
+                    status="failed",
+                    detail="chunk_failed",
+                    issue_summary=str(exc),
+                ),
+            )
+        if self.config.pipeline.fallback_on_chunk_error == "abort":
+            logger.error("语义chunk失败且配置为中止: chunk=%s error=%s", planned.index + 1, exc)
+            raise exc
+        logger.warning("语义chunk失败后回退到原文: chunk=%s error=%s", planned.index + 1, exc)
+        for entry in source_entries:
+            entry.needs_retranslation = True
+            entry.set_translated_text(entry.original_text.strip())
+            translated_entries.append(entry)
+
     def _restore_checkpoint(
         self,
         request: TranslationRequest,
@@ -834,6 +1577,14 @@ class TranslationService:
                 resumed_indices.add(entry.index)
         report.resumed_entries = len(resumed_indices)
         return resumed_indices
+
+    def _use_semantic_translation(self, _review_mode: str, units: list[SemanticUnit]) -> bool:
+        mode = self.config.pipeline.semantic_translation
+        if mode == "off":
+            return False
+        if mode == "always":
+            return bool(units)
+        return any(len(unit.entries) > 1 for unit in units)
 
     def _finalize_subtitle(self, subtitle: Subtitle, translated_entries: list[SubtitleEntry]) -> None:
         translated_by_index = {entry.index: entry for entry in translated_entries}
@@ -920,6 +1671,14 @@ class TranslationService:
 
         target_code = self._language_code(target_language)
         return str(Path("data") / "output" / f"{title}.{target_code}.srt")
+
+    def _normalized_source_file(self, output_file: str | Path, input_file: str | Path, source_language: str) -> Path:
+        output_path = Path(output_file)
+        input_stem = Path(input_file).stem
+        source_code = self._language_code(source_language)
+        if input_stem.lower().endswith(f".{source_code}"):
+            input_stem = input_stem[: -(len(source_code) + 1)]
+        return output_path.with_name(f"{input_stem}.normalized.{source_code}.srt")
 
     def _language_code(self, language: str) -> str:
         mapping = {

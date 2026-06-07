@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 import chardet
+import pysubs2
 
 from subtitle_llm.domain import Segment, Subtitle, SubtitleEntry, Transcript, Word
 
@@ -36,53 +37,17 @@ class SubtitleIO:
     @staticmethod
     def read_srt(file_path: str | Path) -> Subtitle:
         path = Path(file_path)
-        encodings = ["utf-8", "utf-16", "iso-8859-1", "windows-1252"]
-
-        lines: list[str] | None = None
-        for encoding in encodings:
-            try:
-                lines = path.read_text(encoding=encoding).splitlines()
-                break
-            except UnicodeDecodeError:
-                continue
-
-        if lines is None:
-            raw_data = path.read_bytes()
-            detected = chardet.detect(raw_data)
-            encoding = detected["encoding"] or "utf-8"
-            lines = raw_data.decode(encoding).splitlines()
-
         subtitle = Subtitle()
-
-        def parse_entries(source_lines: list[str]):
-            entry: list[str] = []
-            for raw_line in source_lines:
-                line = raw_line.strip()
-                if not line and entry:
-                    yield entry
-                    entry = []
-                elif line:
-                    entry.append(line)
-            if entry:
-                yield entry
-
-        def is_timecode(line: str) -> bool:
-            return (
-                " --> " in line
-                and line.replace(":", "").replace(",", "").replace(" --> ", "").isdigit()
+        subtitles = load_srt_with_encoding_detection(path)
+        for index, event in enumerate(subtitles, start=1):
+            subtitle.add_entry(
+                SubtitleEntry(
+                    index=index,
+                    start_time=ms_to_srt_time(event.start),
+                    end_time=ms_to_srt_time(event.end),
+                    original_text=pysubs2_text_to_srt_text(event.text),
+                )
             )
-
-        for entry in parse_entries(lines):
-            if len(entry) >= 3 and is_timecode(entry[1]):
-                try:
-                    index = int(entry[0])
-                    start, end = entry[1].split(" --> ")
-                    subtitle.add_entry(SubtitleEntry(index, start, end, "\n".join(entry[2:])))
-                except ValueError:
-                    if subtitle.entries:
-                        subtitle.entries[-1].original_text += "\n" + "\n".join(entry)
-            elif subtitle.entries:
-                subtitle.entries[-1].original_text += "\n" + "\n".join(entry)
 
         return subtitle
 
@@ -100,24 +65,81 @@ class SubtitleIO:
             "source-only": "source-only",
         }.get(output_format, output_format)
 
-        with path.open("w", encoding="utf-8") as file:
-            for entry in subtitle.entries:
-                if output_format == "source-first":
-                    text = f"{entry.original_text}\n{entry.translated_text}"
-                elif output_format == "target-first":
-                    text = f"{entry.translated_text}\n{entry.original_text}"
-                elif output_format == "target-only":
-                    text = entry.translated_text
-                elif output_format == "source-only":
-                    text = entry.original_text
-                else:
-                    raise ValueError(f"Unsupported output format: {output_format}")
+        subtitles = pysubs2.SSAFile()
+        for entry in subtitle.entries:
+            if output_format == "source-first":
+                text = f"{entry.original_text}\n{entry.translated_text}"
+            elif output_format == "target-first":
+                text = f"{entry.translated_text}\n{entry.original_text}"
+            elif output_format == "target-only":
+                text = entry.translated_text
+            elif output_format == "source-only":
+                text = entry.original_text
+            else:
+                raise ValueError(f"Unsupported output format: {output_format}")
 
-                file.write(
-                    f"{entry.index}\n"
-                    f"{entry.start_time} --> {entry.end_time}\n"
-                    f"{text}\n\n"
+            subtitles.append(
+                pysubs2.SSAEvent(
+                    start=srt_time_to_ms(entry.start_time),
+                    end=srt_time_to_ms(entry.end_time),
+                    text=srt_text_to_pysubs2_text(text),
                 )
+            )
+        subtitles.save(str(path), encoding="utf-8", format_="srt")
+
+
+def load_srt_with_encoding_detection(path: Path) -> pysubs2.SSAFile:
+    last_error: UnicodeDecodeError | None = None
+    for encoding in candidate_encodings(path):
+        try:
+            return pysubs2.load(
+                str(path),
+                encoding=encoding,
+                format_="srt",
+                keep_unknown_html_tags=True,
+            )
+        except UnicodeDecodeError as error:
+            last_error = error
+    if last_error:
+        raise last_error
+    return pysubs2.SSAFile()
+
+
+def candidate_encodings(path: Path) -> list[str]:
+    encodings = ["utf-8", "utf-8-sig", "utf-16"]
+    raw_data = path.read_bytes()
+    detected = chardet.detect(raw_data).get("encoding")
+    if detected and detected not in encodings:
+        encodings.append(detected)
+    encodings.extend(["iso-8859-1", "windows-1252"])
+    return encodings
+
+
+def pysubs2_text_to_srt_text(text: str) -> str:
+    return text.replace("\\N", "\n").strip()
+
+
+def srt_text_to_pysubs2_text(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", r"\N")
+
+
+def srt_time_to_ms(value: str) -> int:
+    hours, minutes, seconds_ms = value.split(":")
+    seconds, millis = seconds_ms.split(",")
+    return (
+        int(hours) * 60 * 60 * 1000
+        + int(minutes) * 60 * 1000
+        + int(seconds) * 1000
+        + int(millis)
+    )
+
+
+def ms_to_srt_time(value: int) -> str:
+    value = max(0, value)
+    hours, remainder = divmod(value, 60 * 60 * 1000)
+    minutes, remainder = divmod(remainder, 60 * 1000)
+    seconds, millis = divmod(remainder, 1000)
+    return f"{hours:02}:{minutes:02}:{seconds:02},{millis:03}"
 
 
 class JSONSubtitleReader:

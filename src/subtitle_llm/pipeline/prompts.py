@@ -76,6 +76,69 @@ REFINE_TRANSLATION_PROMPT = """You are a professional translator specializing in
 **Now, provide your refined translation following this format in {target_language}:**
 """
 
+TRANSLATE_SEMANTIC_UNITS_PROMPT = """You are a professional subtitle translator tasked with translating semantic subtitle units into {target_language}.
+
+These semantic units may later be split back onto several timed subtitle cues. Translate the full meaning of each unit naturally.
+
+**Context:**
+{context}
+
+**Readonly Boundary Context:**
+{boundary_context}
+
+**Semantic Translation Units ({chunk_size} units):**
+{unit_text}
+
+**Instructions:**
+1. Translate each semantic unit as a complete thought.
+2. Preserve every unit_id exactly once.
+3. Do not split one unit into multiple output items.
+4. Do not output readonly boundary context units.
+5. Output valid JSON only. No markdown fences, no explanations.
+
+Required JSON shape:
+{{
+  "translations": [
+    {{"unit_id": 1, "translation": "Translated text for unit 1"}},
+    {{"unit_id": 2, "translation": "Translated text for unit 2"}}
+  ]
+}}
+
+Before answering, silently verify that the JSON contains exactly {chunk_size} translations with unit_id 1 through {chunk_size}.
+"""
+
+REFINE_SEMANTIC_UNITS_PROMPT = """You are a professional subtitle translator specializing in {target_language}. Refine rough translations for semantic subtitle units.
+
+**Context:**
+{context}
+
+**Readonly Boundary Context:**
+{boundary_context}
+
+**Original Semantic Units ({chunk_size} units):**
+{unit_text}
+
+**Rough Translation Reference:**
+{rough_translation}
+
+**Instructions:**
+1. Refine each translation using the full semantic source unit.
+2. Preserve every unit_id exactly once.
+3. Do not split, merge, reorder, omit, or renumber units.
+4. Keep the translation natural, faithful, and concise enough for subtitles.
+5. Output valid JSON only. No markdown fences, no explanations.
+
+Required JSON shape:
+{{
+  "translations": [
+    {{"unit_id": 1, "translation": "Refined translated text for unit 1"}},
+    {{"unit_id": 2, "translation": "Refined translated text for unit 2"}}
+  ]
+}}
+
+Before answering, silently verify that the JSON contains exactly {chunk_size} translations with unit_id 1 through {chunk_size}.
+"""
+
 FIX_MISSING_TRANSLATIONS_PROMPT = """You are a professional translator specializing in {target_language}. Your task is to fix missing translations in a subtitle chunk.
 
 Original text:

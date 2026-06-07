@@ -64,6 +64,13 @@ class PipelineConfig(BaseModel):
     ignore_subtitle_length: int = 4
     max_chars: int = 132
     max_duration: float = 10.0
+    normalize_subtitles: Literal["auto", "always", "off"] = "auto"
+    normalize_max_cue_chars: int = 84
+    normalize_max_line_chars: int = 42
+    normalize_max_duration: float = 7.0
+    normalize_min_duration: float = 0.8
+    semantic_translation: Literal["auto", "always", "off"] = "auto"
+    semantic_max_cues_per_unit: int = 6
     review_mode: Literal["auto", "tui"] = "auto"
     context_review: bool = False
     fallback_on_chunk_error: Literal["source", "abort"] = "source"

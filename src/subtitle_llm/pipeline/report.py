@@ -36,6 +36,14 @@ class TranslationReport(BaseModel):
     failed_chunks: list[FailedChunk] = Field(default_factory=list)
     boundary_risk_count: int = 0
     boundary_risks: list[dict] = Field(default_factory=list)
+    normalized_source_file: str | None = None
+    normalization_map_file: str | None = None
+    normalization_applied: bool = False
+    normalization_reason: str | None = None
+    normalization_stats: dict = Field(default_factory=dict)
+    semantic_translation_applied: bool = False
+    semantic_units: int = 0
+    semantic_multi_cue_units: int = 0
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     output_format: str = "source-first"
     llm_trace_dir: str | None = None

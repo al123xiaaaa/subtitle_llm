@@ -19,6 +19,11 @@ const args = process.argv.slice(2);
 const command = args[1] || "";
 const commandLog = process.env.SUBTITLE_LLM_E2E_COMMAND_LOG;
 
+if (args[0] === "-c") {
+  console.log("[]");
+  process.exit(0);
+}
+
 function optionValue(flag) {
   const index = args.indexOf(flag);
   return index >= 0 ? args[index + 1] : "";

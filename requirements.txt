@@ -11,3 +11,5 @@ funasr
 pydub
 pydantic>=2
 typer>=0.12
+pysbd>=0.3.4
+pysubs2>=1.7.0

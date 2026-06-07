@@ -253,4 +253,25 @@ assert.equal(runtime.saveProviderApiKey("deepseek", "sk-runtime").hasAnyCredenti
 assert.equal(runtime.clearProviderApiKey("deepseek").hasAnyCredential, false);
 assert.equal(runtime.resolveUserPath("data/output/demo.srt"), path.join(runtimeProjectRoot, "data/output/demo.srt"));
 
+let missingDependencySpawnCalled = false;
+const missingDependencyRuntime = createDesktopRuntime({
+  app: { getPath: () => runtimeUserData },
+  projectRoot: runtimeProjectRoot,
+  env: { SUBTITLE_LLM_PYTHON: "python-e2e" },
+  spawnFn: () => {
+    missingDependencySpawnCalled = true;
+    throw new Error("should not spawn job when dependencies are missing");
+  },
+  spawnSyncFn: () => ({ status: 1, stdout: '["pysubs2"]', stderr: "", output: [], pid: 0, signal: null }),
+  detectFfmpeg: () => ({ available: true, executable: "/tmp/fake-ffmpeg", version: "fake", error: "" }),
+});
+assert.throws(
+  () => missingDependencyRuntime.startJob(
+    { isDestroyed: () => false, send: () => {} },
+    { command: "translate", options: { input: "input.srt", targetLanguage: "Chinese" } },
+  ),
+  /Python 环境缺少依赖：pysubs2/,
+);
+assert.equal(missingDependencySpawnCalled, false);
+
 console.log("desktop smoke tests passed");

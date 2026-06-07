@@ -44,6 +44,7 @@ class CustomHandlingApp(App):
         self.completed_chunks = min(max(completed_chunks, 0), self.total_chunks)
         self.merge_map: list[dict] = []
         self.alignment_drift_start_row: int | None = None
+        self.cascade_start_row: int | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -81,6 +82,11 @@ class CustomHandlingApp(App):
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         self.update_detail(event.cursor_row)
 
+    def on_resize(self, _event: events.Resize) -> None:
+        if not self.is_mounted:
+            return
+        self.rebuild_table(keep_row=self.current_row())
+
     async def on_key(self, event: events.Key) -> None:
         handlers = {
             "enter": self.action_confirm,
@@ -108,11 +114,13 @@ class CustomHandlingApp(App):
                 "tui_completed": True,
                 "merge_map": self.merge_map.copy(),
                 "alignment_drift_start_index": self.alignment_drift_start_index(),
+                "cascade_start_index": self.cascade_start_index(),
             }
         )
         logger.info(
-            "TUI用户操作: 确认继续 selected_for_retranslation=%s drift_start=%s",
+            "TUI用户操作: 确认继续 selected_for_retranslation=%s cascade_start=%s drift_start=%s",
             len(selected_entries),
+            self.cascade_start_index(),
             self.alignment_drift_start_index(),
         )
         await self.action_quit()
@@ -122,6 +130,7 @@ class CustomHandlingApp(App):
         if row_index is None:
             return
         self.alignment_drift_start_row = None
+        self.cascade_start_row = row_index
         for index, entry in enumerate(self.subtitle_entries):
             entry.needs_retranslation = index >= row_index
         self.rebuild_table(keep_row=row_index)
@@ -132,6 +141,7 @@ class CustomHandlingApp(App):
         if row_index is None:
             return
         self.alignment_drift_start_row = row_index
+        self.cascade_start_row = None
         for index in range(row_index, len(self.subtitle_entries)):
             self.subtitle_entries[index].needs_retranslation = True
         self.rebuild_table(keep_row=row_index)
@@ -144,6 +154,7 @@ class CustomHandlingApp(App):
         if self.is_drift_row(row_index):
             self.update_status("当前行属于对齐漂移范围，按 d 移动起点或 Esc 清空标记。")
             return
+        self.cascade_start_row = None
         entry = self.subtitle_entries[row_index]
         entry.needs_retranslation = not entry.needs_retranslation
         state = "待重译" if entry.needs_retranslation else "已接受"
@@ -172,6 +183,7 @@ class CustomHandlingApp(App):
         target_entry.translated_text = join_non_empty_text(target_entry.translated_text, next_entry.translated_text)
         target_entry.needs_retranslation = True
         del self.subtitle_entries[row_index + 1]
+        self.adjust_cascade_after_merge(row_index)
         self.adjust_drift_after_merge(row_index)
         self.rebuild_table(keep_row=row_index)
         self.update_status(f"字幕 {target_entry.index} 已与下一行合并，并标记重译。")
@@ -185,6 +197,7 @@ class CustomHandlingApp(App):
         for entry in self.subtitle_entries:
             entry.needs_retranslation = False
         self.alignment_drift_start_row = None
+        self.cascade_start_row = None
         self.rebuild_table()
         self.update_status("已接受当前片段全部翻译，继续处理后续字幕。")
         self.write_data_to_temp_file(
@@ -193,6 +206,7 @@ class CustomHandlingApp(App):
                 "tui_completed": True,
                 "merge_map": self.merge_map.copy(),
                 "alignment_drift_start_index": None,
+                "cascade_start_index": None,
             }
         )
         logger.info("TUI用户操作: 接受全部 entries=%s", len(self.subtitle_entries))
@@ -202,6 +216,7 @@ class CustomHandlingApp(App):
         for entry in self.subtitle_entries:
             entry.needs_retranslation = False
         self.alignment_drift_start_row = None
+        self.cascade_start_row = None
         self.rebuild_table()
         self.update_status("已清空当前片段的重译标记。")
 
@@ -212,23 +227,25 @@ class CustomHandlingApp(App):
         )
         if first_issue is None:
             return
+        self.cascade_start_row = first_issue
         for index, entry in enumerate(self.subtitle_entries):
             entry.needs_retranslation = index >= first_issue
 
     def rebuild_table(self, keep_row: int | None = None) -> None:
         table = self.query_one("#subtitles_table", DataTable)
+        widths = responsive_column_widths(self.table_panel_width())
         table.clear(columns=True)
-        table.add_column("标记", key="mark", width=8)
-        table.add_column("字幕序号", key="index", width=10)
-        table.add_column("原文预览", key="original_text", width=46)
-        table.add_column("译文预览", key="translated_text", width=46)
-        table.add_column("处理状态", key="status", width=12)
+        table.add_column("标记", key="mark", width=widths["mark"])
+        table.add_column("字幕序号", key="index", width=widths["index"])
+        table.add_column("原文预览", key="original_text", width=widths["original_text"])
+        table.add_column("译文预览", key="translated_text", width=widths["translated_text"])
+        table.add_column("处理状态", key="status", width=widths["status"])
         for index, entry in enumerate(self.subtitle_entries):
             table.add_row(
                 self.mark_text(index),
                 str(entry.index),
-                self.preview(entry.original_text),
-                self.preview(entry.translated_text),
+                self.preview(entry.original_text, widths["original_text"]),
+                self.preview(entry.translated_text, widths["translated_text"]),
                 self.status_text(index),
                 key=f"row-{index}",
                 height=1,
@@ -270,6 +287,21 @@ class CustomHandlingApp(App):
             return None
         return self.subtitle_entries[self.alignment_drift_start_row].index
 
+    def cascade_start_index(self) -> int | None:
+        if self.cascade_start_row is None:
+            return None
+        if self.cascade_start_row >= len(self.subtitle_entries):
+            return None
+        return self.subtitle_entries[self.cascade_start_row].index
+
+    def adjust_cascade_after_merge(self, merged_row: int) -> None:
+        if self.cascade_start_row is None:
+            return
+        if self.cascade_start_row in {merged_row, merged_row + 1}:
+            self.cascade_start_row = merged_row
+        elif self.cascade_start_row > merged_row + 1:
+            self.cascade_start_row -= 1
+
     def adjust_drift_after_merge(self, merged_row: int) -> None:
         if self.alignment_drift_start_row is None:
             return
@@ -289,6 +321,10 @@ class CustomHandlingApp(App):
             return None
         table = self.query_one("#subtitles_table", DataTable)
         return min(max(table.cursor_row, 0), len(self.subtitle_entries) - 1)
+
+    def table_panel_width(self) -> int:
+        panel = self.query_one("#table_panel", Container)
+        return panel.size.width or self.size.width or 140
 
     def update_status(self, message: str) -> None:
         self.query_one("#status", Static).update(message)
@@ -345,3 +381,22 @@ class CustomHandlingApp(App):
 
 def join_non_empty_text(*values: str) -> str:
     return " ".join(value.strip() for value in values if value.strip())
+
+
+def responsive_column_widths(total_width: int) -> dict[str, int]:
+    width = max(total_width, 60)
+    compact = width < 96
+    mark = 6 if compact else 8
+    index = 8 if compact else 10
+    status = 10 if compact else 12
+    gutters = 6
+    remaining = max(24, width - mark - index - status - gutters)
+    original_text = max(12, remaining // 2)
+    translated_text = max(12, remaining - original_text)
+    return {
+        "mark": mark,
+        "index": index,
+        "original_text": original_text,
+        "translated_text": translated_text,
+        "status": status,
+    }
