@@ -24,7 +24,13 @@ from subtitle_llm.pipeline.text import (
     process_semantic_json_translation,
     process_translation,
 )
-from subtitle_llm.progress_events import ProgressEmitter, chunk_payload
+from subtitle_llm.progress_contract import (
+    ProgressContract,
+    chunk_position_text,
+    chunk_stage_label,
+    chunk_visual_status,
+)
+from subtitle_llm.progress_events import ProgressEmitter
 from subtitle_llm.settings import ModelConfig
 
 
@@ -672,19 +678,13 @@ class ChunkTranslator:
     ) -> None:
         if self.progress is None or chunk is None:
             return
-        self.progress.emit(
-            stage="processing_chunks",
-            detail=detail_key(detail),
-            status="running" if visual_status != "failed" else "failed",
-            label=chunk_stage_label(detail),
+        ProgressContract(self.progress).llm_chunk_event(
+            detail=detail,
+            visual_status=visual_status,
             message=message,
-            chunk=chunk_payload(
-                chunk,
-                chunk_index=chunk_index,
-                total_chunks=self.total_chunks,
-                status=visual_status,
-                detail=detail_key(detail),
-            ),
+            entries=chunk,
+            chunk_index=chunk_index,
+            total_chunks=self.total_chunks,
             model=self.model_config,
             usage=usage,
             trace_id=trace_id,
@@ -698,42 +698,3 @@ def elapsed_ms(started_at: float) -> int:
 
 def join_stage(prefix: str, stage: str) -> str:
     return f"{prefix}-{stage}" if prefix else stage
-
-
-def detail_key(stage: str) -> str:
-    return stage.replace("-", "_")
-
-
-def chunk_stage_label(stage: str) -> str:
-    normalized = detail_key(stage)
-    labels = {
-        "rough": "初译",
-        "refine": "润色",
-        "semantic_rough": "语义初译",
-        "semantic_refine": "语义润色",
-        "tui_semantic": "TUI 语义重译",
-        "tui_semantic_semantic_rough": "TUI 语义重译初译",
-        "tui_semantic_semantic_refine": "TUI 语义重译润色",
-        "repair": "自动修复",
-        "missing_fix": "补齐缺失翻译",
-        "drift": "对齐漂移重译",
-        "tui_ordinary_rough": "TUI 普通重译初译",
-        "tui_ordinary_refine": "TUI 普通重译润色",
-        "llm_error": "模型请求",
-    }
-    return labels.get(normalized, normalized.replace("_", " "))
-
-
-def chunk_visual_status(stage: str) -> str:
-    normalized = detail_key(stage)
-    if "repair" in normalized or "drift" in normalized or "tui" in normalized or "missing_fix" in normalized:
-        return "repairing"
-    return "running"
-
-
-def chunk_position_text(chunk_index: int | None, total_chunks: int | None) -> str:
-    if chunk_index is None:
-        return ""
-    if total_chunks:
-        return f"第 {chunk_index + 1}/{total_chunks} 个片段"
-    return f"第 {chunk_index + 1} 个片段"
