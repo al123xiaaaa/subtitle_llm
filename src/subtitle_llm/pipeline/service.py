@@ -21,7 +21,8 @@ from subtitle_llm.pipeline.normalization import (
     write_normalization_map,
 )
 from subtitle_llm.pipeline.quality import QualityGate
-from subtitle_llm.pipeline.report import AutoLayoutRepair, TranslationReport
+from subtitle_llm.pipeline.report import TranslationReport
+from subtitle_llm.pipeline.run_ledger import RunLedger
 from subtitle_llm.pipeline.semantic_units import (
     SemanticUnit,
     apply_semantic_translation,
@@ -235,7 +236,14 @@ class TranslationService:
             output_format=output_format,
             config_version=self.config.config_version,
         )
-        resumed_indices, removed_entry_indices = self._restore_checkpoint(request, subtitle, checkpoint, report)
+        checkpoint_restore = RunLedger.restore_checkpoint(
+            resume=request.resume,
+            subtitle=subtitle,
+            checkpoint=checkpoint,
+            report=report,
+        )
+        resumed_indices = checkpoint_restore.resumed_indices
+        run_ledger = checkpoint_restore.ledger
         progress.emit(
             stage="prepare_translation",
             detail="restore_checkpoint",
@@ -395,7 +403,7 @@ class TranslationService:
                     request.target_language,
                     subtitle,
                     translated_entries,
-                    removed_entry_indices,
+                    run_ledger,
                     checkpoint,
                     report,
                     refine_translation,
@@ -410,7 +418,7 @@ class TranslationService:
                     request.target_language,
                     subtitle,
                     translated_entries,
-                    removed_entry_indices,
+                    run_ledger,
                     checkpoint,
                     report,
                     refine_translation,
@@ -422,11 +430,8 @@ class TranslationService:
                 label="汇总字幕",
                 message="正在汇总所有字幕片段",
             )
-            self._finalize_subtitle(subtitle, translated_entries, removed_entry_indices)
-            report.stage = "完成"
-            report.processed_entries = len(subtitle.entries)
-            report.final_output_entries = len(subtitle.entries)
-            self._save_checkpoint(checkpoint, subtitle, report, translated_entries, removed_entry_indices)
+            run_ledger.finalize_subtitle(subtitle, translated_entries, report)
+            run_ledger.save_checkpoint(checkpoint, subtitle, report, translated_entries)
             progress.emit(
                 stage="generate_result",
                 detail="write_srt",
@@ -472,7 +477,7 @@ class TranslationService:
         target_language: str,
         subtitle: Subtitle,
         translated_entries: list[SubtitleEntry],
-        removed_entry_indices: set[int],
+        run_ledger: RunLedger,
         checkpoint: CheckpointStore,
         report: TranslationReport,
         refine_translation: bool,
@@ -528,7 +533,7 @@ class TranslationService:
                             context,
                             target_language,
                             translated_entries,
-                            removed_entry_indices,
+                            run_ledger,
                             report,
                             refine_translation,
                         )
@@ -541,8 +546,8 @@ class TranslationService:
                         self._handle_chunk_failure(planned, translated_entries, report, exc, translator.progress)
                     finally:
                         report.completed_chunks += 1
-                        report.processed_entries = len({entry.index for entry in translated_entries})
-                        self._save_checkpoint(checkpoint, subtitle, report, translated_entries, removed_entry_indices)
+                        report.processed_entries = run_ledger.processed_entry_count(translated_entries)
+                        run_ledger.save_checkpoint(checkpoint, subtitle, report, translated_entries)
                         translator_progress(translator).emit(
                             stage="processing_chunks",
                             detail="checkpoint",
@@ -570,7 +575,7 @@ class TranslationService:
         target_language: str,
         subtitle: Subtitle,
         translated_entries: list[SubtitleEntry],
-        removed_entry_indices: set[int],
+        run_ledger: RunLedger,
         checkpoint: CheckpointStore,
         report: TranslationReport,
         refine_translation: bool,
@@ -627,7 +632,7 @@ class TranslationService:
                             context,
                             target_language,
                             translated_entries,
-                            removed_entry_indices,
+                            run_ledger,
                             report,
                             refine_translation,
                         )
@@ -647,8 +652,8 @@ class TranslationService:
                         )
                     finally:
                         report.completed_chunks += 1
-                        report.processed_entries = len({entry.index for entry in translated_entries})
-                        self._save_checkpoint(checkpoint, subtitle, report, translated_entries, removed_entry_indices)
+                        report.processed_entries = run_ledger.processed_entry_count(translated_entries)
+                        run_ledger.save_checkpoint(checkpoint, subtitle, report, translated_entries)
                         translator_progress(translator).emit(
                             stage="processing_chunks",
                             detail="checkpoint",
@@ -679,7 +684,7 @@ class TranslationService:
         context: str,
         target_language: str,
         translated_entries: list[SubtitleEntry],
-        removed_entry_indices: set[int],
+        run_ledger: RunLedger,
         report: TranslationReport,
         refine_translation: bool,
     ) -> None:
@@ -767,7 +772,7 @@ class TranslationService:
             planned,
             source_entries,
             semantic_units,
-            removed_entry_indices,
+            run_ledger,
             report,
             target_language,
         )
@@ -790,7 +795,7 @@ class TranslationService:
                 review_port,
                 context,
                 target_language,
-                removed_entry_indices,
+                run_ledger,
                 report,
                 refine_translation,
             )
@@ -824,7 +829,7 @@ class TranslationService:
         review_port: ReviewPort,
         context: str,
         target_language: str,
-        removed_entry_indices: set[int],
+        run_ledger: RunLedger,
         report: TranslationReport,
         refine_translation: bool,
     ) -> list[SubtitleEntry]:
@@ -859,7 +864,7 @@ class TranslationService:
                 report.total_chunks,
                 completed_chunks=report.completed_chunks,
             )
-            removed_entry_indices.update(review_result.removed_entry_indices)
+            run_ledger.record_removed_indices(review_result.removed_entry_indices)
             current_entries = review_result.chunk
             logger.info(
                 "语义TUI审核完成: chunk=%s round=%s selected_for_retranslation=%s cascade_start=%s drift_start=%s removed=%s",
@@ -906,7 +911,7 @@ class TranslationService:
                 planned,
                 current_entries,
                 semantic_units,
-                removed_entry_indices,
+                run_ledger,
                 report,
                 target_language,
             )
@@ -966,7 +971,7 @@ class TranslationService:
         planned: PlannedChunk,
         source_entries: list[SubtitleEntry],
         semantic_units: list[SemanticUnit],
-        removed_entry_indices: set[int],
+        run_ledger: RunLedger,
         report: TranslationReport,
         target_language: str,
     ) -> list[SubtitleEntry]:
@@ -991,13 +996,12 @@ class TranslationService:
                     )
                     last_kept.needs_retranslation = last_kept.needs_retranslation or entry.needs_retranslation
                     removed_in_chunk.add(entry.index)
-                    removed_entry_indices.add(entry.index)
-                    repair = AutoLayoutRepair(
+                    repair = run_ledger.record_auto_layout_repair(
+                        report,
                         merged_index=last_kept.index,
                         removed_index=entry.index,
                         reason=reason,
                     )
-                    report.auto_layout_repairs.append(repair)
                     logger.info(
                         "语义布局自动合并: chunk=%s semantic_unit=%s merged_index=%s removed_index=%s reason=%s",
                         planned.index + 1,
@@ -1220,7 +1224,7 @@ class TranslationService:
         context: str,
         target_language: str,
         translated_entries: list[SubtitleEntry],
-        removed_entry_indices: set[int],
+        run_ledger: RunLedger,
         report: TranslationReport,
         refine_translation: bool,
     ) -> None:
@@ -1316,7 +1320,7 @@ class TranslationService:
                     review_port,
                     context,
                     target_language,
-                    removed_entry_indices,
+                    run_ledger,
                     report,
                     refine_translation,
                 )
@@ -1348,7 +1352,7 @@ class TranslationService:
         review_port: ReviewPort,
         context: str,
         target_language: str,
-        removed_entry_indices: set[int],
+        run_ledger: RunLedger,
         report: TranslationReport,
         refine_translation: bool,
     ) -> None:
@@ -1374,7 +1378,7 @@ class TranslationService:
                 report.total_chunks,
                 completed_chunks=report.completed_chunks,
             )
-            removed_entry_indices.update(review_result.removed_entry_indices)
+            run_ledger.record_removed_indices(review_result.removed_entry_indices)
             planned.entries = review_result.chunk
             logger.info(
                 "TUI审核完成: chunk=%s round=%s selected_for_retranslation=%s cascade_start=%s drift_start=%s removed=%s",
@@ -1656,96 +1660,6 @@ class TranslationService:
             entry.set_translated_text(entry.original_text.strip())
             translated_entries.append(entry)
 
-    def _save_checkpoint(
-        self,
-        checkpoint: CheckpointStore,
-        subtitle: Subtitle,
-        report: TranslationReport,
-        translated_entries: list[SubtitleEntry],
-        removed_entry_indices: set[int],
-    ) -> None:
-        report.removed_entry_indices = sorted(removed_entry_indices)
-        checkpoint.save(
-            self._checkpoint_subtitle(subtitle, translated_entries, removed_entry_indices),
-            report,
-        )
-
-    def _checkpoint_subtitle(
-        self,
-        subtitle: Subtitle,
-        translated_entries: list[SubtitleEntry],
-        removed_entry_indices: set[int],
-    ) -> Subtitle:
-        removed_indices = removed_entry_indices or set()
-        translated_by_index = {
-            entry.index: entry
-            for entry in translated_entries
-            if entry.index not in removed_indices
-        }
-        checkpoint_entries: list[SubtitleEntry] = []
-        seen_indices: set[int] = set()
-        for entry in subtitle.entries:
-            if entry.index in removed_indices:
-                continue
-            checkpoint_entry = translated_by_index.get(entry.index, entry)
-            checkpoint_entries.append(checkpoint_entry)
-            seen_indices.add(checkpoint_entry.index)
-
-        for entry in translated_entries:
-            if entry.index in removed_indices or entry.index in seen_indices:
-                continue
-            checkpoint_entries.append(entry)
-
-        return Subtitle(sorted(checkpoint_entries, key=lambda item: item.index))
-
-    def _restore_checkpoint(
-        self,
-        request: TranslationRequest,
-        subtitle: Subtitle,
-        checkpoint: CheckpointStore,
-        report: TranslationReport,
-    ) -> tuple[set[int], set[int]]:
-        if not request.resume:
-            return set(), set()
-
-        data = checkpoint.load()
-        entries = data.get("entries", {})
-        report_data = data.get("report", {})
-        removed_entry_indices = {
-            int(index)
-            for index in report_data.get("removed_entry_indices", [])
-        }
-        failed_entry_indices = {
-            int(index)
-            for failed in report_data.get("failed_chunks", [])
-            for index in failed.get("entry_indices", [])
-        }
-        resumed_indices: set[int] = set()
-        restored_entries: list[SubtitleEntry] = []
-        for entry in subtitle.entries:
-            if entry.index in removed_entry_indices:
-                continue
-            if entry.index in failed_entry_indices:
-                restored_entries.append(entry)
-                continue
-            saved = entries.get(str(entry.index))
-            if not saved:
-                restored_entries.append(entry)
-                continue
-            restored_entry = SubtitleEntry.from_dict(saved)
-            restored_entries.append(restored_entry)
-            if restored_entry.translated_text.strip():
-                resumed_indices.add(restored_entry.index)
-        subtitle.entries = restored_entries
-        report.resumed_entries = len(resumed_indices)
-        report.removed_entry_indices = sorted(removed_entry_indices)
-        report.auto_layout_repairs = [
-            AutoLayoutRepair(**item)
-            for item in report_data.get("auto_layout_repairs", [])
-        ]
-        report.final_output_entries = int(report_data.get("final_output_entries", 0) or 0)
-        return resumed_indices, removed_entry_indices
-
     def _use_semantic_translation(self, _review_mode: str, units: list[SemanticUnit]) -> bool:
         mode = self.config.pipeline.semantic_translation
         if mode == "off":
@@ -1758,30 +1672,6 @@ class TranslationService:
         if request.refine_translation is not None:
             return request.refine_translation
         return self.config.pipeline.refine_translation
-
-    def _finalize_subtitle(
-        self,
-        subtitle: Subtitle,
-        translated_entries: list[SubtitleEntry],
-        removed_entry_indices: set[int] | None = None,
-    ) -> None:
-        removed_indices = removed_entry_indices or set()
-        translated_by_index = {
-            entry.index: entry
-            for entry in translated_entries
-            if entry.index not in removed_indices
-        }
-        for entry in subtitle.entries:
-            if entry.index in removed_indices:
-                continue
-            if entry.index in translated_by_index:
-                continue
-            if not entry.translated_text.strip():
-                entry.set_translated_text(entry.original_text.strip())
-            translated_by_index[entry.index] = entry
-
-        subtitle.entries = sorted(translated_by_index.values(), key=lambda item: item.index)
-        subtitle.reorder_entries()
 
     def _review_port(self, review_mode: str) -> ReviewPort:
         if self.review_port:

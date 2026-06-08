@@ -19,6 +19,7 @@ from subtitle_llm.pipeline import TranslationRequest, TranslationService
 from subtitle_llm.pipeline.checkpoint import CheckpointMismatch, CheckpointStore, file_fingerprint
 from subtitle_llm.pipeline.chunk_translator import ChunkTranslator
 from subtitle_llm.pipeline.quality import QualityGate
+from subtitle_llm.pipeline.run_ledger import RunLedger
 from subtitle_llm.progress_events import PROGRESS_EVENT_PREFIX
 from subtitle_llm.review.tui import TuiReviewPort
 from subtitle_llm.settings import AppConfig, ModelConfig, ModelProvider, PipelineConfig
@@ -684,11 +685,6 @@ class TestNewPipeline(unittest.TestCase):
                 "source-first",
                 "2",
             )
-            service = TranslationService(
-                make_config(),
-                translation_client=FakeLLMClient(),
-                summary_client=FakeLLMClient(),
-            )
             subtitle = Subtitle([
                 SubtitleEntry(1, "00:00:01,000", "00:00:02,000", "First sentence.", "旧译文一"),
                 SubtitleEntry(2, "00:00:03,000", "00:00:04,000", "Second sentence.", "旧译文二"),
@@ -707,8 +703,9 @@ class TestNewPipeline(unittest.TestCase):
                 checkpoint_file=str(checkpoint_path),
                 context_file=str(Path(tmp) / "context.txt"),
             )
+            ledger = RunLedger(removed_entry_indices={2, 3})
 
-            service._save_checkpoint(checkpoint, subtitle, report, [merged_entry], {2, 3})
+            ledger.save_checkpoint(checkpoint, subtitle, report, [merged_entry])
 
             resumed_subtitle = Subtitle([
                 SubtitleEntry(1, "00:00:01,000", "00:00:02,000", "First sentence."),
@@ -721,20 +718,15 @@ class TestNewPipeline(unittest.TestCase):
                 checkpoint_file=str(checkpoint_path),
                 context_file=str(Path(tmp) / "context.txt"),
             )
-            resumed_indices, removed_indices = service._restore_checkpoint(
-                TranslationRequest(
-                    input_file=str(input_path),
-                    output_file=str(output_path),
-                    target_language="Chinese",
-                    resume=True,
-                ),
-                resumed_subtitle,
-                checkpoint,
-                resume_report,
+            restore = RunLedger.restore_checkpoint(
+                resume=True,
+                subtitle=resumed_subtitle,
+                checkpoint=checkpoint,
+                report=resume_report,
             )
 
-            self.assertEqual(resumed_indices, {1})
-            self.assertEqual(removed_indices, {2, 3})
+            self.assertEqual(restore.resumed_indices, {1})
+            self.assertEqual(restore.ledger.removed_entry_indices, {2, 3})
             self.assertEqual(resume_report.removed_entry_indices, [2, 3])
             self.assertEqual(len(resumed_subtitle.entries), 1)
             self.assertEqual(resumed_subtitle.entries[0].end_time, "00:00:06,000")

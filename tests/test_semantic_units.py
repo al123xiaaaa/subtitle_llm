@@ -17,6 +17,7 @@ from subtitle_llm.pipeline.chunk_translator import ChunkTranslationResult, Trace
 from subtitle_llm.pipeline.chunks import PlannedChunk
 from subtitle_llm.pipeline.quality import QualityGate
 from subtitle_llm.pipeline.report import TranslationReport
+from subtitle_llm.pipeline.run_ledger import RunLedger
 from subtitle_llm.pipeline.semantic_units import (
     apply_semantic_translation,
     build_semantic_units,
@@ -207,21 +208,21 @@ class TestSemanticUnits(unittest.TestCase):
             context_file="context.txt",
             total_chunks=1,
         )
-        removed_entry_indices: set[int] = set()
+        run_ledger = RunLedger()
 
         repaired_entries = TranslationService._repair_semantic_layout(
             cast(Any, None),
             planned,
             source_entries,
             [unit],
-            removed_entry_indices,
+            run_ledger,
             report,
             "Chinese",
         )
         diagnosis = QualityGate().diagnose_chunk(repaired_entries, target_language="Chinese")
 
         self.assertEqual([entry.index for entry in repaired_entries], [1, 2, 3])
-        self.assertEqual(removed_entry_indices, set())
+        self.assertEqual(run_ledger.removed_entry_indices, set())
         self.assertEqual(report.auto_layout_repairs, [])
         self.assertTrue(diagnosis.has_issues)
         self.assertIn("missing_translation", {issue.issue_type for issue in diagnosis.issues})
@@ -288,20 +289,15 @@ class TestSemanticUnits(unittest.TestCase):
                 context_file=str(sidecar_path(output_path, "_context.txt")),
             )
 
-            resumed_indices, removed_indices = service._restore_checkpoint(
-                TranslationRequest(
-                    input_file=str(input_path),
-                    output_file=str(output_path),
-                    target_language="Chinese",
-                    resume=True,
-                ),
-                resumed_subtitle,
-                checkpoint,
-                resume_report,
+            restore = RunLedger.restore_checkpoint(
+                resume=True,
+                subtitle=resumed_subtitle,
+                checkpoint=checkpoint,
+                report=resume_report,
             )
 
-            self.assertEqual(resumed_indices, {1})
-            self.assertEqual(removed_indices, {2})
+            self.assertEqual(restore.resumed_indices, {1})
+            self.assertEqual(restore.ledger.removed_entry_indices, {2})
             self.assertEqual(len(resumed_subtitle.entries), 1)
             self.assertEqual(resume_report.auto_layout_repairs[0].removed_index, 2)
 
