@@ -77,6 +77,9 @@ export function buildDesktopModelConfigContent(selection: Partial<ModelSelection
       retry_delay_seconds: "10",
     }),
     "",
+    "pipeline:",
+    "  refine_translation: false",
+    "",
   ].join("\n");
 }
 

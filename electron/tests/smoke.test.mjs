@@ -64,6 +64,27 @@ assert.deepEqual(
     "/usr/local/bin/ffmpeg",
   ],
 );
+assert.equal(
+  buildPythonArgs({
+    command: "translate",
+    options: {
+      input: "input.srt",
+      targetLanguage: "Chinese",
+    },
+  }).includes("--refine"),
+  false,
+);
+assert.equal(
+  buildPythonArgs({
+    command: "translate",
+    options: {
+      input: "input.srt",
+      targetLanguage: "Chinese",
+      refineTranslation: true,
+    },
+  }).includes("--refine"),
+  true,
+);
 
 assert.deepEqual(
   buildPythonArgs({
@@ -136,6 +157,7 @@ assert.match(deepseekConfig, /provider: "openai"/);
 assert.match(deepseekConfig, /api_key_env: "DEEPSEEK_API_KEY"/);
 assert.match(deepseekConfig, /endpoint: "https:\/\/api\.deepseek\.com"/);
 assert.match(deepseekConfig, /model: "deepseek-v4-flash"/);
+assert.match(deepseekConfig, /refine_translation: false/);
 assert.doesNotMatch(deepseekConfig, /sk-test-secret/);
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "subtitle-llm-settings-"));

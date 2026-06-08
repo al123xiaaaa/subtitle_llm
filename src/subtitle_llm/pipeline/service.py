@@ -47,6 +47,7 @@ class TranslationRequest:
     output_format: str | None = None
     resume: bool = False
     review_mode: str | None = None
+    refine_translation: bool | None = None
 
 
 @dataclass
@@ -94,12 +95,13 @@ class TranslationService:
             message="正在准备翻译任务",
         )
         logger.info(
-            "翻译任务开始: input=%s target_language=%s source_language=%s resume=%s review_mode=%s",
+            "翻译任务开始: input=%s target_language=%s source_language=%s resume=%s review_mode=%s refine_translation=%s",
             request.input_file,
             request.target_language,
             request.source_language,
             request.resume,
             request.review_mode or self.config.pipeline.review_mode,
+            self._refine_translation_enabled(request),
         )
         resolved_input = self._resolve_input(request.input_file, request.source_language, progress)
         input_file = resolved_input.subtitle_file
@@ -279,6 +281,7 @@ class TranslationService:
         )
 
         review_mode = request.review_mode or self.config.pipeline.review_mode
+        refine_translation = self._refine_translation_enabled(request)
         semantic_units_list = build_semantic_units(
             subtitle.entries,
             max_cues_per_unit=self.config.pipeline.semantic_max_cues_per_unit,
@@ -395,6 +398,7 @@ class TranslationService:
                     removed_entry_indices,
                     checkpoint,
                     report,
+                    refine_translation,
                 )
             else:
                 self._run_chunks(
@@ -409,6 +413,7 @@ class TranslationService:
                     removed_entry_indices,
                     checkpoint,
                     report,
+                    refine_translation,
                 )
 
             progress.emit(
@@ -470,6 +475,7 @@ class TranslationService:
         removed_entry_indices: set[int],
         checkpoint: CheckpointStore,
         report: TranslationReport,
+        refine_translation: bool,
     ) -> None:
         done_futures: set[concurrent.futures.Future] = set()
         for planned in planned_chunks:
@@ -497,6 +503,7 @@ class TranslationService:
                     target_language,
                     planned.boundary_context,
                     planned.index,
+                    refine_translation=refine_translation,
                 ): planned
                 for planned in planned_chunks
             }
@@ -523,6 +530,7 @@ class TranslationService:
                             translated_entries,
                             removed_entry_indices,
                             report,
+                            refine_translation,
                         )
                     except Exception as exc:
                         logger.exception(
@@ -565,6 +573,7 @@ class TranslationService:
         removed_entry_indices: set[int],
         checkpoint: CheckpointStore,
         report: TranslationReport,
+        refine_translation: bool,
     ) -> None:
         done_futures: set[concurrent.futures.Future] = set()
         for planned in planned_chunks:
@@ -592,6 +601,7 @@ class TranslationService:
                     target_language,
                     planned.boundary_context,
                     planned.index,
+                    refine_translation=refine_translation,
                 ): planned
                 for planned in planned_chunks
             }
@@ -619,6 +629,7 @@ class TranslationService:
                             translated_entries,
                             removed_entry_indices,
                             report,
+                            refine_translation,
                         )
                     except Exception as exc:
                         logger.exception(
@@ -670,6 +681,7 @@ class TranslationService:
         translated_entries: list[SubtitleEntry],
         removed_entry_indices: set[int],
         report: TranslationReport,
+        refine_translation: bool,
     ) -> None:
         report.token_usage.add_usage(result.usage.to_dict())
         translation = result.translation
@@ -780,6 +792,7 @@ class TranslationService:
                 target_language,
                 removed_entry_indices,
                 report,
+                refine_translation,
             )
 
         translated_entries.extend(source_entries)
@@ -813,6 +826,7 @@ class TranslationService:
         target_language: str,
         removed_entry_indices: set[int],
         report: TranslationReport,
+        refine_translation: bool,
     ) -> list[SubtitleEntry]:
         max_rounds = 2
         cue_to_unit = {
@@ -867,6 +881,7 @@ class TranslationService:
                 context,
                 target_language,
                 report,
+                refine_translation,
             )
             if not outcome.retranslated:
                 for entry in current_entries:
@@ -1010,6 +1025,7 @@ class TranslationService:
         context: str,
         target_language: str,
         report: TranslationReport,
+        refine_translation: bool,
     ) -> TuiReviewOutcome:
         if review_result.alignment_drift_start_index is not None:
             return self._apply_semantic_alignment_drift_review_result(
@@ -1075,6 +1091,7 @@ class TranslationService:
             planned.boundary_context,
             planned.index,
             "tui-semantic",
+            refine_translation=refine_translation,
         )
         report.token_usage.add_usage(selected_result.usage.to_dict())
         for semantic_entry, refined_text in parse_translation_results(
@@ -1205,6 +1222,7 @@ class TranslationService:
         translated_entries: list[SubtitleEntry],
         removed_entry_indices: set[int],
         report: TranslationReport,
+        refine_translation: bool,
     ) -> None:
         report.token_usage.add_usage(result.usage.to_dict())
         translation = result.translation
@@ -1300,6 +1318,7 @@ class TranslationService:
                     target_language,
                     removed_entry_indices,
                     report,
+                    refine_translation,
                 )
 
         for entry in planned.entries:
@@ -1331,6 +1350,7 @@ class TranslationService:
         target_language: str,
         removed_entry_indices: set[int],
         report: TranslationReport,
+        refine_translation: bool,
     ) -> None:
         max_rounds = 2
         for review_round in range(1, max_rounds + 1):
@@ -1373,6 +1393,7 @@ class TranslationService:
                 context,
                 target_language,
                 report,
+                refine_translation,
             )
             if not outcome.retranslated:
                 for entry in planned.entries:
@@ -1454,6 +1475,7 @@ class TranslationService:
         context: str,
         target_language: str,
         report: TranslationReport,
+        refine_translation: bool,
     ) -> TuiReviewOutcome:
         drift_start = review_result.alignment_drift_start_index
         ordinary_indices = {entry.index for entry in review_result.entries_to_retranslate}
@@ -1486,6 +1508,7 @@ class TranslationService:
                 planned.boundary_context,
                 planned.index,
                 "tui-ordinary",
+                refine_translation=refine_translation,
             )
             report.token_usage.add_usage(selected_result.usage.to_dict())
             for entry, refined_text in parse_translation_results(
@@ -1730,6 +1753,11 @@ class TranslationService:
         if mode == "always":
             return bool(units)
         return any(len(unit.entries) > 1 for unit in units)
+
+    def _refine_translation_enabled(self, request: TranslationRequest) -> bool:
+        if request.refine_translation is not None:
+            return request.refine_translation
+        return self.config.pipeline.refine_translation
 
     def _finalize_subtitle(
         self,

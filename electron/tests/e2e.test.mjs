@@ -166,6 +166,7 @@ process.exit(0);
 const tests = [
   ["首次启动可以保存 DeepSeek API Key，且不泄露明文", testOnboardingSavesKey],
   ["YouTube URL 翻译会自动启用 MKV，并传递正确 CLI 参数", testYoutubeTranslateWithMkv],
+  ["翻译默认不二次润色，勾选后传递 refine 参数", testRefineToggle],
   ["已有字幕和视频可以单独生成 MKV", testManualMuxFlow],
   ["API Key 可以从环境变量回退，跳过首次配置", testEnvCredentialFallback],
   ["没有 FFmpeg 时 MKV 控件禁用但翻译表单仍可用", testFfmpegMissingDisablesMkvOnly],
@@ -199,6 +200,7 @@ async function testYoutubeTranslateWithMkv() {
     await page.locator("#translateInput").fill(youtubeUrl);
     await page.locator("#embedMkv").waitFor({ state: "visible" });
     assert.equal(await page.locator("#embedMkv").isChecked(), true);
+    assert.equal(await page.locator("#refineTranslation").isChecked(), false);
     await page.locator("#modelSelect").selectOption("deepseek-v4-pro");
 
     await page.locator("#startTranslate").click();
@@ -221,11 +223,28 @@ async function testYoutubeTranslateWithMkv() {
     assertHasArg(commands[0].args, "--ffmpeg", fakeFfmpegPath);
     assert.equal(commands[0].args.includes("--embed-video"), true);
     assert.equal(commands[0].args.includes("--no-review"), true);
+    assert.equal(commands[0].args.includes("--refine"), false);
     assert.equal(commands[0].env.DEEPSEEK_API_KEY, "sk-e2e-deepseek");
 
     const configPath = valueAfter(commands[0].args, "--config");
     assert.ok(configPath, "expected generated config path");
     assert.match(fs.readFileSync(configPath, "utf8"), /model: "deepseek-v4-pro"/);
+  });
+}
+
+async function testRefineToggle() {
+  await withApp(async ({ page, commandLogPath }) => {
+    await saveOnboardingKey(page);
+    await page.locator("#translateInput").fill("input.srt");
+    await page.locator("#refineTranslation").check();
+
+    await page.locator("#startTranslate").click();
+    await waitForRunStatus(page, "完成");
+
+    const commands = readCommands(commandLogPath);
+    assert.equal(commands.length, 1);
+    assert.equal(commands[0].command, "translate");
+    assert.equal(commands[0].args.includes("--refine"), true);
   });
 }
 

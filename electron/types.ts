@@ -88,6 +88,7 @@ export interface TranslateJobOptions {
   config?: string;
   outputFormat?: OutputFormat | "";
   reviewMode?: ReviewMode;
+  refineTranslation?: boolean;
   resume?: boolean;
   embedVideo?: boolean;
   video?: string;

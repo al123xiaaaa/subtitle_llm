@@ -93,6 +93,7 @@ export function useAppController() {
     output: string;
     config: string;
     useYamlConfig: boolean;
+    refineTranslation: boolean;
     resume: boolean;
     embedMkv: boolean;
     video: string;
@@ -105,6 +106,7 @@ export function useAppController() {
     output: "",
     config: "",
     useYamlConfig: false,
+    refineTranslation: false,
     resume: false,
     embedMkv: false,
     video: "",
@@ -589,6 +591,7 @@ export function useAppController() {
         config: translateForm.useYamlConfig ? cleanString(translateForm.config) : "",
         outputFormat: translateForm.outputFormat,
         reviewMode: translateForm.reviewMode,
+        refineTranslation: translateForm.refineTranslation,
         resume: translateForm.resume,
         embedVideo,
         video,

@@ -354,6 +354,15 @@ const {
               <option value="tui">TUI 复核</option>
             </select>
           </label>
+          <label class="check-row span-2">
+            <input
+              id="refineTranslation"
+              v-model="translateForm.refineTranslation"
+              type="checkbox"
+              :disabled="isBusy"
+            >
+            <span>启用二次润色</span>
+          </label>
           <label class="span-2">
             <span>输出文件</span>
             <div class="inline-control">

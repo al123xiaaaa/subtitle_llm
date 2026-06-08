@@ -68,6 +68,10 @@ def translate(
         bool | None,
         typer.Option("--review/--no-review", help="Use TUI review for suspicious chunks."),
     ] = None,
+    refine: Annotated[
+        bool | None,
+        typer.Option("--refine/--no-refine", help="Run a second LLM refinement pass after the rough translation."),
+    ] = None,
     embed_video: Annotated[
         bool,
         typer.Option("--embed-video/--no-embed-video", help="Generate an MKV with the translated SRT as a soft subtitle track."),
@@ -92,7 +96,7 @@ def translate(
         message="正在加载模型和翻译配置",
     )
     logger.info(
-        "用户操作: translate input=%s output=%s target_language=%s source_language=%s config=%s format=%s resume=%s review=%s embed_video=%s video=%s video_output=%s",
+        "用户操作: translate input=%s output=%s target_language=%s source_language=%s config=%s format=%s resume=%s review=%s refine=%s embed_video=%s video=%s video_output=%s",
         input_file,
         output_file,
         target_language,
@@ -101,6 +105,7 @@ def translate(
         output_format,
         resume,
         review,
+        refine,
         embed_video,
         video_file,
         video_output,
@@ -116,6 +121,7 @@ def translate(
                 output_format=output_format,
                 resume=resume,
                 review_mode=None if review is None else ("tui" if review else "auto"),
+                refine_translation=refine,
             ),
             progress=progress,
             emit_complete=not embed_video,

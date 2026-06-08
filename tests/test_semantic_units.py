@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, Literal, cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = PROJECT_ROOT / "src"
@@ -48,7 +49,7 @@ class SemanticTranslationClient:
         )
 
 
-def make_config(review_mode: str = "auto") -> AppConfig:
+def make_config(review_mode: Literal["auto", "tui"] = "auto") -> AppConfig:
     model = ModelConfig(type=ModelProvider.CUSTOM, api_key_env="FAKE_KEY", model="fake", endpoint="https://fake.test")
     return AppConfig(
         summary_model=model,
@@ -104,6 +105,7 @@ class RecordingSemanticTranslator:
         boundary_context,
         chunk_index=None,
         stage_prefix="",
+        refine_translation=True,
     ):
         self.recorded_source_texts = [entry.original_text for entry in chunk]
         return ChunkTranslationResult(
@@ -208,7 +210,7 @@ class TestSemanticUnits(unittest.TestCase):
         removed_entry_indices: set[int] = set()
 
         repaired_entries = TranslationService._repair_semantic_layout(
-            None,
+            cast(Any, None),
             planned,
             source_entries,
             [unit],
@@ -405,10 +407,11 @@ class TestSemanticUnits(unittest.TestCase):
             units,
             {entry.index: unit for unit in units for entry in unit.entries},
             review_result,
-            translator,
+            cast(Any, translator),
             context="",
             target_language="Chinese",
             report=report,
+            refine_translation=False,
         )
 
         self.assertTrue(outcome.retranslated)
@@ -454,10 +457,11 @@ class TestSemanticUnits(unittest.TestCase):
             units,
             {entry.index: unit for unit in units for entry in unit.entries},
             review_result,
-            translator,
+            cast(Any, translator),
             context="",
             target_language="Chinese",
             report=report,
+            refine_translation=False,
         )
 
         self.assertTrue(outcome.retranslated)
@@ -502,10 +506,11 @@ class TestSemanticUnits(unittest.TestCase):
             units,
             {entry.index: unit for unit in units for entry in unit.entries},
             review_result,
-            translator,
+            cast(Any, translator),
             context="",
             target_language="Chinese",
             report=report,
+            refine_translation=False,
         )
 
         self.assertTrue(outcome.retranslated)

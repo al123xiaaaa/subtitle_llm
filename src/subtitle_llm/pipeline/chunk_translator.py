@@ -65,6 +65,7 @@ class ChunkTranslator:
         boundary_context: str,
         chunk_index: int | None = None,
         stage_prefix: str = "",
+        refine_translation: bool = True,
     ) -> ChunkTranslationResult:
         usage = CompletionUsage()
         rough_translation = self.translate_chunk(
@@ -76,6 +77,14 @@ class ChunkTranslator:
             chunk_index=chunk_index,
             stage=join_stage(stage_prefix, "rough"),
         )
+        if not refine_translation:
+            return ChunkTranslationResult(
+                chunk=chunk,
+                translation=rough_translation.text,
+                usage=usage,
+                final_trace_id=rough_translation.trace_id,
+            )
+
         refined_translation = self.refine_translation(
             chunk,
             rough_translation.text,
@@ -101,6 +110,7 @@ class ChunkTranslator:
         boundary_context: str,
         chunk_index: int | None = None,
         stage_prefix: str = "",
+        refine_translation: bool = True,
     ) -> ChunkTranslationResult:
         usage = CompletionUsage()
         rough_translation = self.translate_semantic_units(
@@ -112,6 +122,14 @@ class ChunkTranslator:
             chunk_index=chunk_index,
             stage=join_stage(stage_prefix, "semantic-rough"),
         )
+        if not refine_translation:
+            return ChunkTranslationResult(
+                chunk=chunk,
+                translation=rough_translation.text,
+                usage=usage,
+                final_trace_id=rough_translation.trace_id,
+            )
+
         refined_translation = self.refine_semantic_units(
             chunk,
             rough_translation.text,

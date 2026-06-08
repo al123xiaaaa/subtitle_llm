@@ -24,3 +24,4 @@ pipeline:
   normalize_min_duration: 0.8
   semantic_translation: "auto"
   semantic_max_cues_per_unit: 6
+  refine_translation: false

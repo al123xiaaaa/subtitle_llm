@@ -54,6 +54,10 @@ function buildTranslateArgs(options: TranslateJobOptions): string[] {
     args.push("--no-review");
   }
 
+  if (options.refineTranslation) {
+    args.push("--refine");
+  }
+
   if (options.embedVideo) {
     args.push("--embed-video");
     addOption(args, "--video", options.video);

@@ -231,9 +231,38 @@ class TestNewPipeline(unittest.TestCase):
             trace_dir = Path(result.report.llm_trace_dir or "")
             self.assertTrue(trace_dir.exists())
             trace_json_files = sorted(trace_dir.glob("*.json"))
-            self.assertEqual(len(trace_json_files), 3)
+            self.assertEqual(len(trace_json_files), 2)
             self.assertTrue(any("summary-context" in path.name for path in trace_json_files))
             self.assertTrue(any("chunk-001-rough-ok" in path.name for path in trace_json_files))
+            self.assertFalse(any("chunk-001-refine-ok" in path.name for path in trace_json_files))
+
+    def test_refine_translation_can_be_enabled_per_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.srt"
+            output_path = Path(tmp) / "output.srt"
+            input_path.write_text(
+                "1\n00:00:01,000 --> 00:00:02,000\nHello world.\n\n"
+                "2\n00:00:03,000 --> 00:00:04,000\nThis is a second line.\n\n",
+                encoding="utf-8",
+            )
+            service = TranslationService(
+                make_config(),
+                translation_client=FakeLLMClient(),
+                summary_client=FakeLLMClient(),
+            )
+
+            result = service.translate(
+                TranslationRequest(
+                    input_file=str(input_path),
+                    output_file=str(output_path),
+                    target_language="Chinese",
+                    refine_translation=True,
+                )
+            )
+
+            trace_dir = Path(result.report.llm_trace_dir or "")
+            trace_json_files = sorted(trace_dir.glob("*.json"))
+            self.assertEqual(len(trace_json_files), 3)
             self.assertTrue(any("chunk-001-refine-ok" in path.name for path in trace_json_files))
 
     def test_translation_normalizes_rolling_caption_before_chunking(self):
@@ -298,7 +327,17 @@ class TestNewPipeline(unittest.TestCase):
                 encoding="utf-8",
             )
             service = TranslationService(
-                make_config(),
+                AppConfig(
+                    summary_model=make_config().summary_model,
+                    translation_model=make_config().translation_model,
+                    pipeline=PipelineConfig(
+                        chunk_size=2,
+                        threads=1,
+                        context_window_size=1,
+                        review_mode="auto",
+                        refine_translation=True,
+                    ),
+                ),
                 translation_client=InlineIndexClient(),
                 summary_client=FakeLLMClient(),
             )
@@ -358,7 +397,7 @@ class TestNewPipeline(unittest.TestCase):
             self.assertIn("generate_context", details)
             self.assertIn("plan_chunks", details)
             self.assertIn("rough", details)
-            self.assertIn("refine", details)
+            self.assertNotIn("refine", details)
             self.assertIn("quality", details)
             self.assertIn("write_srt", details)
             self.assertIn("complete", details)
@@ -555,6 +594,7 @@ class TestNewPipeline(unittest.TestCase):
             config = make_config()
             config.pipeline.review_mode = "tui"
             config.pipeline.chunk_size = 3
+            config.pipeline.refine_translation = True
             client = AlignmentDriftClient()
             review_port = DriftReviewPort()
             service = TranslationService(
@@ -597,6 +637,7 @@ class TestNewPipeline(unittest.TestCase):
             config.pipeline.review_mode = "tui"
             config.pipeline.chunk_size = 3
             config.pipeline.semantic_translation = "off"
+            config.pipeline.refine_translation = True
             client = AlignmentDriftClient()
             review_port = MergeAcceptReviewPort()
             service = TranslationService(
