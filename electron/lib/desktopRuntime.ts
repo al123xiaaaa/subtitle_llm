@@ -8,13 +8,11 @@ import type {
   DesktopPreferences,
   FfmpegStatus,
   JobEvent,
-  PreparedDesktopJobRequest,
 } from "../types.js";
 import { buildEnv, buildPythonArgs } from "./cliCommands.js";
+import { prepareDesktopTaskIntent } from "./desktopTaskIntent.js";
 import { createFfmpegDetector } from "./ffmpegStatus.js";
-import { getProvider } from "./providerCatalog.js";
-import { writeDesktopModelConfig } from "./modelConfig.js";
-import { clearApiKey, resolveCredential, saveApiKey, savePreferences, summarizeSettings } from "./settingsStore.js";
+import { clearApiKey, saveApiKey, savePreferences, summarizeSettings } from "./settingsStore.js";
 
 interface DesktopRuntimeOptions {
   app: Pick<App, "getPath">;
@@ -130,7 +128,12 @@ export function createDesktopRuntime({
 
     const pythonExecutable = resolvePythonExecutable();
     assertPythonEnvironmentReady(pythonExecutable, request.command);
-    const runRequest = prepareRequestForRun(request);
+    const runRequest = prepareDesktopTaskIntent(request, {
+      projectRoot,
+      settingsPath: getSettingsPath(),
+      env,
+      detectFfmpeg,
+    });
     const args = buildPythonArgs(runRequest);
     const childEnv = buildEnv(env, runRequest.envOverrides);
     const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -288,46 +291,6 @@ export function createDesktopRuntime({
       `请在项目目录运行：${pythonExecutable} -m pip install -e "${installTarget}"`,
       `当前 GUI 使用的 Python：${pythonExecutable}`,
     ].join("\n");
-  }
-
-  function prepareRequestForRun(request: DesktopJobRequest): PreparedDesktopJobRequest {
-    const nextRequest = cloneRequestForRun(request);
-
-    if (nextRequest.command === "translate" && nextRequest.modelSelection?.mode === "service") {
-      const provider = getProvider(nextRequest.modelSelection.providerId);
-      const credential = resolveCredential(getSettingsPath(), provider, env);
-      nextRequest.generatedConfigPath = writeDesktopModelConfig(projectRoot, nextRequest.modelSelection);
-      nextRequest.options.config = nextRequest.generatedConfigPath;
-      nextRequest.envOverrides = {
-        ...nextRequest.envOverrides,
-        ...credential.envOverrides,
-      };
-    }
-
-    if (nextRequest.command === "translate" || nextRequest.command === "mux") {
-      const ffmpeg = detectFfmpeg();
-      if (ffmpeg.available && !nextRequest.options.ffmpeg) {
-        nextRequest.options.ffmpeg = ffmpeg.executable;
-      }
-    }
-
-    return nextRequest;
-  }
-
-  function cloneRequestForRun(request: DesktopJobRequest): PreparedDesktopJobRequest {
-    const envOverrides = { ...request.envOverrides };
-    switch (request.command) {
-      case "translate":
-        return { ...request, options: { ...request.options }, envOverrides };
-      case "download":
-        return { ...request, options: { ...request.options }, envOverrides };
-      case "transcribe":
-        return { ...request, options: { ...request.options }, envOverrides };
-      case "mux":
-        return { ...request, options: { ...request.options }, envOverrides };
-      default:
-        throw new Error("未知命令");
-    }
   }
 
   function sendJobEvent(sender: Pick<WebContents, "isDestroyed" | "send">, payload: JobEvent): void {

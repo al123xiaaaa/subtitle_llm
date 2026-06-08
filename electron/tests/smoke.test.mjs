@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { buildEnv, buildPythonArgs } from "../../dist/electron/lib/cliCommands.js";
+import { prepareDesktopTaskIntent } from "../../dist/electron/lib/desktopTaskIntent.js";
 import { createDesktopRuntime } from "../../dist/electron/lib/desktopRuntime.js";
 import { createFfmpegDetector } from "../../dist/electron/lib/ffmpegStatus.js";
 import { buildDesktopModelConfigContent } from "../../dist/electron/lib/modelConfig.js";
@@ -181,6 +182,39 @@ savePreferences(settingsPath, {
   modelsByProvider: { deepseek: "deepseek-v4-pro" },
 });
 assert.equal(readSettings(settingsPath).preferences.modelsByProvider.deepseek, "deepseek-v4-pro");
+
+saveApiKey(settingsPath, "deepseek", "sk-intent-secret");
+const preparedTranslateIntent = prepareDesktopTaskIntent(
+  {
+    command: "translate",
+    options: { input: "input.srt", targetLanguage: "Chinese" },
+    modelSelection: {
+      mode: "service",
+      providerId: "deepseek",
+      modelId: "deepseek-v4-pro",
+    },
+  },
+  {
+    projectRoot: tempDir,
+    settingsPath,
+    env: {},
+    detectFfmpeg: () => ({ available: true, executable: "/tmp/fake-ffmpeg", version: "fake", error: "" }),
+  },
+);
+assert.equal(preparedTranslateIntent.options.config, path.join(tempDir, "data", "desktop-configs", "latest-model-config.yaml"));
+assert.equal(preparedTranslateIntent.options.ffmpeg, "/tmp/fake-ffmpeg");
+assert.equal(preparedTranslateIntent.envOverrides.DEEPSEEK_API_KEY, "sk-intent-secret");
+assert.match(fs.readFileSync(preparedTranslateIntent.generatedConfigPath, "utf8"), /model: "deepseek-v4-pro"/);
+const preparedMuxIntent = prepareDesktopTaskIntent(
+  { command: "mux", options: { video: "video.mp4", subtitle: "subtitle.srt" } },
+  {
+    projectRoot: tempDir,
+    settingsPath,
+    env: {},
+    detectFfmpeg: () => ({ available: true, executable: "/tmp/fake-ffmpeg", version: "fake", error: "" }),
+  },
+);
+assert.equal(preparedMuxIntent.options.ffmpeg, "/tmp/fake-ffmpeg");
 
 let ffmpegChecks = 0;
 const detectFfmpeg = createFfmpegDetector({

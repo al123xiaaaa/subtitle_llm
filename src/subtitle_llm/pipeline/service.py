@@ -22,6 +22,7 @@ from subtitle_llm.pipeline.normalization import (
 )
 from subtitle_llm.pipeline.quality import QualityGate
 from subtitle_llm.pipeline.report import TranslationReport
+from subtitle_llm.pipeline.review_policy import ReviewPolicy
 from subtitle_llm.pipeline.run_ledger import RunLedger
 from subtitle_llm.pipeline.semantic_units import (
     SemanticUnit,
@@ -623,7 +624,8 @@ class TranslationService:
         )
         source_diagnosis = quality_gate.diagnose_chunk(source_entries, target_language=target_language)
         quality_gate.apply_diagnosis(source_entries, source_diagnosis)
-        if source_diagnosis.has_issues and not isinstance(review_port, AutoReviewPort):
+        review_policy = ReviewPolicy.from_review_port(review_port)
+        if review_policy.should_manual_review(source_diagnosis):
             logger.warning(
                 "语义chunk映射后质量诊断命中，进入TUI复核: chunk=%s reliability=%s flagged=%s summary=%s",
                 planned.index + 1,
@@ -1030,12 +1032,13 @@ class TranslationService:
         if translator.trace_recorder:
             translator.trace_recorder.update_quality(result.final_trace_id, diagnosis)
         quality_gate.apply_diagnosis(planned.entries, diagnosis)
+        review_policy = ReviewPolicy.from_review_port(review_port)
         translator_progress_contract(translator).quality_checked(
             planned.entries,
             chunk_index=planned.index,
             total_chunks=report.total_chunks,
             diagnosis=diagnosis,
-            auto_repair=isinstance(review_port, AutoReviewPort),
+            auto_repair=review_policy.quality_visual_auto_repair(diagnosis),
         )
         if diagnosis.has_issues:
             logger.warning(
@@ -1046,7 +1049,7 @@ class TranslationService:
                 diagnosis.summary,
             )
         if diagnosis.has_issues:
-            if isinstance(review_port, AutoReviewPort):
+            if review_policy.should_auto_repair(diagnosis):
                 repair_usage = CompletionUsage()
                 repaired_result = translator.repair_translation_traced(
                     planned.entries,
@@ -1078,8 +1081,8 @@ class TranslationService:
                     total_chunks=report.total_chunks,
                     diagnosis=repaired_diagnosis,
                     auto_repair=False,
-                    stage_status="warning" if repaired_diagnosis.has_issues else "done",
-                    chunk_status="warning" if repaired_diagnosis.has_issues else "done",
+                    stage_status=review_policy.post_repair_stage_status(repaired_diagnosis),
+                    chunk_status=review_policy.post_repair_chunk_status(repaired_diagnosis),
                 )
                 logger.info(
                     "chunk自动重译完成: chunk=%s reliability=%s flagged=%s",

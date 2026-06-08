@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 
 from subtitle_llm.domain import SubtitleEntry
-from subtitle_llm.llm.types import ChatClient, CompletionResult, CompletionUsage
+from subtitle_llm.llm.types import ChatClient, CompletionUsage
+from subtitle_llm.pipeline.llm_operations import LlmOperationRunner
 from subtitle_llm.pipeline.llm_trace import LlmTraceRecorder
 from subtitle_llm.pipeline.prompts import (
     ALIGNMENT_DRIFT_RETRANSLATE_PROMPT,
@@ -25,10 +25,7 @@ from subtitle_llm.pipeline.text import (
     process_translation,
 )
 from subtitle_llm.progress_contract import (
-    ProgressContract,
-    chunk_position_text,
     chunk_stage_label,
-    chunk_visual_status,
 )
 from subtitle_llm.progress_events import ProgressEmitter
 from subtitle_llm.settings import ModelConfig
@@ -62,6 +59,13 @@ class ChunkTranslator:
         self.trace_recorder = trace_recorder
         self.total_chunks = total_chunks
         self.progress = progress
+        self.operations = LlmOperationRunner(
+            client,
+            model_config,
+            trace_recorder=trace_recorder,
+            total_chunks=total_chunks,
+            progress=progress,
+        )
 
     def translate_and_refine(
         self,
@@ -171,7 +175,9 @@ class ChunkTranslator:
             unit_text=unit_text,
             chunk_size=len(chunk),
         )
-        result, duration_ms = self._create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
+        operation = self.operations.create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
+        result = operation.completion
+        duration_ms = operation.duration_ms
         usage.add(result.usage)
         processed_translation = self._process_semantic_json_response(
             result.content,
@@ -182,7 +188,7 @@ class ChunkTranslator:
             duration_ms=duration_ms,
             chunk_index=chunk_index,
         )
-        trace_id = self._record_trace(
+        trace_id = self.operations.record_trace(
             stage=stage,
             prompt=prompt,
             response=result.content,
@@ -192,7 +198,7 @@ class ChunkTranslator:
             chunk_index=chunk_index,
             processed_translation=processed_translation,
         )
-        self._emit_chunk_progress(
+        self.operations.emit_chunk_progress(
             stage,
             "running",
             f"{chunk_stage_label(stage)}响应已解析",
@@ -222,7 +228,9 @@ class ChunkTranslator:
             rough_translation=rough_translation,
             chunk_size=len(chunk),
         )
-        result, duration_ms = self._create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
+        operation = self.operations.create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
+        result = operation.completion
+        duration_ms = operation.duration_ms
         usage.add(result.usage)
         processed_translation = self._process_semantic_json_response(
             result.content,
@@ -233,7 +241,7 @@ class ChunkTranslator:
             duration_ms=duration_ms,
             chunk_index=chunk_index,
         )
-        trace_id = self._record_trace(
+        trace_id = self.operations.record_trace(
             stage=stage,
             prompt=prompt,
             response=result.content,
@@ -243,7 +251,7 @@ class ChunkTranslator:
             chunk_index=chunk_index,
             processed_translation=processed_translation,
         )
-        self._emit_chunk_progress(
+        self.operations.emit_chunk_progress(
             stage,
             "running",
             f"{chunk_stage_label(stage)}响应已解析",
@@ -271,10 +279,12 @@ class ChunkTranslator:
             chunk_text=original_text,
             chunk_size=len(chunk),
         )
-        result, duration_ms = self._create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
+        operation = self.operations.create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
+        result = operation.completion
+        duration_ms = operation.duration_ms
         usage.add(result.usage)
         processed_translation = process_translation(original_text, result.content, chunk)
-        trace_id = self._record_trace(
+        trace_id = self.operations.record_trace(
             stage=stage,
             prompt=prompt,
             response=result.content,
@@ -284,7 +294,7 @@ class ChunkTranslator:
             chunk_index=chunk_index,
             processed_translation=processed_translation,
         )
-        self._emit_chunk_progress(
+        self.operations.emit_chunk_progress(
             stage,
             "running",
             f"{chunk_stage_label(stage)}响应已解析",
@@ -314,10 +324,12 @@ class ChunkTranslator:
             rough_translation=rough_translation,
             chunk_size=len(chunk),
         )
-        result, duration_ms = self._create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
+        operation = self.operations.create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
+        result = operation.completion
+        duration_ms = operation.duration_ms
         usage.add(result.usage)
         processed_translation = process_translation(original_text, result.content, chunk)
-        trace_id = self._record_trace(
+        trace_id = self.operations.record_trace(
             stage=stage,
             prompt=prompt,
             response=result.content,
@@ -327,7 +339,7 @@ class ChunkTranslator:
             chunk_index=chunk_index,
             processed_translation=processed_translation,
         )
-        self._emit_chunk_progress(
+        self.operations.emit_chunk_progress(
             stage,
             "running",
             f"{chunk_stage_label(stage)}响应已解析",
@@ -408,9 +420,11 @@ class ChunkTranslator:
             missing_lines_formatted=missing_lines_formatted,
             example_format=example_format,
         )
-        result, duration_ms = self._create_completion(prompt, stage="missing-fix", chunk=chunk)
+        operation = self.operations.create_completion(prompt, stage="missing-fix", chunk=chunk)
+        result = operation.completion
+        duration_ms = operation.duration_ms
         usage.add(result.usage)
-        self._record_trace(
+        self.operations.record_trace(
             stage="missing-fix",
             prompt=prompt,
             response=result.content,
@@ -419,7 +433,7 @@ class ChunkTranslator:
             chunk=chunk,
             processed_translation=result.content,
         )
-        self._emit_chunk_progress(
+        self.operations.emit_chunk_progress(
             "missing-fix",
             "repairing",
             "缺失翻译修复响应已解析",
@@ -464,11 +478,13 @@ class ChunkTranslator:
             quality_report=quality_report or "No structured quality report was provided.",
             chunk_size=len(chunk),
         )
-        result, duration_ms = self._create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
+        operation = self.operations.create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
+        result = operation.completion
+        duration_ms = operation.duration_ms
         usage.add(result.usage)
         extracted_response = extract_translation_block(result.content)
         processed_translation = process_translation(original_text, extracted_response, chunk)
-        trace_id = self._record_trace(
+        trace_id = self.operations.record_trace(
             stage=stage,
             prompt=prompt,
             response=result.content,
@@ -478,7 +494,7 @@ class ChunkTranslator:
             chunk_index=chunk_index,
             processed_translation=processed_translation,
         )
-        self._emit_chunk_progress(
+        self.operations.emit_chunk_progress(
             stage,
             "repairing",
             f"{chunk_stage_label(stage)}响应已解析",
@@ -526,11 +542,13 @@ class ChunkTranslator:
             translation_reference=format_translation_reference(drift_chunk),
             chunk_size=len(drift_chunk),
         )
-        result, duration_ms = self._create_completion(prompt, stage="drift", chunk=drift_chunk, chunk_index=chunk_index)
+        operation = self.operations.create_completion(prompt, stage="drift", chunk=drift_chunk, chunk_index=chunk_index)
+        result = operation.completion
+        duration_ms = operation.duration_ms
         usage.add(result.usage)
         extracted_response = extract_translation_block(result.content)
         processed_translation = process_translation(original_text, extracted_response, drift_chunk)
-        trace_id = self._record_trace(
+        trace_id = self.operations.record_trace(
             stage="drift",
             prompt=prompt,
             response=result.content,
@@ -540,7 +558,7 @@ class ChunkTranslator:
             chunk_index=chunk_index,
             processed_translation=processed_translation,
         )
-        self._emit_chunk_progress(
+        self.operations.emit_chunk_progress(
             "drift",
             "repairing",
             "对齐漂移重译响应已解析",
@@ -564,7 +582,7 @@ class ChunkTranslator:
         try:
             return process_semantic_json_translation(response, chunk)
         except Exception as exc:
-            self._record_trace(
+            self.operations.record_trace(
                 stage=stage,
                 prompt=prompt,
                 response=response,
@@ -576,125 +594,6 @@ class ChunkTranslator:
                 error=str(exc),
             )
             raise
-
-    def _create_completion(
-        self,
-        prompt: str,
-        *,
-        stage: str,
-        chunk: list[SubtitleEntry] | None = None,
-        chunk_index: int | None = None,
-    ) -> tuple[CompletionResult, int]:
-        started_at = time.perf_counter()
-        self._emit_chunk_progress(
-            stage,
-            chunk_visual_status(stage),
-            f"正在{chunk_stage_label(stage)}"
-            + chunk_position_text(chunk_index, self.total_chunks),
-            chunk,
-            chunk_index,
-        )
-        try:
-            result = self.client.create_completion(self.model_config, [{"role": "user", "content": prompt}])
-        except Exception as exc:
-            duration_ms = elapsed_ms(started_at)
-            self._emit_chunk_progress(
-                stage,
-                "failed",
-                f"{chunk_stage_label(stage)}失败：{exc}",
-                chunk,
-                chunk_index,
-                duration_ms=duration_ms,
-            )
-            if self.trace_recorder is not None:
-                self.trace_recorder.record_call(
-                    stage="llm-error",
-                    prompt=prompt,
-                    response="",
-                    model_config=self.model_config,
-                    usage=CompletionUsage(),
-                    duration_ms=duration_ms,
-                    chunk=chunk,
-                    chunk_index=chunk_index,
-                    total_chunks=self.total_chunks,
-                    expected_count=len(chunk) if chunk is not None else None,
-                    status="failed",
-                    error=str(exc),
-                )
-            raise
-        duration_ms = elapsed_ms(started_at)
-        self._emit_chunk_progress(
-            stage,
-            chunk_visual_status(stage),
-            f"{chunk_stage_label(stage)}返回，耗时 {duration_ms / 1000:.1f}s",
-            chunk,
-            chunk_index,
-            usage=result.usage,
-            duration_ms=duration_ms,
-        )
-        return result, duration_ms
-
-    def _record_trace(
-        self,
-        *,
-        stage: str,
-        prompt: str,
-        response: str,
-        usage: CompletionUsage,
-        duration_ms: int,
-        chunk: list[SubtitleEntry],
-        chunk_index: int | None = None,
-        processed_translation: str | None = None,
-        error: str | None = None,
-    ) -> str | None:
-        if self.trace_recorder is None:
-            return None
-        return self.trace_recorder.record_call(
-            stage=stage,
-            prompt=prompt,
-            response=response,
-            model_config=self.model_config,
-            usage=usage,
-            duration_ms=duration_ms,
-            chunk=chunk,
-            chunk_index=chunk_index,
-            total_chunks=self.total_chunks,
-            processed_translation=processed_translation,
-            expected_count=len(chunk),
-            error=error,
-        )
-
-    def _emit_chunk_progress(
-        self,
-        detail: str,
-        visual_status: str,
-        message: str,
-        chunk: list[SubtitleEntry] | None,
-        chunk_index: int | None,
-        *,
-        usage: CompletionUsage | None = None,
-        duration_ms: int | None = None,
-        trace_id: str | None = None,
-    ) -> None:
-        if self.progress is None or chunk is None:
-            return
-        ProgressContract(self.progress).llm_chunk_event(
-            detail=detail,
-            visual_status=visual_status,
-            message=message,
-            entries=chunk,
-            chunk_index=chunk_index,
-            total_chunks=self.total_chunks,
-            model=self.model_config,
-            usage=usage,
-            trace_id=trace_id,
-            duration_ms=duration_ms,
-        )
-
-
-def elapsed_ms(started_at: float) -> int:
-    return max(0, round((time.perf_counter() - started_at) * 1000))
-
 
 def join_stage(prefix: str, stage: str) -> str:
     return f"{prefix}-{stage}" if prefix else stage
