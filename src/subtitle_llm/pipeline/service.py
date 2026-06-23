@@ -20,15 +20,21 @@ from subtitle_llm.pipeline.normalization import (
     normalize_subtitle,
     write_normalization_map,
 )
-from subtitle_llm.pipeline.quality import QualityGate
+from subtitle_llm.pipeline.quality import ChunkDiagnosis, QualityGate
+from subtitle_llm.pipeline.repair_brief import RepairBrief
 from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.pipeline.review_policy import ReviewPolicy
 from subtitle_llm.pipeline.run_ledger import RunLedger
+from subtitle_llm.pipeline.semantic_layout import (
+    diagnose_layout_pair,
+    is_orphan_punctuation,
+    latin_token_split,
+    starts_with_closing_pair,
+)
 from subtitle_llm.pipeline.semantic_units import (
     SemanticUnit,
     apply_semantic_translation,
     build_semantic_units,
-    is_orphan_punctuation,
     make_unit,
     semantic_entries,
 )
@@ -39,6 +45,8 @@ from subtitle_llm.review import AutoReviewPort, ReviewPort, ReviewResult, TuiRev
 from subtitle_llm.settings import AppConfig
 
 logger = logging.getLogger(__name__)
+
+SEMANTIC_REPAIR_BATCH_SIZE = 18
 
 
 @dataclass
@@ -63,6 +71,16 @@ class TranslationResult:
 class TuiReviewOutcome:
     retranslated: bool
     trace_ids: list[str] = field(default_factory=list)
+    attempted: bool = False
+
+    @property
+    def did_attempt(self) -> bool:
+        return self.retranslated or self.attempted
+
+    def merge(self, other: "TuiReviewOutcome") -> None:
+        self.retranslated = self.retranslated or other.retranslated
+        self.attempted = self.attempted or other.attempted
+        self.trace_ids.extend(other.trace_ids)
 
 
 @dataclass(frozen=True)
@@ -622,16 +640,27 @@ class TranslationService:
             report,
             target_language,
         )
+        layout_review_indices = {
+            entry.index
+            for entry in source_entries
+            if entry.needs_retranslation
+        }
         source_diagnosis = quality_gate.diagnose_chunk(source_entries, target_language=target_language)
         quality_gate.apply_diagnosis(source_entries, source_diagnosis)
+        for entry in source_entries:
+            if entry.index in layout_review_indices:
+                entry.needs_retranslation = True
         review_policy = ReviewPolicy.from_review_port(review_port)
-        if review_policy.should_manual_review(source_diagnosis):
+        if review_policy.should_manual_review(source_diagnosis) or (
+            review_policy.uses_manual_review and layout_review_indices
+        ):
             logger.warning(
-                "语义chunk映射后质量诊断命中，进入TUI复核: chunk=%s reliability=%s flagged=%s summary=%s",
+                "语义chunk映射后质量诊断命中，进入TUI复核: chunk=%s reliability=%s flagged=%s layout_review=%s summary=%s",
                 planned.index + 1,
                 source_diagnosis.reliability,
                 source_diagnosis.flagged_entries,
-                source_diagnosis.summary,
+                sorted(layout_review_indices),
+                source_diagnosis.summary if source_diagnosis.has_issues else "semantic layout diagnosis marked entries for review.",
             )
             source_entries = self._review_semantic_chunk_with_tui(
                 planned,
@@ -707,19 +736,21 @@ class TranslationService:
                 review_result.removed_entry_indices,
             )
 
+            review_diagnosis = quality_gate.diagnose_chunk(current_entries, target_language=target_language)
             outcome = self._apply_semantic_tui_review_result(
                 planned,
                 current_entries,
                 semantic_units,
                 cue_to_unit,
                 review_result,
+                review_diagnosis,
                 translator,
                 context,
                 target_language,
                 report,
                 refine_translation,
             )
-            if not outcome.retranslated:
+            if not outcome.did_attempt:
                 for entry in current_entries:
                     entry.needs_retranslation = False
                 translator_progress_contract(translator).tui_accept(
@@ -738,12 +769,20 @@ class TranslationService:
                 report,
                 target_language,
             )
+            layout_review_indices = {
+                entry.index
+                for entry in current_entries
+                if entry.needs_retranslation
+            }
             diagnosis = quality_gate.diagnose_chunk(current_entries, target_language=target_language)
             if translator.trace_recorder:
                 for trace_id in outcome.trace_ids:
                     translator.trace_recorder.update_quality(trace_id, diagnosis)
             quality_gate.apply_diagnosis(current_entries, diagnosis)
-            if not diagnosis.has_issues:
+            for entry in current_entries:
+                if entry.index in layout_review_indices:
+                    entry.needs_retranslation = True
+            if not diagnosis.has_issues and not layout_review_indices:
                 translator_progress_contract(translator).tui_quality_passed(
                     current_entries,
                     chunk_index=planned.index,
@@ -757,13 +796,13 @@ class TranslationService:
                 planned.index + 1,
                 review_round,
                 diagnosis.reliability,
-                diagnosis.flagged_entries,
-                diagnosis.summary,
+                diagnosis.flagged_entries + len(layout_review_indices),
+                diagnosis.summary if diagnosis.has_issues else "semantic layout diagnosis marked entries for review.",
             )
 
         if translator.trace_recorder:
             for trace_id in outcome.trace_ids:
-                translator.trace_recorder.update_quality(trace_id, diagnosis, status="failed")
+                translator.trace_recorder.update_quality(trace_id, diagnosis, status="suspicious")
         translator_progress_contract(translator).tui_warning(
             current_entries,
             chunk_index=planned.index,
@@ -786,40 +825,78 @@ class TranslationService:
         removed_in_chunk: set[int] = set()
 
         for unit in semantic_units:
-            last_kept: SubtitleEntry | None = None
-            for unit_entry in unit.entries:
-                entry = source_by_index.get(unit_entry.index)
-                if entry is None or entry.index in removed_in_chunk:
-                    continue
+            unit_entries = [
+                entry
+                for unit_entry in unit.entries
+                if (entry := source_by_index.get(unit_entry.index)) is not None
+                and entry.index not in removed_in_chunk
+            ]
+            if not unit_entries:
+                continue
 
-                reason = semantic_layout_repair_reason(entry)
-                if reason and last_kept is not None:
-                    last_kept.end_time = entry.end_time
-                    last_kept.original_text = join_non_empty_text(last_kept.original_text, entry.original_text)
-                    last_kept.translated_text = join_translated_text(
-                        last_kept.translated_text,
-                        entry.translated_text,
-                        target_language,
-                    )
-                    last_kept.needs_retranslation = last_kept.needs_retranslation or entry.needs_retranslation
-                    removed_in_chunk.add(entry.index)
-                    repair = run_ledger.record_auto_layout_repair(
-                        report,
-                        merged_index=last_kept.index,
-                        removed_index=entry.index,
-                        reason=reason,
-                    )
+            while len(unit_entries) > 1:
+                auto_merge_at: int | None = None
+                for position, entry in enumerate(unit_entries):
+                    left = unit_entries[position - 1] if position > 0 else None
+                    issue = diagnose_layout_pair(left, entry, target_language=target_language)
+                    if issue is None:
+                        continue
                     logger.info(
-                        "语义布局自动合并: chunk=%s semantic_unit=%s merged_index=%s removed_index=%s reason=%s",
+                        "semantic_layout_issue: 语义布局诊断 chunk=%s semantic_unit=%s left_index=%s right_index=%s issue=%s action=%s reason=%s",
                         planned.index + 1,
                         unit.index,
-                        repair.merged_index,
-                        repair.removed_index,
-                        repair.reason,
+                        issue.left_index,
+                        issue.right_index,
+                        issue.issue_type,
+                        issue.action,
+                        issue.reason,
                     )
-                    continue
+                    if issue.action == "auto_merge" and left is not None:
+                        auto_merge_at = position
+                        break
+                    if issue.action == "review" and left is not None:
+                        left.needs_retranslation = True
+                        entry.needs_retranslation = True
+                    if issue.action == "quality":
+                        entry.needs_retranslation = True
 
-                last_kept = entry
+                if auto_merge_at is None:
+                    break
+
+                left = unit_entries[auto_merge_at - 1]
+                right = unit_entries[auto_merge_at]
+                issue = diagnose_layout_pair(left, right, target_language=target_language)
+                reason = issue.issue_type if issue else "semantic_layout"
+                before_left = left.translated_text
+                before_right = right.translated_text
+                left.end_time = right.end_time
+                left.original_text = join_non_empty_text(left.original_text, right.original_text)
+                left.translated_text = join_translated_text(
+                    left.translated_text,
+                    right.translated_text,
+                    target_language,
+                )
+                left.needs_retranslation = left.needs_retranslation or right.needs_retranslation
+                removed_in_chunk.add(right.index)
+                source_by_index.pop(right.index, None)
+                unit_entries.pop(auto_merge_at)
+                repair = run_ledger.record_auto_layout_repair(
+                    report,
+                    merged_index=left.index,
+                    removed_index=right.index,
+                    reason=reason,
+                )
+                logger.info(
+                    "semantic_layout_auto_merge: 语义布局自动合并 chunk=%s semantic_unit=%s merged_index=%s removed_index=%s reason=%s before_left=%r before_right=%r after=%r",
+                    planned.index + 1,
+                    unit.index,
+                    repair.merged_index,
+                    repair.removed_index,
+                    repair.reason,
+                    before_left,
+                    before_right,
+                    left.translated_text,
+                )
 
         if not removed_in_chunk:
             return source_entries
@@ -832,6 +909,7 @@ class TranslationService:
         semantic_units: list[SemanticUnit],
         cue_to_unit: dict[int, SemanticUnit],
         review_result: ReviewResult,
+        diagnosis: ChunkDiagnosis,
         translator: ChunkTranslator,
         context: str,
         target_language: str,
@@ -842,7 +920,9 @@ class TranslationService:
             return self._apply_semantic_alignment_drift_review_result(
                 planned,
                 current_entries,
+                semantic_units,
                 review_result.alignment_drift_start_index,
+                diagnosis,
                 translator,
                 context,
                 target_language,
@@ -871,62 +951,242 @@ class TranslationService:
         if not units_to_translate:
             return outcome
 
-        semantic_chunk = semantic_entries(units_to_translate)
-        write_back_start = review_result.cascade_start_index
-        write_back_indices = [
-            entry.index
-            for unit in units_to_translate
-            for entry in unit.entries
-            if write_back_start is None or entry.index >= write_back_start
-        ]
+        output_entries = self._semantic_repair_output_entries(
+            units_to_translate,
+            current_entries,
+            review_result,
+        )
+        if not output_entries:
+            return outcome
+
         translator_progress_contract(translator).semantic_tui_retranslation_started(
             current_entries,
             chunk_index=planned.index,
             total_chunks=report.total_chunks,
             semantic_unit_count=len(units_to_translate),
         )
-        selected_result = translator.translate_semantic_and_refine(
-            semantic_chunk,
+        selected_indices = {entry.index for entry in review_result.entries_to_retranslate}
+        outcome = self._run_semantic_repair_batches(
+            planned,
+            output_entries,
+            units_to_translate,
+            current_entries,
+            diagnosis,
+            translator,
             context,
             target_language,
-            planned.boundary_context,
-            planned.index,
-            "tui-semantic",
-            refine_translation=refine_translation,
+            report,
+            intent="retranslation_range",
+            selected_indices=selected_indices,
+            stage="tui-semantic-repair",
         )
-        report.token_usage.add_usage(selected_result.usage.to_dict())
-        for semantic_entry, refined_text in parse_translation_results(
-            selected_result.translation,
-            selected_result.chunk,
-        ):
-            semantic_entry.set_translated_text(refined_text.strip())
-
-        for semantic_entry, unit in zip(semantic_chunk, units_to_translate, strict=True):
-            apply_semantic_translation(
-                unit,
-                semantic_entry.translated_text,
-                target_language=target_language,
-                write_back_from_index=write_back_start,
-            )
-
-        outcome.retranslated = True
-        if selected_result.final_trace_id:
-            outcome.trace_ids.append(selected_result.final_trace_id)
         logger.info(
-            "TUI语义重译完成: chunk=%s semantic_context_units=%s cue_indices=%s cascade_start=%s write_back_indices=%s",
+            "TUI语义修复重译完成: chunk=%s semantic_context_units=%s output_indices=%s selected_indices=%s cascade_start=%s",
             planned.index + 1,
             len(units_to_translate),
-            [unit.cue_indices for unit in units_to_translate],
-            write_back_start,
-            write_back_indices,
+            [entry.index for entry in output_entries],
+            sorted(selected_indices),
+            review_result.cascade_start_index,
         )
         return outcome
+
+    def _run_semantic_repair_batches(
+        self,
+        planned: PlannedChunk,
+        output_entries: list[SubtitleEntry],
+        semantic_units: list[SemanticUnit],
+        current_entries: list[SubtitleEntry],
+        diagnosis: ChunkDiagnosis,
+        translator: ChunkTranslator,
+        context: str,
+        target_language: str,
+        report: TranslationReport,
+        *,
+        intent: str,
+        selected_indices: set[int],
+        stable_anchors: list[SubtitleEntry] | None = None,
+        stage: str,
+    ) -> TuiReviewOutcome:
+        outcome = TuiReviewOutcome(retranslated=False, attempted=True)
+        for batch in split_entry_batches(output_entries, SEMANTIC_REPAIR_BATCH_SIZE):
+            batch_outcome = self._run_semantic_repair_batch_with_fallback(
+                planned,
+                batch,
+                semantic_units,
+                current_entries,
+                diagnosis,
+                translator,
+                context,
+                target_language,
+                report,
+                intent=intent,
+                selected_indices=selected_indices,
+                stable_anchors=stable_anchors or [],
+                stage=stage,
+            )
+            outcome.merge(batch_outcome)
+        return outcome
+
+    def _run_semantic_repair_batch_with_fallback(
+        self,
+        planned: PlannedChunk,
+        output_entries: list[SubtitleEntry],
+        semantic_units: list[SemanticUnit],
+        current_entries: list[SubtitleEntry],
+        diagnosis: ChunkDiagnosis,
+        translator: ChunkTranslator,
+        context: str,
+        target_language: str,
+        report: TranslationReport,
+        *,
+        intent: str,
+        selected_indices: set[int],
+        stable_anchors: list[SubtitleEntry],
+        stage: str,
+    ) -> TuiReviewOutcome:
+        outcome = self._run_semantic_repair_batch_once(
+            planned,
+            output_entries,
+            semantic_units,
+            current_entries,
+            diagnosis,
+            translator,
+            context,
+            target_language,
+            report,
+            intent=intent,
+            selected_indices=selected_indices,
+            stable_anchors=stable_anchors,
+            stage=stage,
+        )
+        if outcome.retranslated or len(output_entries) <= 1:
+            return outcome
+
+        logger.warning(
+            "TUI语义修复重译批次失败，自动拆分重试: chunk=%s stage=%s output_indices=%s",
+            planned.index + 1,
+            stage,
+            [entry.index for entry in output_entries],
+        )
+        split_outcome = TuiReviewOutcome(retranslated=False, attempted=True)
+        for smaller_batch in split_entry_batches(output_entries, max(1, len(output_entries) // 2)):
+            split_outcome.merge(
+                self._run_semantic_repair_batch_with_fallback(
+                    planned,
+                    smaller_batch,
+                    semantic_units,
+                    current_entries,
+                    diagnosis,
+                    translator,
+                    context,
+                    target_language,
+                    report,
+                    intent=intent,
+                    selected_indices=selected_indices,
+                    stable_anchors=stable_anchors,
+                    stage=stage,
+                )
+            )
+        return split_outcome
+
+    def _run_semantic_repair_batch_once(
+        self,
+        planned: PlannedChunk,
+        output_entries: list[SubtitleEntry],
+        semantic_units: list[SemanticUnit],
+        current_entries: list[SubtitleEntry],
+        diagnosis: ChunkDiagnosis,
+        translator: ChunkTranslator,
+        context: str,
+        target_language: str,
+        report: TranslationReport,
+        *,
+        intent: str,
+        selected_indices: set[int],
+        stable_anchors: list[SubtitleEntry],
+        stage: str,
+    ) -> TuiReviewOutcome:
+        repair_brief = RepairBrief(
+            intent=intent,
+            output_entries=output_entries,
+            semantic_units=semantic_context_for_output_entries(semantic_units, output_entries),
+            current_entries=current_entries,
+            diagnosis=diagnosis,
+            selected_indices=selected_indices,
+            stable_anchors=stable_anchors,
+        )
+        repair_usage = CompletionUsage()
+        try:
+            repair_result = translator.repair_semantic_timed_cues_traced(
+                output_entries,
+                repair_brief.to_prompt_text(),
+                context,
+                target_language,
+                planned.boundary_context,
+                repair_usage,
+                chunk_index=planned.index,
+                stage=stage,
+            )
+        except Exception as exc:
+            report.token_usage.add_usage(repair_usage.to_dict())
+            for entry in output_entries:
+                entry.needs_retranslation = True
+            logger.warning(
+                "TUI语义修复重译批次失败，保留当前译文: chunk=%s stage=%s output_indices=%s error=%s",
+                planned.index + 1,
+                stage,
+                [entry.index for entry in output_entries],
+                exc,
+            )
+            return TuiReviewOutcome(retranslated=False, attempted=True)
+
+        report.token_usage.add_usage(repair_usage.to_dict())
+        for entry, refined_text in parse_translation_results(repair_result.text, output_entries):
+            entry.needs_retranslation = False
+            entry.set_translated_text(refined_text.strip())
+
+        outcome = TuiReviewOutcome(retranslated=True, attempted=True)
+        if repair_result.trace_id:
+            outcome.trace_ids.append(repair_result.trace_id)
+        logger.info(
+            "TUI语义修复重译批次完成: chunk=%s stage=%s output_indices=%s semantic_context_units=%s",
+            planned.index + 1,
+            stage,
+            [entry.index for entry in output_entries],
+            len(repair_brief.semantic_units),
+        )
+        return outcome
+
+    def _semantic_repair_output_entries(
+        self,
+        units_to_translate: list[SemanticUnit],
+        current_entries: list[SubtitleEntry],
+        review_result: ReviewResult,
+    ) -> list[SubtitleEntry]:
+        cascade_start = review_result.cascade_start_index
+        if cascade_start is not None:
+            candidate_indices = {
+                entry.index
+                for unit in units_to_translate
+                for entry in unit.entries
+                if entry.index >= cascade_start
+            }
+        else:
+            selected_indices = {entry.index for entry in review_result.entries_to_retranslate}
+            candidate_indices = selected_indices or {
+                entry.index
+                for unit in units_to_translate
+                for entry in unit.entries
+            }
+        return [entry for entry in current_entries if entry.index in candidate_indices]
 
     def _apply_semantic_alignment_drift_review_result(
         self,
         planned: PlannedChunk,
         current_entries: list[SubtitleEntry],
+        semantic_units: list[SemanticUnit],
         drift_start: int,
+        diagnosis: ChunkDiagnosis,
         translator: ChunkTranslator,
         context: str,
         target_language: str,
@@ -940,7 +1200,16 @@ class TranslationService:
 
         stable_anchors = current_entries[max(0, drift_position - 6):drift_position]
         drift_entries = current_entries[drift_position:]
-        drift_usage = CompletionUsage()
+        current_by_index = {entry.index: entry for entry in current_entries}
+        drift_units = [
+            unit
+            for unit in (
+                self._current_semantic_unit(unit, current_by_index)
+                for unit in semantic_units
+                if unit.entries and unit.entries[-1].index >= drift_start
+            )
+            if unit is not None
+        ]
         translator_progress_contract(translator).alignment_drift_started(
             drift_entries,
             chunk_index=planned.index,
@@ -948,31 +1217,30 @@ class TranslationService:
             drift_start=drift_start,
             semantic=True,
         )
-        drift_result = translator.retranslate_alignment_drift_traced(
+        outcome = self._run_semantic_repair_batches(
+            planned,
             drift_entries,
-            stable_anchors,
+            drift_units,
+            current_entries,
+            diagnosis,
+            translator,
             context,
             target_language,
-            planned.boundary_context,
-            drift_usage,
-            chunk_index=planned.index,
+            report,
+            intent="alignment_drift",
+            selected_indices={entry.index for entry in drift_entries},
+            stable_anchors=stable_anchors,
+            stage="tui-semantic-drift-repair",
         )
-        report.token_usage.add_usage(drift_usage.to_dict())
-        for entry, refined_text in parse_translation_results(drift_result.text, drift_entries):
-            entry.needs_retranslation = False
-            entry.set_translated_text(refined_text.strip())
 
         logger.info(
-            "语义TUI对齐漂移重译完成: chunk=%s drift_start=%s entries=%s anchors=%s write_back_indices=%s",
+            "语义TUI对齐漂移修复重译完成: chunk=%s drift_start=%s entries=%s anchors=%s write_back_indices=%s",
             planned.index + 1,
             drift_start,
             len(drift_entries),
             len(stable_anchors),
             [entry.index for entry in drift_entries],
         )
-        outcome.retranslated = True
-        if drift_result.trace_id:
-            outcome.trace_ids.append(drift_result.trace_id)
         return outcome
 
     def _affected_semantic_unit_indices(
@@ -1159,7 +1427,7 @@ class TranslationService:
                 report,
                 refine_translation,
             )
-            if not outcome.retranslated:
+            if not outcome.did_attempt:
                 for entry in planned.entries:
                     entry.needs_retranslation = False
                 translator_progress_contract(translator).tui_accept(
@@ -1456,35 +1724,47 @@ def translator_progress_contract(translator: ChunkTranslator) -> ProgressContrac
     return ProgressContract(translator.progress or ProgressEmitter("translate"))
 
 
-def semantic_layout_repair_reason(entry: SubtitleEntry) -> str | None:
-    translated = entry.translated_text.strip()
-    if is_orphan_punctuation(translated):
-        return "punctuation_or_quote_tail"
-    return None
-
-
 def join_non_empty_text(*values: str) -> str:
     return " ".join(value.strip() for value in values if value.strip())
 
 
 def join_translated_text(left: str, right: str, target_language: str) -> str:
+    del target_language
     left = left.strip()
     right = right.strip()
     if not left:
         return right
     if not right:
         return left
-    if is_orphan_punctuation(right) or is_cjk_language(target_language):
+    if is_orphan_punctuation(right) or latin_token_split(left, right) or starts_with_closing_pair(right):
         return f"{left}{right}"
     return f"{left} {right}"
 
 
-def is_cjk_language(language: str) -> bool:
-    normalized = language.strip().lower()
-    return (
-        normalized in {"zh", "zh-cn", "zh_cn", "ja", "jp", "ko"}
-        or "chinese" in normalized
-        or "中文" in normalized
-        or "japanese" in normalized
-        or "korean" in normalized
-    )
+def split_entry_batches(entries: list[SubtitleEntry], batch_size: int) -> list[list[SubtitleEntry]]:
+    if not entries:
+        return []
+    safe_batch_size = max(1, batch_size)
+    return [
+        entries[start:start + safe_batch_size]
+        for start in range(0, len(entries), safe_batch_size)
+    ]
+
+
+def semantic_context_for_output_entries(
+    semantic_units: list[SemanticUnit],
+    output_entries: list[SubtitleEntry],
+) -> list[SemanticUnit]:
+    if not semantic_units or not output_entries:
+        return semantic_units
+    output_indices = {entry.index for entry in output_entries}
+    matching_positions = [
+        position
+        for position, unit in enumerate(semantic_units)
+        if any(entry.index in output_indices for entry in unit.entries)
+    ]
+    if not matching_positions:
+        return semantic_units
+    start = max(0, min(matching_positions) - 1)
+    end = min(len(semantic_units), max(matching_positions) + 2)
+    return semantic_units[start:end]

@@ -420,8 +420,8 @@ class ProgressContract:
         return self.emitter.emit(
             stage="processing_chunks",
             detail="tui_semantic",
-            label="TUI 语义重译",
-            message=f"语义片段 {chunk_index + 1}/{total_chunks} 正在按 {semantic_unit_count} 个完整语义单元重译",
+            label="TUI 语义修复重译",
+            message=f"语义片段 {chunk_index + 1}/{total_chunks} 正在带 {semantic_unit_count} 个完整语义单元修复重译",
             chunk=chunk_payload(
                 entries,
                 chunk_index=chunk_index,
@@ -577,7 +577,8 @@ def chunk_stage_label(stage: str) -> str:
         "refine": "润色",
         "semantic_rough": "语义初译",
         "semantic_refine": "语义润色",
-        "tui_semantic": "TUI 语义重译",
+        "tui_semantic": "TUI 语义修复重译",
+        "tui_semantic_repair": "TUI 语义修复重译",
         "tui_semantic_semantic_rough": "TUI 语义重译初译",
         "tui_semantic_semantic_refine": "TUI 语义重译润色",
         "repair": "自动修复",

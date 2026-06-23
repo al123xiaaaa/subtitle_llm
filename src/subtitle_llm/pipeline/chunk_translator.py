@@ -11,16 +11,19 @@ from subtitle_llm.pipeline.prompts import (
     FIX_MISSING_TRANSLATIONS_PROMPT,
     REFINE_TRANSLATION_PROMPT,
     REFINE_SEMANTIC_UNITS_PROMPT,
+    REPAIR_SEMANTIC_TIMED_CUES_PROMPT,
     RE_TRANSLATE_PROMPT,
     TRANSLATE_SEMANTIC_UNITS_PROMPT,
     TRANSLATE_CHUNK_PROMPT,
 )
 from subtitle_llm.pipeline.text import (
     extract_translation_block,
+    format_indexed_translations,
     format_alignment_anchors,
     format_chunk,
     format_semantic_units_json,
     format_translation_reference,
+    parse_indexed_translation_for_entries,
     process_semantic_json_translation,
     process_translation,
 )
@@ -499,6 +502,76 @@ class ChunkTranslator:
             "repairing",
             f"{chunk_stage_label(stage)}响应已解析",
             chunk,
+            chunk_index,
+            trace_id=trace_id,
+        )
+        return TracedTranslationText(processed_translation, trace_id)
+
+    def repair_semantic_timed_cues_traced(
+        self,
+        output_entries: list[SubtitleEntry],
+        repair_brief: str,
+        context: str,
+        target_language: str,
+        boundary_context: str,
+        usage: CompletionUsage,
+        chunk_index: int | None = None,
+        stage: str = "tui-semantic-repair",
+    ) -> TracedTranslationText:
+        prompt = REPAIR_SEMANTIC_TIMED_CUES_PROMPT.format(
+            target_language=target_language,
+            context=context,
+            boundary_context=boundary_context,
+            repair_brief=repair_brief,
+            chunk_size=len(output_entries),
+        )
+        operation = self.operations.create_completion(prompt, stage=stage, chunk=output_entries, chunk_index=chunk_index)
+        result = operation.completion
+        duration_ms = operation.duration_ms
+        usage.add(result.usage)
+        extracted_response = extract_translation_block(result.content)
+        try:
+            parsed_translations = parse_indexed_translation_for_entries(
+                extracted_response,
+                output_entries,
+            )
+        except Exception as exc:
+            self.operations.record_trace(
+                stage=stage,
+                prompt=prompt,
+                response=result.content,
+                usage=result.usage,
+                duration_ms=duration_ms,
+                chunk=output_entries,
+                chunk_index=chunk_index,
+                processed_translation="",
+                error=str(exc),
+            )
+            self.operations.emit_chunk_progress(
+                stage,
+                "failed",
+                f"{chunk_stage_label(stage)}解析失败：{exc}",
+                output_entries,
+                chunk_index,
+            )
+            raise
+
+        processed_translation = format_indexed_translations(parsed_translations)
+        trace_id = self.operations.record_trace(
+            stage=stage,
+            prompt=prompt,
+            response=result.content,
+            usage=result.usage,
+            duration_ms=duration_ms,
+            chunk=output_entries,
+            chunk_index=chunk_index,
+            processed_translation=processed_translation,
+        )
+        self.operations.emit_chunk_progress(
+            stage,
+            "repairing",
+            f"{chunk_stage_label(stage)}响应已解析",
+            output_entries,
             chunk_index,
             trace_id=trace_id,
         )

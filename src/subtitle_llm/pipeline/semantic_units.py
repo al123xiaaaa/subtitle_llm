@@ -4,11 +4,10 @@ import re
 from dataclasses import dataclass
 
 from subtitle_llm.domain import SubtitleEntry
+from subtitle_llm.pipeline.semantic_layout import split_translation_by_layout_contract
 from subtitle_llm.pipeline.text import is_sentence_complete
 
 
-CJK_PUNCTUATION = set("，。！？；：、,.!?;:")
-CJK_ORPHAN_PUNCTUATION = set("，。！？；：、,.!?;:“”‘’\"'）】》」』)]}>…—-")
 WHITESPACE_RE = re.compile(r"\s+")
 
 
@@ -88,105 +87,10 @@ def split_translation(
     if not cleaned:
         return ["" for _ in entries]
 
-    weights = [max(1, len(normalize_spaces(entry.original_text))) for entry in entries]
-    if is_cjk_target(target_language):
-        return split_cjk_text(cleaned, weights)
-    return split_word_text(cleaned, weights)
-
-
-def split_cjk_text(text: str, weights: list[int]) -> list[str]:
-    boundaries = weighted_boundaries(len(text), weights)
-    pieces: list[str] = []
-    start = 0
-    for boundary in boundaries:
-        split_at = choose_cjk_split(text, start, boundary)
-        pieces.append(text[start:split_at].strip())
-        start = split_at
-    pieces.append(text[start:].strip())
-    return rebalance_empty_pieces(pieces)
-
-
-def choose_cjk_split(text: str, start: int, desired: int) -> int:
-    minimum = max(start + 1, desired - 8)
-    maximum = min(len(text) - 1, desired + 8)
-    best = max(start + 1, min(desired, len(text) - 1))
-    best_score = abs(best - desired)
-    for index in range(minimum, maximum + 1):
-        score = abs(index - desired)
-        if text[index - 1] in CJK_PUNCTUATION:
-            score -= 4
-        if index < len(text) and text[index] in CJK_PUNCTUATION:
-            score -= 2
-        if score < best_score:
-            best = index
-            best_score = score
-    return best
-
-
-def split_word_text(text: str, weights: list[int]) -> list[str]:
-    words = text.split()
-    if len(words) < len(weights):
-        return split_cjk_text(text, weights)
-
-    boundaries = weighted_boundaries(len(words), weights)
-    pieces: list[str] = []
-    start = 0
-    for boundary in boundaries:
-        split_at = max(start + 1, min(boundary, len(words) - 1))
-        pieces.append(" ".join(words[start:split_at]).strip())
-        start = split_at
-    pieces.append(" ".join(words[start:]).strip())
-    return rebalance_empty_pieces(pieces)
-
-
-def is_orphan_punctuation(value: str) -> bool:
-    stripped = value.strip()
-    return bool(stripped) and all(char in CJK_ORPHAN_PUNCTUATION for char in stripped)
-
-
-def weighted_boundaries(total_length: int, weights: list[int]) -> list[int]:
-    total_weight = sum(weights)
-    consumed = 0
-    boundaries: list[int] = []
-    for weight in weights[:-1]:
-        consumed += weight
-        boundary = round(total_length * consumed / total_weight)
-        boundaries.append(max(1, min(boundary, total_length - 1)))
-    for index in range(1, len(boundaries)):
-        if boundaries[index] <= boundaries[index - 1]:
-            boundaries[index] = min(total_length - 1, boundaries[index - 1] + 1)
-    return boundaries
-
-
-def rebalance_empty_pieces(pieces: list[str]) -> list[str]:
-    if all(pieces):
-        return pieces
-    combined = "".join(pieces)
-    if not combined:
-        return pieces
-    if len(combined) < len(pieces):
-        return [combined if index == 0 else "" for index, _ in enumerate(pieces)]
-    balanced: list[str] = []
-    start = 0
-    for index in range(len(pieces)):
-        remaining_slots = len(pieces) - index
-        remaining_chars = len(combined) - start
-        take = max(1, remaining_chars // remaining_slots)
-        if index == len(pieces) - 1:
-            take = remaining_chars
-        balanced.append(combined[start:start + take])
-        start += take
-    return balanced
-
-
-def is_cjk_target(target_language: str) -> bool:
-    normalized = target_language.strip().lower()
-    return (
-        normalized in {"zh", "zh-cn", "zh_cn", "ja", "jp", "ko"}
-        or "chinese" in normalized
-        or "中文" in normalized
-        or "japanese" in normalized
-        or "korean" in normalized
+    return split_translation_by_layout_contract(
+        cleaned,
+        entries,
+        target_language=target_language,
     )
 
 

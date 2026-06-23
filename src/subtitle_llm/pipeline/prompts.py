@@ -139,6 +139,51 @@ Required JSON shape:
 Before answering, silently verify that the JSON contains exactly {chunk_size} translations with unit_id 1 through {chunk_size}.
 """
 
+REPAIR_SEMANTIC_TIMED_CUES_PROMPT = """You are a senior subtitle repair translator specializing in {target_language}.
+
+The user is reviewing timed subtitle cues and requested a repair retranslation. Your task is to repair the target-language text for the timed cues in the output range.
+
+**Context:**
+{context}
+
+**Readonly Boundary Context:**
+{boundary_context}
+
+**Repair Brief:**
+{repair_brief}
+
+**Instructions:**
+1. Translate from the source text and semantic context. Do not translate from the current translation.
+2. Use the current translation only as a failure reference and to preserve good terminology when it is not part of the failure.
+3. Output exactly {chunk_size} timed cue translations, numbered [1] through [{chunk_size}] in order.
+4. The local output index [1] maps to the first timed cue listed under "Timed cues to repair and output".
+5. Do not merge, delete, split, skip, reorder, renumber, or output readonly anchors/context.
+6. Do not repeat any deterministic failures named in the Repair Brief.
+7. Do not output placeholders, empty entries, source text, punctuation-only entries, explanations, or markdown.
+8. Output only the XML block below.
+
+Required XML format:
+<response>
+<translation>
+[1]
+[Repaired translation for output timed cue 1]
+[2]
+[Repaired translation for output timed cue 2]
+...
+[{chunk_size}]
+[Repaired translation for output timed cue {chunk_size}]
+</translation>
+</response>
+
+Before answering, silently verify:
+- there are exactly {chunk_size} entries;
+- every index from [1] to [{chunk_size}] appears once;
+- no entry is empty, placeholder text, source text, or punctuation-only;
+- no readonly anchor, boundary context, or non-output timed cue is output.
+
+Now provide the repaired timed cue translations:
+"""
+
 FIX_MISSING_TRANSLATIONS_PROMPT = """You are a professional translator specializing in {target_language}. Your task is to fix missing translations in a subtitle chunk.
 
 Original text:

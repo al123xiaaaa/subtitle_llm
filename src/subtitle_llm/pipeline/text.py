@@ -232,6 +232,72 @@ def parse_translation_results(translation: str, chunk: list[SubtitleEntry]) -> l
     return results
 
 
+def parse_indexed_translation_strict(translation: str, expected_count: int) -> list[str]:
+    translations = parse_indexed_translation_map(translation)
+    return indexed_map_to_ordered_list(translations, list(range(1, expected_count + 1)))
+
+
+def parse_indexed_translation_for_entries(translation: str, entries: list[SubtitleEntry]) -> list[str]:
+    try:
+        return parse_indexed_translation_strict(translation, len(entries))
+    except ValueError as local_error:
+        translations = parse_indexed_translation_map(translation)
+        global_indices = [entry.index for entry in entries]
+        try:
+            return indexed_map_to_ordered_list(translations, global_indices)
+        except ValueError:
+            raise local_error
+
+
+def parse_indexed_translation_map(translation: str) -> dict[int, list[str]]:
+    translations: dict[int, list[str]] = {}
+    current_index: int | None = None
+
+    for line in translation.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = re.match(r"^\[(\d+)\]\s*(.*)$", stripped)
+        if match:
+            current_index = int(match.group(1))
+            if current_index in translations:
+                raise ValueError(f"duplicate translation index: {current_index}")
+            translations[current_index] = []
+            inline_text = match.group(2).strip()
+            if inline_text:
+                translations[current_index].append(inline_text)
+            continue
+        if current_index is None:
+            raise ValueError("translation text appeared before the first [index] marker")
+        translations[current_index].append(stripped)
+    return translations
+
+
+def indexed_map_to_ordered_list(translations: dict[int, list[str]], expected_order: list[int]) -> list[str]:
+    expected = set(expected_order)
+    observed = set(translations)
+    if observed != expected:
+        missing = sorted(expected - observed)
+        extra = sorted(observed - expected)
+        raise ValueError(f"translation index mismatch: missing={missing}, extra={extra}")
+
+    parsed: list[str] = []
+    for index in expected_order:
+        text = " ".join(translations[index]).strip()
+        if not text:
+            raise ValueError(f"translation index {index} is empty")
+        parsed.append(text)
+    return parsed
+
+
+def format_indexed_translations(translations: list[str]) -> str:
+    lines: list[str] = []
+    for index, translation in enumerate(translations, start=1):
+        lines.append(f"[{index}]")
+        lines.append(translation.strip())
+    return "\n".join(lines)
+
+
 def process_semantic_json_translation(content: str, chunk: list[SubtitleEntry]) -> str:
     payload = extract_json_payload(content)
     data = json.loads(payload)
