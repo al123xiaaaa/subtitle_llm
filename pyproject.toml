@@ -25,9 +25,6 @@ dependencies = [
     "yt-dlp",
 ]
 
-[project.optional-dependencies]
-asr = ["funasr"]
-
 [project.scripts]
 subtitle-llm = "subtitle_llm.cli.app:app"
 

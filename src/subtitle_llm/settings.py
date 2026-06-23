@@ -85,24 +85,26 @@ class PipelineConfig(BaseModel):
 
 
 class ASRConfig(BaseModel):
-    """FunASR ASR 引擎配置。
+    """FunASR llama.cpp / GGUF runtime 配置。
 
-    默认使用 SenseVoiceSmall 模型，自带 VAD（fsmn-vad）和标点恢复（ct-punc）。
+    依赖预编译二进制（llama-funasr-vad / llama-funasr-sensevoice）和对应的 GGUF 权重，
+    无需 Python ML 环境和 PyTorch，CPU 上运行。二进制与模型获取见
+    docs/adr/0002-asr-backend-migrate-to-llamacpp.md。
     """
 
-    model: str = "iic/SenseVoiceSmall"
-    vad_model: str = "fsmn-vad"
-    punc_model: str = "ct-punc"
-    spk_model: str | None = None  # 设为 "cam++" 启用说话人分离
-    vad_max_segment_ms: int = 30000  # VAD 单段最大时长（毫秒）
-    device: str | None = "cpu"
+    # 二进制路径（相对路径按 PATH 解析；可填绝对路径）
+    vad_binary: str = "llama-funasr-vad"
+    sensevoice_binary: str = "llama-funasr-sensevoice"
+    # GGUF 模型目录与文件名
+    model_dir: str = "./gguf"
+    sensevoice_model: str = "sensevoice-small-f16.gguf"
+    vad_model: str = "fsmn-vad.gguf"
+    # VAD 与识别的执行超时（秒）
+    timeout_seconds: float = 600.0
 
-    @field_validator("vad_max_segment_ms")
-    @classmethod
-    def positive_integer(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("value must be positive")
-        return value
+    def model_path(self, filename: str) -> Path:
+        """返回 model_dir 下某个 GGUF 文件的完整路径。"""
+        return Path(self.model_dir) / filename
 
 
 class AppConfig(BaseModel):

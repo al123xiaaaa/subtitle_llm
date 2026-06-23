@@ -1,50 +1,23 @@
-"""ASR transcription using FunASR (SenseVoiceSmall) with VAD-based segmentation."""
+"""ASR 转写：通过 FunASR llama.cpp / GGUF runtime 把音频转成 SRT 字幕。
+
+转写流程：
+1. ASR 后端产出带时间戳的识别片段（AsrCue）
+2. 按时间戳组装时间轴字幕（SubtitleEntry）
+3. 写出 source-only SRT
+
+语言映射、标签清洗、进度事件与旧 funasr 实现保持一致；后端细节由 asr_backend 封装。
+"""
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
 
 from subtitle_llm.domain import Subtitle, SubtitleEntry
 from subtitle_llm.io import SubtitleIO, seconds_to_srt_time
+from subtitle_llm.media.asr_backend import AsrBackend, AsrCue, LlamacppAsrBackend
 from subtitle_llm.progress_events import ProgressEmitter
 from subtitle_llm.settings import ASRConfig
-
-# FunASR SenseVoiceSmall 支持的语言代码映射
-# 参考: https://github.com/modelscope/FunASR
-FUNASR_LANGUAGE_MAP: Final[dict[str, str]] = {
-    "chinese": "zh",
-    "english": "en",
-    "cantonese": "yue",
-    "japanese": "ja",
-    "korean": "ko",
-    "arabic": "ar",
-    "german": "de",
-    "french": "fr",
-    "spanish": "es",
-    "portuguese": "pt",
-    "indonesian": "id",
-    "italian": "it",
-    "russian": "ru",
-    "thai": "th",
-    "vietnamese": "vi",
-    "turkish": "tr",
-    "hindi": "hi",
-    "malay": "ms",
-    "dutch": "nl",
-    "swedish": "sv",
-    "danish": "da",
-    "finnish": "fi",
-    "polish": "pl",
-    "czech": "cs",
-    "filipino": "fil",
-    "persian": "fa",
-    "greek": "el",
-    "romanian": "ro",
-    "hungarian": "hu",
-    "macedonian": "mk",
-}
 
 # 语言别名 -> 标准名称
 ASR_LANGUAGE_ALIASES: Final[dict[str, str | None]] = {
@@ -167,8 +140,6 @@ ASR_LANGUAGE_ALIASES: Final[dict[str, str | None]] = {
     "macedonian": "Macedonian",
 }
 
-CJK_ASR_LANGUAGES: Final[set[str]] = {"Chinese", "Japanese", "Cantonese"}
-
 
 def normalize_asr_language(language: str | None) -> str | None:
     """将用户输入的语言标识标准化为可读名称（如 'en' -> 'English'）。"""
@@ -187,27 +158,7 @@ def normalize_asr_language(language: str | None) -> str | None:
     if base_alias is not None:
         return base_alias
 
-    title_language = " ".join(
-        part.capitalize()
-        for part in raw_language.replace("-", " ").replace("_", " ").split()
-    )
-    if title_language in FUNASR_LANGUAGE_MAP:
-        return title_language
-
     return raw_language
-
-
-def _to_funasr_language(language: str | None) -> str | None:
-    """将标准化语言名称转为 FunASR 语言代码（如 'English' -> 'en'）。auto 则返回 None。"""
-    if language is None:
-        return None
-    return FUNASR_LANGUAGE_MAP.get(language.lower())
-
-
-def _clean_funasr_text(text: str) -> str:
-    """清除 FunASR 输出中的特殊标记（如 <|zh|>、<|EMO_UNKNOWN|> 等情感/事件标签）。"""
-    text = re.sub(r"<\|[^|]*\|>", "", text)
-    return text.strip()
 
 
 def transcribe(
@@ -217,16 +168,23 @@ def transcribe(
     config: ASRConfig | None = None,
     progress: ProgressEmitter | None = None,
 ) -> str:
-    """使用 FunASR SenseVoiceSmall 将音频转写为 SRT 字幕文件。
+    """使用 FunASR llama.cpp runtime 将音频转写为 SRT 字幕文件。
 
-    策略：
-    1. 先用 VAD 模型单独获取语音片段时间戳
-    2. 用 ASR+VAD 组合调用获取完整文本（VAD 分片 + 每片独立 ASR）
-    3. 按 <|lang|> 标签分割文本，与 VAD 片段一一对应
+    策略：ASR 后端产出带时间戳的识别片段，按时间戳组装时间轴字幕。
     """
-    from funasr import AutoModel
-
     config = config or ASRConfig()
+    backend = LlamacppAsrBackend(config=config)
+    return transcribe_with_backend(audio_path, language, output_path, backend, progress=progress)
+
+
+def transcribe_with_backend(
+    audio_path: str | Path,
+    language: str | None,
+    output_path: str | Path,
+    backend: AsrBackend,
+    progress: ProgressEmitter | None = None,
+) -> str:
+    """用指定 ASR 后端把音频转写成 SRT。后端可注入，便于测试与替换。"""
     asr_language = normalize_asr_language(language)
     emit_progress(
         progress,
@@ -240,95 +198,35 @@ def transcribe(
         display_language = "自动识别" if asr_language is None else asr_language
         print(f"ASR 语言：{display_language}（来自 {language}）")
 
-    audio_path = Path(audio_path)
-    device = config.device or "cpu"
-
-    # Step 1: VAD 获取语音片段时间戳
-    emit_progress(progress, "vad", "VAD 检测", "正在检测语音片段")
-    print("正在运行 VAD 检测语音片段...")
-    vad_model = AutoModel(
-        model=config.vad_model, device=device, disable_update=True
-    )
-    vad_result = vad_model.generate(input=str(audio_path), batch_size=1)
-    vad_segments = vad_result[0]["value"]  # [[start_ms, end_ms], ...]
-    emit_progress(progress, "vad", "VAD 检测", f"检测到 {len(vad_segments)} 个语音片段", status="done")
-    print(f"VAD 检测到 {len(vad_segments)} 个语音片段")
-
-    # Step 2: ASR + VAD 组合调用获取文本
-    # SenseVoiceSmall + VAD 会对每个 VAD 片段独立转写，
-    # 输出合并为一条文本，每个片段以 <|lang|> 标签开头
-    emit_progress(progress, "load_asr", "加载 ASR", f"正在加载 FunASR 模型 ({config.model})")
-    print(f"正在加载 FunASR 模型 ({config.model})...")
-    asr_model = AutoModel(
-        model=config.model,
-        vad_model=config.vad_model,
-        vad_kwargs={"max_single_segment_time": config.vad_max_segment_ms},
-        device=device,
-        disable_update=True,
-    )
-
-    emit_progress(progress, "transcribe_audio", "转写音频", f"正在转写：{audio_path.name}")
-    print(f"正在转写：{audio_path.name}...")
-    funasr_lang = _to_funasr_language(asr_language)
-    generate_kwargs: dict[str, Any] = {"batch_size": 1}
-    if funasr_lang:
-        generate_kwargs["language"] = funasr_lang
-
-    asr_result = asr_model.generate(input=str(audio_path), **generate_kwargs)
-    raw_text = asr_result[0].get("text", "")
+    emit_progress(progress, "transcribe_audio", "转写音频", f"正在转写：{Path(audio_path).name}")
+    print(f"正在转写：{Path(audio_path).name}...")
+    cues = backend.transcribe(audio_path, asr_language, progress=progress)
     emit_progress(progress, "transcribe_audio", "转写音频", "音频转写完成", status="done")
 
-    # Step 3: 按 <|lang|> 标签分割文本
-    # SenseVoiceSmall 输出格式: <|en|><|EMO_UNKNOWN|><|Speech|><|woitn|>text ...
-    # 每个 VAD 片段对应一组标签+文本
-    segments = re.split(
-        r"(?=<\|(?:en|zh|ja|ko|yue|ar|de|fr|es|pt|id|it|ru|th|vi|tr|hi|ms|nl|sv|da|fi|pl|cs|fil|fa|el|ro|hu|mk)\|>)",
-        raw_text,
-    )
-    segments = [s.strip() for s in segments if s.strip()]
-
-    # Step 4: 生成字幕条目
-    subtitle = Subtitle()
-
-    if len(segments) == len(vad_segments):
-        # 完美匹配：每个文本片段对应一个 VAD 时间段
-        for seg_text, (start_ms, end_ms) in zip(segments, vad_segments):
-            clean = _clean_funasr_text(seg_text)
-            if not clean:
-                continue
-
-            start_sec = start_ms / 1000.0
-            end_sec = end_ms / 1000.0
-
-            subtitle.add_entry(
-                SubtitleEntry(
-                    index=len(subtitle.entries) + 1,
-                    start_time=seconds_to_srt_time(start_sec),
-                    end_time=seconds_to_srt_time(max(end_sec, start_sec + 0.1)),
-                    original_text=clean,
-                )
-            )
-    else:
-        # 数量不匹配：降级处理
-        print(
-            f"⚠️ VAD({len(vad_segments)})与文本({len(segments)})数量不匹配，使用降级方案"
-        )
-        full_clean = _clean_funasr_text(raw_text)
-        if full_clean:
-            subtitle.add_entry(
-                SubtitleEntry(
-                    index=1,
-                    start_time=seconds_to_srt_time(0),
-                    end_time=seconds_to_srt_time(0),
-                    original_text=full_clean,
-                )
-            )
+    subtitle = build_subtitle(cues)
 
     emit_progress(progress, "write_srt", "写出字幕", f"正在写出字幕：{output_path}")
     SubtitleIO.write_srt(subtitle, output_path, output_format="source-only")
     emit_progress(progress, "write_srt", "写出字幕", f"字幕已生成：{output_path}", status="done")
     print(f"字幕已生成：{output_path}（{len(subtitle.entries)} 条）")
     return str(output_path)
+
+
+def build_subtitle(cues: list[AsrCue]) -> Subtitle:
+    """把识别片段组装成时间轴字幕。每条片段保证非空文本且最小时长 100ms。"""
+    subtitle = Subtitle()
+    for cue in cues:
+        start_sec = cue.start_ms / 1000.0
+        end_sec = max(cue.end_ms, cue.start_ms + 100) / 1000.0
+        subtitle.add_entry(
+            SubtitleEntry(
+                index=len(subtitle.entries) + 1,
+                start_time=seconds_to_srt_time(start_sec),
+                end_time=seconds_to_srt_time(end_sec),
+                original_text=cue.text,
+            )
+        )
+    return subtitle
 
 
 def emit_progress(

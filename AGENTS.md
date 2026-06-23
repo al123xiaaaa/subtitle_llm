@@ -59,6 +59,13 @@ pyright
 - `custom_handling.py` — Textual app for review, merge, re-translate, and skip
 - Data passed between main process and TUI via temp JSON files
 
+**Media & ASR** (`src/subtitle_llm/media/`):
+- `downloader.py` — fetches video/audio/subtitles via yt-dlp
+- `asr_backend.py` — `AsrBackend` protocol, `AsrCue`, and `LlamacppAsrBackend` (FunASR llama.cpp / GGUF runtime, no PyTorch)
+- `transcriber.py` — orchestrates ASR into a source-only SRT; language mapping and tag cleaning
+- `muxer.py` — embeds the translated SRT as a soft subtitle track in an MKV
+- ASR runs two prebuilt binaries (`llama-funasr-vad` for timestamps, `llama-funasr-sensevoice` for text); see `docs/adr/0002-asr-backend-migrate-to-llamacpp.md`
+
 **Prompt templates:** `src/subtitle_llm/pipeline/prompts.py`.
 
 **Configuration:** `src/subtitle_llm/config/default.yaml` plus optional `--config`. Config is validated by Pydantic in `settings.py`. API keys are referenced by environment variable names such as `GEMINI_API_KEY`; do not hardcode secrets.
