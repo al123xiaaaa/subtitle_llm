@@ -47,7 +47,7 @@ export interface JobProgressState {
   selectedChunkIndex: number | null;
 }
 
-const STAGE_LABELS: Record<string, string> = {
+export const STAGE_LABELS: Record<string, string> = {
   startup: "启动任务",
   prepare_input: "准备输入",
   prepare_translation: "准备翻译",
@@ -366,4 +366,54 @@ function nullableInt(value: unknown, fallback: number | null): number | null {
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.floor(parsed) : fallback;
+}
+
+export interface ProgressLogLineResult {
+  line: string;
+  stage: string;
+}
+
+/**
+ * 把进度事件转成「详细日志」面板里的一行人类可读文本。
+ *
+ * 规则：
+ * 1. chunk 级 LLM 事件（event.chunk.index 存在）→ 产出活动行，含 detail / 状态 / 耗时 / trace_id；
+ * 2. 阶段切换（stage 与上一个不同，且非 chunk 事件）→ 产出里程碑行 `── 阶段标签 ──`；
+ * 3. 其余事件 → 返回 null（不写日志）。
+ *
+ * 纯函数：输入事件 + 上一个 stage，输出一行文本与最新 stage（或 null）。
+ */
+export function formatProgressLogLine(
+  event: CliProgressEvent,
+  context: { previousStage: string },
+): ProgressLogLineResult | null {
+  const stage = cleanString(event.stage) || context.previousStage;
+  const chunkIndex = positiveInt(event.chunk?.index);
+
+  if (chunkIndex) {
+    const total = positiveInt(event.chunk?.total) || positiveInt(event.total_chunks);
+    const detail = cleanString(event.chunk?.detail) || cleanString(event.detail);
+    const rawStatus = cleanString(event.chunk?.status) || cleanString(event.status);
+    const status = statusLabel(rawStatus as ChunkProgressStatus);
+    const parts = [
+      `${labelForStage(stage)} chunk ${chunkIndex}${total ? `/${total}` : ""}`,
+      detail,
+      status,
+    ].filter(Boolean);
+    const durationMs = nullableInt(event.duration_ms, null);
+    if (durationMs && durationMs > 0) {
+      parts.push(`${(durationMs / 1000).toFixed(1)}s`);
+    }
+    const traceId = cleanString(event.trace_id);
+    if (traceId) {
+      parts.push(`trace ${traceId}`);
+    }
+    return { line: parts.join(" · "), stage };
+  }
+
+  if (stage && stage !== context.previousStage) {
+    return { line: `── ${labelForStage(stage)} ──`, stage };
+  }
+
+  return null;
 }

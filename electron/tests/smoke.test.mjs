@@ -13,8 +13,10 @@ import {
   chunkSummary,
   createInitialJobProgressState,
   finishProgress,
+  formatProgressLogLine,
   selectProgressChunk,
   selectedChunk,
+  STAGE_LABELS,
   startProgress,
 } from "../../dist/electron/lib/progressModel.js";
 import { getProvider, listProviders, resolveModelId } from "../../dist/electron/lib/providerCatalog.js";
@@ -293,6 +295,59 @@ assert.equal(selectedChunk(progress).issueSummary, "仍有疑似缺失");
 assert.match(chunkSummary(progress.chunks), /1 个带风险/);
 assert.equal(finishProgress(progress, true, 1500).currentStatus, "done");
 assert.equal(createInitialJobProgressState().currentLabel, "等待任务");
+
+// formatProgressLogLine：详细日志面板的可读行格式
+assert.ok(STAGE_LABELS.processing_chunks, "processing_chunks 应有阶段标签");
+
+// chunk 事件带 trace_id → 行包含 chunk 序号、detail、trace
+const chunkWithTrace = formatProgressLogLine(
+  {
+    command: "translate",
+    stage: "processing_chunks",
+    detail: "",
+    chunk: { index: 2, total: 4, status: "running", detail: "rough" },
+    duration_ms: 1200,
+    trace_id: "000003",
+  },
+  { previousStage: "processing_chunks" },
+);
+assert.ok(chunkWithTrace, "chunk 事件应产出日志行");
+assert.match(chunkWithTrace.line, /处理片段 chunk 2\/4/);
+assert.match(chunkWithTrace.line, /rough/);
+assert.match(chunkWithTrace.line, /1\.2s/);
+assert.match(chunkWithTrace.line, /trace 000003/);
+assert.equal(chunkWithTrace.stage, "processing_chunks");
+
+// chunk 事件无 trace_id → 行不含 trace
+const chunkNoTrace = formatProgressLogLine(
+  {
+    command: "translate",
+    stage: "processing_chunks",
+    detail: "",
+    chunk: { index: 1, total: 4, status: "done", detail: "quality" },
+    duration_ms: 300,
+  },
+  { previousStage: "processing_chunks" },
+);
+assert.ok(chunkNoTrace, "无 trace 的 chunk 事件应产出日志行");
+assert.match(chunkNoTrace.line, /quality/);
+assert.doesNotMatch(chunkNoTrace.line, /trace/);
+
+// 阶段切换（非 chunk 事件）→ 里程碑行
+const stageSwitch = formatProgressLogLine(
+  { command: "translate", stage: "processing_chunks", detail: "plan_chunks", status: "running" },
+  { previousStage: "startup" },
+);
+assert.ok(stageSwitch, "阶段切换应产出里程碑行");
+assert.equal(stageSwitch.line, "── 处理片段 ──");
+assert.equal(stageSwitch.stage, "processing_chunks");
+
+// 同阶段非 chunk 事件 → 返回 null（不写日志）
+const sameStage = formatProgressLogLine(
+  { command: "translate", stage: "processing_chunks", detail: "plan_chunks", status: "running" },
+  { previousStage: "processing_chunks" },
+);
+assert.equal(sameStage, null);
 
 const runtimeProjectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "subtitle-llm-runtime-"));
 const runtimeUserData = path.join(runtimeProjectRoot, "userData");

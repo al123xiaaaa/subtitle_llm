@@ -175,7 +175,7 @@ Required XML format:
 </translation>
 </response>
 
-Before answering, silently verify:
+Hard output constraints:
 - there are exactly {chunk_size} entries;
 - every index from [1] to [{chunk_size}] appears once;
 - no entry is empty, placeholder text, source text, or punctuation-only;

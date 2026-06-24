@@ -85,26 +85,28 @@ class PipelineConfig(BaseModel):
 
 
 class ASRConfig(BaseModel):
-    """FunASR llama.cpp / GGUF runtime 配置。
+    """FunASR Python SDK 配置。
 
-    依赖预编译二进制（llama-funasr-vad / llama-funasr-sensevoice）和对应的 GGUF 权重，
-    无需 Python ML 环境和 PyTorch，CPU 上运行。二进制与模型获取见
-    docs/adr/0002-asr-backend-migrate-to-llamacpp.md。
+    通过 funasr.AutoModel 组合 SenseVoice + fsmn-vad + ct-punc + cam++，
+    一次调用产出带时间戳、带标点、语言受约束的识别片段。详见
+    docs/adr/0003-asr-backend-migrate-to-funasr-sdk.md。
+    首次运行自动下载模型（约 1GB）。CPU 可跑（SenseVoice 17 倍实时）。
     """
 
-    # 二进制路径（相对路径按 PATH 解析；可填绝对路径）
-    vad_binary: str = "llama-funasr-vad"
-    sensevoice_binary: str = "llama-funasr-sensevoice"
-    # GGUF 模型目录与文件名
-    model_dir: str = "./gguf"
-    sensevoice_model: str = "sensevoice-small-f16.gguf"
-    vad_model: str = "fsmn-vad.gguf"
-    # VAD 与识别的执行超时（秒）
-    timeout_seconds: float = 600.0
-
-    def model_path(self, filename: str) -> Path:
-        """返回 model_dir 下某个 GGUF 文件的完整路径。"""
-        return Path(self.model_dir) / filename
+    # ASR 识别模型（ModelScope namespace 或 HuggingFace repo）
+    model_name: str = "FunAudioLLM/SenseVoiceSmall"
+    # 标点恢复模型；None 表示用模型自带标点（SenseVoice/Qwen3-ASR 自带）
+    punc_model: str | None = "ct-punc"
+    # 说话人分离模型；cam++ 会触发 sentence_info（带时间戳分段）输出
+    spk_model: str | None = "cam++"
+    # VAD 单段最长时长（毫秒）。控制分段粒度，避免超长段
+    max_single_segment_time: int = 8000
+    # 推理设备：cpu 或 cuda
+    device: str = "cpu"
+    # 模型 hub：modelscope（默认，国内快）或 hf（HuggingFace，海外）
+    hub: str = "hf"
+    # 某些模型（Fun-ASR-Nano / Qwen3-ASR）需要 trust_remote_code
+    trust_remote_code: bool = True
 
 
 class AppConfig(BaseModel):

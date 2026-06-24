@@ -26,15 +26,16 @@ pipeline:
   semantic_max_cues_per_unit: 6
   refine_translation: false
 
-# FunASR llama.cpp / GGUF runtime 配置。
-# 获取二进制与模型（见 docs/adr/0002-asr-backend-migrate-to-llamacpp.md）：
-#   1. 从 https://github.com/FunAudioLLM/Fun-ASR/releases 下载对应平台的 tar/zip 并解压
-#   2. 运行 ./download-funasr-model.sh sensevoice {model_dir}
-# 无需 Python ML 环境和 PyTorch，CPU 上运行。
+# FunASR Python SDK 配置（见 docs/adr/0003-asr-backend-migrate-to-funasr-sdk.md）。
+# 通过 funasr.AutoModel 组合 SenseVoice + fsmn-vad + ct-punc + cam++，
+# 一次调用产出带时间戳、带标点、语言受约束的识别片段。
+# 首次运行自动下载模型（约 1GB）。安装：pip install funasr（含 PyTorch）。
+# CPU 可跑（SenseVoice 17 倍实时），无需 GPU。
 asr:
-  vad_binary: "llama-funasr-vad"
-  sensevoice_binary: "llama-funasr-sensevoice"
-  model_dir: "./gguf"
-  sensevoice_model: "sensevoice-small-f16.gguf"
-  vad_model: "fsmn-vad.gguf"
-  timeout_seconds: 600.0
+  model_name: "FunAudioLLM/SenseVoiceSmall"
+  punc_model: "ct-punc"
+  spk_model: "cam++"
+  max_single_segment_time: 8000
+  device: "cpu"
+  hub: "hf"
+  trust_remote_code: true

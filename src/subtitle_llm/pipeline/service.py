@@ -46,7 +46,15 @@ from subtitle_llm.settings import AppConfig
 
 logger = logging.getLogger(__name__)
 
-SEMANTIC_REPAIR_BATCH_SIZE = 18
+SEMANTIC_REPAIR_BATCH_SIZE = 8
+RELIABILITY_RANK = {"high": 0, "medium": 1, "low": 2, "very_low": 3}
+STRUCTURAL_REPAIR_ISSUES = {
+    "index_missing",
+    "index_extra",
+    "index_order_error",
+    "missing_translation",
+    "placeholder_translation",
+}
 
 
 @dataclass
@@ -81,6 +89,9 @@ class TuiReviewOutcome:
         self.retranslated = self.retranslated or other.retranslated
         self.attempted = self.attempted or other.attempted
         self.trace_ids.extend(other.trace_ids)
+
+
+EntryTranslationSnapshot = list[tuple[SubtitleEntry, str, bool]]
 
 
 @dataclass(frozen=True)
@@ -579,14 +590,16 @@ class TranslationService:
         if translator.trace_recorder:
             translator.trace_recorder.update_quality(result.final_trace_id, diagnosis)
         quality_gate.apply_diagnosis(planned.entries, diagnosis)
+        review_policy = ReviewPolicy.from_review_port(review_port)
         translator_progress_contract(translator).quality_checked(
             planned.entries,
             chunk_index=planned.index,
             total_chunks=report.total_chunks,
             diagnosis=diagnosis,
-            auto_repair=True,
+            auto_repair=review_policy.quality_visual_auto_repair(diagnosis),
         )
-        if diagnosis.has_issues:
+        if diagnosis.has_issues and review_policy.should_auto_repair(diagnosis):
+            before_repair = snapshot_entry_translations(planned.entries)
             repair_usage = CompletionUsage()
             repaired_result = translator.repair_translation_traced(
                 planned.entries,
@@ -606,13 +619,27 @@ class TranslationService:
                 translation=repaired,
                 target_language=target_language,
             )
+            repair_downgraded = repair_diagnosis_is_downgrade(diagnosis, repaired_diagnosis)
             if translator.trace_recorder:
                 translator.trace_recorder.update_quality(
                     repaired_result.trace_id,
                     repaired_diagnosis,
+                    status="failed" if repair_downgraded else None,
                 )
-            quality_gate.apply_diagnosis(planned.entries, repaired_diagnosis)
-            diagnosis = repaired_diagnosis
+            if repair_downgraded:
+                restore_entry_translations(before_repair)
+                quality_gate.apply_diagnosis(planned.entries, diagnosis)
+                logger.warning(
+                    "语义chunk自动修复劣化，已回滚到初译: chunk=%s before=%s/%s after=%s/%s",
+                    planned.index + 1,
+                    diagnosis.reliability,
+                    diagnosis.flagged_entries,
+                    repaired_diagnosis.reliability,
+                    repaired_diagnosis.flagged_entries,
+                )
+            else:
+                quality_gate.apply_diagnosis(planned.entries, repaired_diagnosis)
+                diagnosis = repaired_diagnosis
             translator_progress_contract(translator).quality_checked(
                 planned.entries,
                 chunk_index=planned.index,
@@ -1318,6 +1345,7 @@ class TranslationService:
             )
         if diagnosis.has_issues:
             if review_policy.should_auto_repair(diagnosis):
+                before_repair = snapshot_entry_translations(planned.entries)
                 repair_usage = CompletionUsage()
                 repaired_result = translator.repair_translation_traced(
                     planned.entries,
@@ -1337,12 +1365,27 @@ class TranslationService:
                     translation=repaired,
                     target_language=target_language,
                 )
+                repair_downgraded = repair_diagnosis_is_downgrade(diagnosis, repaired_diagnosis)
                 if translator.trace_recorder:
                     translator.trace_recorder.update_quality(
                         repaired_result.trace_id,
                         repaired_diagnosis,
+                        status="failed" if repair_downgraded else None,
                     )
-                quality_gate.apply_diagnosis(planned.entries, repaired_diagnosis)
+                if repair_downgraded:
+                    restore_entry_translations(before_repair)
+                    quality_gate.apply_diagnosis(planned.entries, diagnosis)
+                    logger.warning(
+                        "chunk自动修复劣化，已回滚到初译: chunk=%s before=%s/%s after=%s/%s",
+                        planned.index + 1,
+                        diagnosis.reliability,
+                        diagnosis.flagged_entries,
+                        repaired_diagnosis.reliability,
+                        repaired_diagnosis.flagged_entries,
+                    )
+                else:
+                    quality_gate.apply_diagnosis(planned.entries, repaired_diagnosis)
+                    diagnosis = repaired_diagnosis
                 translator_progress_contract(translator).quality_checked(
                     planned.entries,
                     chunk_index=planned.index,
@@ -1722,6 +1765,29 @@ class TranslationService:
 
 def translator_progress_contract(translator: ChunkTranslator) -> ProgressContract:
     return ProgressContract(translator.progress or ProgressEmitter("translate"))
+
+
+def snapshot_entry_translations(entries: list[SubtitleEntry]) -> EntryTranslationSnapshot:
+    return [(entry, entry.translated_text, entry.needs_retranslation) for entry in entries]
+
+
+def restore_entry_translations(snapshot: EntryTranslationSnapshot) -> None:
+    for entry, translated_text, needs_retranslation in snapshot:
+        entry.translated_text = translated_text
+        entry.needs_retranslation = needs_retranslation
+
+
+def repair_diagnosis_is_downgrade(before: ChunkDiagnosis, after: ChunkDiagnosis) -> bool:
+    before_rank = RELIABILITY_RANK.get(before.reliability, 1)
+    after_rank = RELIABILITY_RANK.get(after.reliability, 1)
+    if after_rank > before_rank:
+        return True
+    if after.flagged_entries > before.flagged_entries:
+        return True
+
+    before_issue_types = {issue.issue_type for issue in before.issues}
+    after_issue_types = {issue.issue_type for issue in after.issues}
+    return bool((after_issue_types - before_issue_types) & STRUCTURAL_REPAIR_ISSUES)
 
 
 def join_non_empty_text(*values: str) -> str:

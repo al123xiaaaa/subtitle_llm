@@ -58,8 +58,8 @@ class TestNewConfig(unittest.TestCase):
         self.assertEqual(config.config_version, "2")
         self.assertEqual(config.default_output_format, "source-first")
         self.assertEqual(config.pipeline.chunk_size, 34)
-        self.assertEqual(config.asr.sensevoice_binary, ASRConfig().sensevoice_binary)
-        self.assertEqual(config.asr.vad_binary, ASRConfig().vad_binary)
+        self.assertEqual(config.asr.model_name, ASRConfig().model_name)
+        self.assertEqual(config.asr.punc_model, ASRConfig().punc_model)
 
     def test_hy_mt2_7b_config_loads_sampling_settings(self):
         config = load_config(PROJECT_ROOT / "hy-mt2-7b-local.yaml")

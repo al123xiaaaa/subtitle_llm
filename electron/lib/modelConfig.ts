@@ -88,7 +88,25 @@ export function writeDesktopModelConfig(projectRoot: string, selection: ModelSel
   fs.mkdirSync(outputDir, { recursive: true });
 
   const outputPath = path.join(outputDir, "latest-model-config.yaml");
-  const content = buildDesktopModelConfigContent(selection);
+  const content = buildDesktopModelConfigContent(selection) + renderAsrSection(projectRoot);
   fs.writeFileSync(outputPath, content, "utf8");
   return outputPath;
+}
+
+// 渲染 FunASR Python SDK 配置段（见 docs/adr/0003）。
+// 不再依赖二进制路径；funasr 通过 pip 安装，模型首次运行自动下载。
+function renderAsrSection(_projectRoot: string): string {
+  return [
+    "",
+    "# FunASR Python SDK（由 modelConfig.ts 生成）。pip install funasr；模型首次自动下载。",
+    "asr:",
+    '  model_name: "FunAudioLLM/SenseVoiceSmall"',
+    '  punc_model: "ct-punc"',
+    '  spk_model: "cam++"',
+    "  max_single_segment_time: 8000",
+    '  device: "cpu"',
+    '  hub: "hf"',
+    "  trust_remote_code: true",
+    "",
+  ].join("\n");
 }

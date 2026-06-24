@@ -12,6 +12,7 @@ import type {
   ReviewMode,
 } from "../../../types";
 import { useJobProgress } from "./useJobProgress";
+import { formatProgressLogLine } from "../../../lib/progressModel";
 
 const RESULT_EVENT_PREFIX = "SUBTITLE_LLM_RESULT ";
 const PROGRESS_EVENT_PREFIX = "SUBTITLE_LLM_PROGRESS ";
@@ -53,6 +54,7 @@ export function useAppController() {
   const runStatus = ref("空闲");
   const logText = ref("");
   const logBody = ref<HTMLElement | null>(null);
+  let lastLogStage = "";
   const {
     chunkStatusLabel,
     chunkTooltip,
@@ -316,6 +318,11 @@ export function useAppController() {
     try {
       const event = JSON.parse(line.slice(PROGRESS_EVENT_PREFIX.length)) as CliProgressEvent;
       recordProgress(event);
+      const formatted = formatProgressLogLine(event, { previousStage: lastLogStage });
+      if (formatted) {
+        appendLog(`${formatted.line}\n`);
+        lastLogStage = formatted.stage;
+      }
       return true;
     } catch (error) {
       appendLog(`进度事件解析失败：${error instanceof Error ? error.message : String(error)}\n`, "stderr");
@@ -691,6 +698,7 @@ export function useAppController() {
     if (event.type === "started") {
       setStatus("运行中");
       resetProgress(event.command);
+      lastLogStage = "";
       appendLog(`Python: ${event.pythonExecutable}\n工作目录: ${event.cwd}\n`);
       if (event.generatedConfigPath) {
         appendLog(`模型配置: ${event.generatedConfigPath}\n`);

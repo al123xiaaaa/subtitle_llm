@@ -90,6 +90,36 @@ class PunctuationOrphanSemanticClient:
         )
 
 
+class SuspiciousSemanticClient:
+    def create_completion(self, config, messages):
+        prompt = messages[-1]["content"]
+        if "Analyze the following subtitle content" in prompt:
+            return CompletionResult(
+                content="总结: demo summary\n\n短语术语:\n- Tudor London(都铎伦敦)",
+                usage=CompletionUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+        if "Previous flawed translation" in prompt:
+            raise AssertionError("TUI semantic mode should not run full-chunk auto repair")
+        return CompletionResult(
+            content='{"translations": [{"unit_id": 1, "translation": "短。"}]}',
+            usage=CompletionUsage(prompt_tokens=2, completion_tokens=2, total_tokens=4),
+        )
+
+
+class AcceptAllReviewPort:
+    def __init__(self):
+        self.calls = 0
+        self.reviewed_translations: list[str] = []
+
+    def review(self, chunk, chunk_index, total_chunks, completed_chunks=0):
+        self.calls += 1
+        self.reviewed_translations = [entry.translated_text for entry in chunk]
+        return ReviewResult(chunk=chunk, entries_to_retranslate=[])
+
+    def stop(self):
+        pass
+
+
 class RecordingSemanticTranslator:
     progress = None
     trace_recorder = None
@@ -691,6 +721,38 @@ class TestSemanticUnits(unittest.TestCase):
             self.assertTrue(result.report.semantic_translation_applied)
             self.assertEqual(result.report.semantic_multi_cue_units, 2)
 
+    def test_tui_semantic_mode_skips_full_chunk_auto_repair(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.srt"
+            output_path = Path(tmp) / "output.srt"
+            input_path.write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\n"
+                "Just arrived in Tudor London and I need to describe a crowded market before meeting the king.\n\n",
+                encoding="utf-8",
+            )
+            review_port = AcceptAllReviewPort()
+            config = make_config(review_mode="tui")
+            config.pipeline.semantic_translation = "always"
+            service = TranslationService(
+                config,
+                translation_client=SuspiciousSemanticClient(),
+                summary_client=SuspiciousSemanticClient(),
+                review_port=review_port,
+            )
+
+            result = service.translate(
+                TranslationRequest(
+                    input_file=str(input_path),
+                    output_file=str(output_path),
+                    target_language="Chinese",
+                    review_mode="tui",
+                )
+            )
+
+            self.assertTrue(result.report.semantic_translation_applied)
+            self.assertEqual(review_port.calls, 1)
+            self.assertEqual(review_port.reviewed_translations, ["短。"])
+
     def test_tui_repair_uses_semantic_context_but_outputs_selected_timed_cue(self):
         entries = [
             SubtitleEntry(1, "00:00:00,000", "00:00:01,000", "A few months ago,", "旧译文一"),
@@ -828,10 +890,10 @@ class TestSemanticUnits(unittest.TestCase):
         )
 
         self.assertTrue(outcome.retranslated)
-        self.assertEqual([len(batch) for batch in translator.repair_output_batches], [18, 18, 4])
+        self.assertEqual([len(batch) for batch in translator.repair_output_batches], [8, 8, 8, 8, 8])
         self.assertEqual(entries[0].translated_text, "修复译文1")
-        self.assertEqual(entries[18].translated_text, "修复译文1")
-        self.assertEqual(entries[-1].translated_text, "修复译文4")
+        self.assertEqual(entries[8].translated_text, "修复译文1")
+        self.assertEqual(entries[-1].translated_text, "修复译文8")
 
     def test_tui_semantic_repair_falls_back_to_smaller_batches_after_failure(self):
         entries = [

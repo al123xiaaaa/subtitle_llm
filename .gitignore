@@ -34,3 +34,7 @@ data/logs/*-response.txt
 .DS_Store
 
 data/
+
+# FunASR ASR 依赖（二进制 + GGUF 模型，几百 MB，不入库）
+# 下载方式见 scripts/setup-funasr.sh
+vendor/

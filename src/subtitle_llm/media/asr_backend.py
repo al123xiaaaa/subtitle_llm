@@ -1,20 +1,21 @@
-"""ASR 后端抽象与 FunASR llama.cpp / GGUF runtime 实现。
+"""ASR 后端抽象与 FunASR Python SDK 实现。
 
 后端只产出带时间戳的识别片段（AsrCue），不碰 SRT 写出。
-LlamacppAsrBackend 通过两个独立二进制协同工作：
-- llama-funasr-vad：输出每段语音的 ``start_ms end_ms``（每段一行）
-- llama-funasr-sensevoice --vad：输出带 ``<|lang|>`` 标签的识别文本，段数与 VAD 一致
+FunasrAsrBackend 通过 ``funasr.AutoModel`` 一次调用完成 VAD 分段 + 识别 + 标点恢复，
+直接返回带时间戳的 ``sentence_info``，无需独立 VAD 二进制、无需段数配对。
 
-两个二进制都基于同一个 fsmn-vad.gguf，因此段数稳定一致（实测在 5 分钟 / 82 段
-规模下两次运行完全相同）。文本与时间戳按下标 1:1 配对，不需要赌正则切分数。
+相比旧的 llama.cpp 二进制方案（ADR 0002），Python SDK 方案的优势：
+- ``language`` 参数约束语言检测，从源头杜绝跨语言幻觉（英语视频不再冒出中文词）；
+- ``punc_model`` 恢复标点，解决长段无标点无法断句的问题；
+- ``sentence_info`` 直接提供带时间戳分段，无需字数比例投影（方案 E）。
+代价是重新引入 PyTorch 依赖；详见 docs/adr/0003。
 """
 
 from __future__ import annotations
 
 import logging
 import re
-import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -25,19 +26,6 @@ logger = logging.getLogger(__name__)
 
 # SenseVoice 输出的语言/事件标签，例如 <|en|>、<|EMO_UNKNOWN|>、<|nospeech|>
 _SENSEVOICE_TAG_PATTERN = re.compile(r"<\|[^|]*\|>")
-
-# SenseVoice 每个 VAD 片段输出的文本以“段首标签”开头：语言码或 nospeech。
-# 注意：事件/情感标签（<|EMO_UNKNOWN|>、<|Speech|>、<|Event_UNK|>、<|woitn|> 等）
-# 不是段首，不能用作切分点，否则会把单段错切成多段、破坏与 VAD 时间戳的 1:1 配对。
-# 因此这里用显式的段首标签集合，而不是宽泛的 <|[a-z]+|> 正则。
-_SEGMENT_START_TAGS = (
-    "en", "zh", "ja", "ko", "yue", "ar", "de", "fr", "es", "pt", "id", "it",
-    "ru", "th", "vi", "tr", "hi", "ms", "nl", "sv", "da", "fi", "pl", "cs",
-    "fil", "fa", "el", "ro", "hu", "mk", "nospeech",
-)
-_SEGMENT_START_PATTERN = re.compile(
-    r"(?=<\|(?:" + "|".join(_SEGMENT_START_TAGS) + r")\|>)"
-)
 
 
 class AsrError(RuntimeError):
@@ -71,14 +59,19 @@ def clean_sensevoice_text(text: str) -> str:
 
 
 @dataclass
-class LlamacppAsrBackend:
-    """基于 FunASR llama.cpp / GGUF runtime 二进制的 ASR 后端。
+class FunasrAsrBackend:
+    """基于 FunASR Python SDK 的 ASR 后端。
 
-    依赖两个预编译二进制和对应的 GGUF 权重（见 default.yaml 的 asr 段）。
-    无需 Python、无需 PyTorch，CPU 上运行；自带 FSMN-VAD。
+    通过 ``funasr.AutoModel`` 组合 SenseVoice（识别）+ fsmn-vad（分段）+
+    ct-punc（标点恢复）+ cam++（说话人分离，触发 sentence_info 输出），
+    一次调用产出带时间戳、带标点、语言受约束的识别片段。
+
+    配置见 ASRConfig（模型名、max_single_segment_time、device 等）。
+    首次运行会自动从 ModelScope/HuggingFace 下载模型（约 1GB）。
     """
 
     config: ASRConfig
+    _model: object | None = field(default=None, init=False, repr=False)
 
     def transcribe(
         self,
@@ -86,112 +79,106 @@ class LlamacppAsrBackend:
         language: str | None,
         progress: ProgressEmitter | None = None,
     ) -> list[AsrCue]:
-        emit_asr_progress(progress, "vad", "VAD 检测", "正在检测语音片段")
-        vad_segments = self._run_vad(audio_path)
-        emit_asr_progress(
-            progress, "vad", "VAD 检测", f"检测到 {len(vad_segments)} 个语音片段", status="done"
-        )
-        logger.info("VAD 检测到 %s 个语音片段: audio=%s", len(vad_segments), audio_path)
+        from funasr import AutoModel
+        from funasr.utils.postprocess_utils import rich_transcription_postprocess
+
+        emit_asr_progress(progress, "load_asr", "加载 ASR", "正在加载 FunASR 模型")
+        model = self._get_or_load_model(AutoModel)
 
         emit_asr_progress(progress, "load_asr", "加载 ASR", "正在运行 FunASR 识别")
-        raw_text = self._run_sensevoice(audio_path)
-        emit_asr_progress(progress, "load_asr", "加载 ASR", "识别完成", status="done")
-        segments = self._split_sensevoice_segments(raw_text)
-        logger.info("SenseVoice 识别出 %s 个文本片段: audio=%s", len(segments), audio_path)
-
-        if len(segments) == len(vad_segments):
-            cues = [
-                AsrCue(start_ms=start, end_ms=end, text=clean_sensevoice_text(text))
-                for (start, end), text in zip(vad_segments, segments)
-            ]
-            return [cue for cue in cues if cue.text]
-
-        # 段数不一致（理论上不会发生，两个二进制同源 VAD）：降级为整段一条。
-        logger.warning(
-            "VAD(%s)与文本(%s)段数不一致，使用降级方案: audio=%s",
-            len(vad_segments),
-            len(segments),
-            audio_path,
+        # language: 用户指定（如 "English"）则约束识别语言，杜绝跨语言幻觉；
+        # None/"auto" 时由模型自动检测。
+        lang = self._normalize_language(language)
+        result = model.generate(
+            input=str(audio_path),
+            cache={},
+            language=lang,
+            use_itn=True,
+            batch_size_s=60,
         )
-        full_text = clean_sensevoice_text(raw_text)
-        if not full_text or not vad_segments:
+        emit_asr_progress(progress, "load_asr", "加载 ASR", "识别完成", status="done")
+
+        if not result:
+            logger.warning("FunASR 返回空结果: audio=%s", audio_path)
             return []
-        start_ms, end_ms = vad_segments[0][0], vad_segments[-1][1]
-        return [AsrCue(start_ms=start_ms, end_ms=end_ms, text=full_text)]
 
-    def _run_vad(self, audio_path: str | Path) -> list[tuple[int, int]]:
-        """运行 llama-funasr-vad，返回 [(start_ms, end_ms), ...]。"""
-        cmd = [
-            self.config.vad_binary,
-            "-m",
-            str(self.config.model_path(self.config.vad_model)),
-            "-a",
-            str(audio_path),
-        ]
-        output = self._run_binary(cmd, label="VAD")
-        segments: list[tuple[int, int]] = []
-        for line in output.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split()
-            if len(parts) != 2:
-                continue
-            try:
-                start, end = int(parts[0]), int(parts[1])
-            except ValueError:
-                logger.warning("VAD 输出无法解析为时间戳，跳过: %r", line)
-                continue
-            segments.append((start, end))
-        return segments
+        res = result[0]
+        sentence_info = res.get("sentence_info", [])
+        cues: list[AsrCue] = []
 
-    def _run_sensevoice(self, audio_path: str | Path) -> str:
-        """运行 llama-funasr-sensevoice --vad，返回带 <|lang|> 标签的原始文本。"""
-        cmd = [
-            self.config.sensevoice_binary,
-            "-m",
-            str(self.config.model_path(self.config.sensevoice_model)),
-            "-a",
-            str(audio_path),
-            "--vad",
-            str(self.config.model_path("fsmn-vad.gguf")),
-            "--keep-tags",
-        ]
-        return self._run_binary(cmd, label="SenseVoice").strip()
-
-    def _split_sensevoice_segments(self, raw_text: str) -> list[str]:
-        """按语言起始标签把整段文本切成与 VAD 片段对应的子串。
-
-        SenseVoice 对每个 VAD 片段输出一组标签+文本，形如：
-        ``<|en|><|EMO_UNKNOWN|><|Speech|><|woitn|>text...<|nospeech|>...``
-        每个片段以语言标签（如 <|en|>、<|zh|>、<|nospeech|>）开头。
-        """
-        segments = _SEGMENT_START_PATTERN.split(raw_text)
-        return [s.strip() for s in segments if s.strip()]
-
-    def _run_binary(self, cmd: list[str], *, label: str) -> str:
-        """执行二进制，stderr 丢弃（ggml 初始化日志），返回 stdout。"""
-        logger.info("运行 %s 二进制: %s", label, " ".join(cmd))
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=self.config.timeout_seconds,
+        if sentence_info:
+            # 正常路径：sentence_info 提供带时间戳的分段（需 spk_model 触发）
+            for seg in sentence_info:
+                raw_text = seg.get("text", seg.get("sentence", ""))
+                text = rich_transcription_postprocess(raw_text)
+                text = clean_sensevoice_text(text)
+                if not text:
+                    continue
+                cues.append(AsrCue(
+                    start_ms=int(seg.get("start", 0)),
+                    end_ms=int(seg.get("end", 0)),
+                    text=text,
+                ))
+            logger.info(
+                "FunASR 识别出 %s 个片段: audio=%s", len(cues), audio_path
             )
-        except FileNotFoundError as exc:
-            raise AsrError(
-                f"{label} 二进制不存在：{cmd[0]}。请在配置中设置正确路径，"
-                "或参考 docs/adr/0002 下载 FunASR llama.cpp runtime。"
-            ) from exc
-        except subprocess.CalledProcessError as exc:
-            raise AsrError(
-                f"{label} 二进制执行失败（退出码 {exc.returncode}）：{exc.stderr.strip()[:500]}"
-            ) from exc
-        except subprocess.TimeoutExpired as exc:
-            raise AsrError(f"{label} 二进制执行超时（{self.config.timeout_seconds}s）") from exc
-        return result.stdout
+        else:
+            # 降级：模型未返回 sentence_info（通常未配 spk_model），整段一条。
+            logger.warning(
+                "FunASR 未返回 sentence_info，降级为整段一条: audio=%s", audio_path
+            )
+            text = clean_sensevoice_text(
+                rich_transcription_postprocess(res.get("text", ""))
+            )
+            if text:
+                # 无时间戳信息，用 0 占位（build_subtitle 会处理）
+                cues.append(AsrCue(start_ms=0, end_ms=0, text=text))
+
+        return cues
+
+    def _get_or_load_model(self, auto_model_cls) -> object:
+        """懒加载并缓存 AutoModel 实例（模型加载耗时，避免每次转写都重建）。"""
+        if self._model is not None:
+            return self._model
+
+        cfg = self.config
+        kwargs: dict[str, object] = {
+            "model": cfg.model_name,
+            "vad_model": "fsmn-vad",
+            "vad_kwargs": {"max_single_segment_time": cfg.max_single_segment_time},
+            "punc_model": cfg.punc_model,
+            "spk_model": cfg.spk_model,
+            "device": cfg.device,
+            "disable_update": True,
+            "disable_pbar": True,
+        }
+        # Fun-ASR-Nano / Qwen3-ASR 等需 trust_remote_code + HF hub
+        if cfg.hub:
+            kwargs["hub"] = cfg.hub
+        if cfg.trust_remote_code:
+            kwargs["trust_remote_code"] = True
+
+        logger.info(
+            "加载 FunASR 模型: model=%s punc=%s spk=%s device=%s",
+            cfg.model_name, cfg.punc_model, cfg.spk_model, cfg.device,
+        )
+        self._model = auto_model_cls(**kwargs)
+        return self._model
+
+    @staticmethod
+    def _normalize_language(language: str | None) -> str:
+        """把 ASR 语言标识（如 "English"）转为 funasr 接受的形式（如 "en"）。
+
+        funasr 的 language 参数接受语言代码或 "auto"。
+        用户传入的可能是完整名称（来自 normalize_asr_language），这里映射回代码。
+        """
+        if not language:
+            return "auto"
+        mapping = {
+            "english": "en", "chinese": "zh", "japanese": "ja",
+            "korean": "ko", "cantonese": "yue", "auto": "auto",
+        }
+        return mapping.get(language.strip().lower(), language.strip().lower())
 
 
 def emit_asr_progress(
@@ -211,4 +198,3 @@ def emit_asr_progress(
         label=label,
         message=message,
     )
-

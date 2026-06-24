@@ -561,6 +561,47 @@ class TestNewPipeline(unittest.TestCase):
         self.assertIn("url_or_code_loss", issue_types)
         self.assertIn("duplicate_translation", issue_types)
 
+    def test_quality_gate_accepts_chinese_number_equivalents(self):
+        from subtitle_llm.domain import SubtitleEntry
+
+        entries = [
+            SubtitleEntry(
+                1,
+                "a",
+                "b",
+                "It means the world 150,000 of you subscribe to the channel in a few weeks.",
+                "这对我来说意义重大，短短几周内就有15万人订阅了我的频道。",
+            ),
+            SubtitleEntry(
+                2,
+                "a",
+                "b",
+                "There were hundreds of these little inns by the 1530s.",
+                "到1530年代，伦敦有几百家这样的小旅店。",
+            ),
+        ]
+
+        diagnosis = QualityGate().diagnose_chunk(entries, target_language="Chinese")
+
+        self.assertNotIn("number_mismatch", {issue.issue_type for issue in diagnosis.issues})
+
+    def test_quality_gate_distinguishes_decade_from_bare_year(self):
+        from subtitle_llm.domain import SubtitleEntry
+
+        entries = [
+            SubtitleEntry(
+                1,
+                "a",
+                "b",
+                "There were hundreds of these little inns by the 1530s.",
+                "到1530年，伦敦有几百家这样的小旅店。",
+            ),
+        ]
+
+        diagnosis = QualityGate().diagnose_chunk(entries, target_language="Chinese")
+
+        self.assertIn("number_mismatch", {issue.issue_type for issue in diagnosis.issues})
+
     def test_retranslate_prompt_includes_quality_report(self):
         from subtitle_llm.domain import SubtitleEntry
 

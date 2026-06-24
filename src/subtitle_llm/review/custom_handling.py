@@ -63,7 +63,7 @@ class CustomHandlingApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.apply_default_cascade_from_first_issue()
+        self.apply_default_cascade_for_broad_failure()
         table = self.query_one("#subtitles_table", DataTable)
         table.cursor_type = "row"
         self.rebuild_table()
@@ -78,6 +78,43 @@ class CustomHandlingApp(App):
             len(self.subtitle_entries),
             self.pending_count(),
         )
+
+    def apply_default_cascade_for_broad_failure(self) -> None:
+        flagged_rows = self.flagged_rows()
+        if not flagged_rows or not self.should_default_to_cascade(flagged_rows):
+            return
+
+        start_row = flagged_rows[0]
+        self.cascade_start_row = start_row
+        for index, entry in enumerate(self.subtitle_entries):
+            entry.needs_retranslation = index >= start_row
+        logger.info(
+            "TUI默认级联重译: start_index=%s flagged=%s total=%s",
+            self.subtitle_entries[start_row].index,
+            len(flagged_rows),
+            len(self.subtitle_entries),
+        )
+
+    def flagged_rows(self) -> list[int]:
+        return [
+            index
+            for index, entry in enumerate(self.subtitle_entries)
+            if entry.needs_retranslation
+        ]
+
+    def should_default_to_cascade(self, flagged_rows: list[int]) -> bool:
+        total = max(len(self.subtitle_entries), 1)
+        if len(flagged_rows) >= 5 and len(flagged_rows) / total >= 0.25:
+            return True
+        if longest_consecutive_run(flagged_rows) >= 3:
+            return True
+
+        placeholder_rows = [
+            index
+            for index in flagged_rows
+            if looks_like_broken_placeholder(self.subtitle_entries[index].translated_text)
+        ]
+        return len(placeholder_rows) >= 3 or longest_consecutive_run(placeholder_rows) >= 2
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         self.update_detail(event.cursor_row)
@@ -219,17 +256,6 @@ class CustomHandlingApp(App):
         self.cascade_start_row = None
         self.rebuild_table()
         self.update_status("已清空当前片段的重译标记。")
-
-    def apply_default_cascade_from_first_issue(self) -> None:
-        first_issue = next(
-            (index for index, entry in enumerate(self.subtitle_entries) if entry.needs_retranslation),
-            None,
-        )
-        if first_issue is None:
-            return
-        self.cascade_start_row = first_issue
-        for index, entry in enumerate(self.subtitle_entries):
-            entry.needs_retranslation = index >= first_issue
 
     def rebuild_table(self, keep_row: int | None = None) -> None:
         table = self.query_one("#subtitles_table", DataTable)
@@ -381,6 +407,31 @@ class CustomHandlingApp(App):
 
 def join_non_empty_text(*values: str) -> str:
     return " ".join(value.strip() for value in values if value.strip())
+
+
+def looks_like_broken_placeholder(value: str) -> bool:
+    text = (value or "").strip()
+    return (
+        not text
+        or "Translation missing line" in text
+        or "Translationmissing line" in text
+        or "翻译缺失" in text
+    )
+
+
+def longest_consecutive_run(indices: list[int]) -> int:
+    if not indices:
+        return 0
+    longest = current = 1
+    previous = sorted(indices)[0]
+    for index in sorted(indices)[1:]:
+        if index == previous + 1:
+            current += 1
+        else:
+            longest = max(longest, current)
+            current = 1
+        previous = index
+    return max(longest, current)
 
 
 def responsive_column_widths(total_width: int) -> dict[str, int]:

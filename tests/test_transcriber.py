@@ -2,7 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = PROJECT_ROOT / "src"
@@ -12,7 +12,7 @@ if str(SRC_DIR) not in sys.path:
 from subtitle_llm.media.asr_backend import (
     AsrCue,
     AsrError,
-    LlamacppAsrBackend,
+    FunasrAsrBackend,
     clean_sensevoice_text,
 )
 from subtitle_llm.media.transcriber import (
@@ -74,27 +74,25 @@ class TestCleanSensevoiceText(unittest.TestCase):
 
 
 class TestASRConfig(unittest.TestCase):
-    """ASRConfig 新字段验证。"""
+    """ASRConfig funasr SDK 字段验证。"""
 
-    def test_default_uses_llamacpp_binaries(self):
+    def test_default_uses_funasr_sdk(self):
         config = ASRConfig()
-        self.assertEqual(config.vad_binary, "llama-funasr-vad")
-        self.assertEqual(config.sensevoice_binary, "llama-funasr-sensevoice")
-        self.assertEqual(config.sensevoice_model, "sensevoice-small-f16.gguf")
-        self.assertEqual(config.model_dir, "./gguf")
+        self.assertEqual(config.model_name, "FunAudioLLM/SenseVoiceSmall")
+        self.assertEqual(config.punc_model, "ct-punc")
+        self.assertEqual(config.spk_model, "cam++")
+        self.assertEqual(config.max_single_segment_time, 8000)
+        self.assertEqual(config.device, "cpu")
 
-    def test_model_path_joins_dir_and_filename(self):
-        config = ASRConfig(model_dir="/models/gguf")
-        self.assertEqual(config.model_path("fsmn-vad.gguf"), Path("/models/gguf/fsmn-vad.gguf"))
-
-    def test_custom_binaries_and_model(self):
+    def test_custom_model_and_device(self):
         config = ASRConfig(
-            vad_binary="/opt/funasr/llama-funasr-vad",
-            sensevoice_binary="/opt/funasr/llama-funasr-sensevoice",
-            sensevoice_model="sensevoice-small-q8.gguf",
+            model_name="FunAudioLLM/Fun-ASR-Nano-2512",
+            device="cuda",
+            max_single_segment_time=15000,
         )
-        self.assertEqual(config.vad_binary, "/opt/funasr/llama-funasr-vad")
-        self.assertEqual(config.sensevoice_model, "sensevoice-small-q8.gguf")
+        self.assertEqual(config.model_name, "FunAudioLLM/Fun-ASR-Nano-2512")
+        self.assertEqual(config.device, "cuda")
+        self.assertEqual(config.max_single_segment_time, 15000)
 
 
 class TestBuildSubtitle(unittest.TestCase):
@@ -155,20 +153,30 @@ class TestTranscribeWithBackend(unittest.TestCase):
             Path(output_path).unlink(missing_ok=True)
 
 
-class TestLlamacppAsrBackend(unittest.TestCase):
-    """LlamacppAsrBackend 解析逻辑（mock subprocess，不依赖真实二进制）。"""
+class TestFunasrAsrBackend(unittest.TestCase):
+    """FunasrAsrBackend 解析逻辑（mock funasr.AutoModel，不依赖真实模型）。"""
 
     def _make_backend(self):
-        return LlamacppAsrBackend(config=ASRConfig(model_dir="./gguf"))
+        return FunasrAsrBackend(config=ASRConfig())
 
-    @patch.object(LlamacppAsrBackend, "_run_binary")
-    def test_pairs_vad_timestamps_with_sensevoice_segments(self, mock_run):
-        # VAD 输出两段；SenseVoice 整段输出两个 <|en|> 文本片段
-        vad_output = "0 3000\n3500 6000\n"
-        sensevoice_output = (
-            "<|en|><|EMO_UNKNOWN|>hello world<|en|><|EMO_UNKNOWN|>goodbye"
-        )
-        mock_run.side_effect = [vad_output, sensevoice_output]
+    def _mock_auto_model(self, mock_am_cls, generate_result):
+        """构造一个 mock AutoModel，其 generate 返回 generate_result。"""
+        mock_model = MagicMock()
+        mock_model.generate.return_value = generate_result
+        mock_am_cls.return_value = mock_model
+        return mock_model
+
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_sentence_info_produces_timed_cues(self, mock_load):
+        """sentence_info 正常路径：每段产出带时间戳的 AsrCue。"""
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{
+            "sentence_info": [
+                {"start": 0, "end": 3000, "text": "hello world"},
+                {"start": 3500, "end": 6000, "text": "goodbye"},
+            ]
+        }]
+        mock_load.return_value = mock_model
 
         cues = self._make_backend().transcribe("/tmp/a.wav", "English")
         self.assertEqual(len(cues), 2)
@@ -179,48 +187,75 @@ class TestLlamacppAsrBackend(unittest.TestCase):
         self.assertEqual(cues[1].end_ms, 6000)
         self.assertEqual(cues[1].text, "goodbye")
 
-    @patch.object(LlamacppAsrBackend, "_run_binary")
-    def test_strips_tags_in_paired_segments(self, mock_run):
-        vad_output = "0 2000\n"
-        sensevoice_output = "<|en|><|Music|>Hello world"
-        mock_run.side_effect = [vad_output, sensevoice_output]
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_strips_sensevoice_tags(self, mock_load):
+        """SenseVoice 标签（<|en|>、<|EMO_UNKNOWN|> 等）被清除。"""
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{
+            "sentence_info": [
+                {"start": 0, "end": 2000, "text": "<|en|><|Music|>Hello world"},
+            ]
+        }]
+        mock_load.return_value = mock_model
 
         cues = self._make_backend().transcribe("/tmp/a.wav", "English")
         self.assertEqual(cues[0].text, "Hello world")
 
-    @patch.object(LlamacppAsrBackend, "_run_binary")
-    def test_count_mismatch_falls_back_to_single_cue(self, mock_run):
-        # VAD 两段，但 SenseVoice 只切出一段 -> 降级为整段一条
-        vad_output = "0 3000\n3500 6000\n"
-        sensevoice_output = "<|en|>only one segment here"
-        mock_run.side_effect = [vad_output, sensevoice_output]
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_empty_text_segments_filtered(self, mock_load):
+        """空文本段（如 nospeech）被过滤。"""
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{
+            "sentence_info": [
+                {"start": 0, "end": 1000, "text": "hello"},
+                {"start": 1500, "end": 2000, "text": "<|nospeech|>"},
+                {"start": 2500, "end": 3000, "text": "world"},
+            ]
+        }]
+        mock_load.return_value = mock_model
+
+        cues = self._make_backend().transcribe("/tmp/a.wav", "English")
+        self.assertEqual(len(cues), 2)
+        self.assertEqual(cues[0].text, "hello")
+        self.assertEqual(cues[1].text, "world")
+
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_falls_back_to_single_cue_without_sentence_info(self, mock_load):
+        """无 sentence_info 时降级为整段一条。"""
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{"text": "only one segment here"}]
+        mock_load.return_value = mock_model
 
         cues = self._make_backend().transcribe("/tmp/a.wav", "English")
         self.assertEqual(len(cues), 1)
-        self.assertEqual(cues[0].start_ms, 0)
-        self.assertEqual(cues[0].end_ms, 6000)
         self.assertEqual(cues[0].text, "only one segment here")
 
-    @patch.object(LlamacppAsrBackend, "_run_binary")
-    def test_empty_results_produce_no_cues(self, mock_run):
-        mock_run.side_effect = ["", ""]
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_empty_result_produces_no_cues(self, mock_load):
+        """空结果产出 0 条 cue。"""
+        mock_model = MagicMock()
+        mock_model.generate.return_value = []
+        mock_load.return_value = mock_model
+
         self.assertEqual(self._make_backend().transcribe("/tmp/a.wav", "English"), [])
 
-    @patch("subtitle_llm.media.asr_backend.subprocess.run")
-    def test_run_binary_wraps_missing_binary_as_asr_error(self, mock_run):
-        mock_run.side_effect = FileNotFoundError(2, "No such file", "llama-funasr-vad")
-        backend = self._make_backend()
-        with self.assertRaises(AsrError):
-            backend._run_binary(["llama-funasr-vad", "-m", "x"], label="VAD")
+    def test_normalize_language_maps_names_to_codes(self):
+        """语言名称（English）映射为 funasr 代码（en）。"""
+        self.assertEqual(FunasrAsrBackend._normalize_language("English"), "en")
+        self.assertEqual(FunasrAsrBackend._normalize_language("Chinese"), "zh")
+        self.assertEqual(FunasrAsrBackend._normalize_language(None), "auto")
+        self.assertEqual(FunasrAsrBackend._normalize_language(""), "auto")
 
-    @patch("subtitle_llm.media.asr_backend.subprocess.run")
-    def test_run_binary_wraps_nonzero_exit_as_asr_error(self, mock_run):
-        import subprocess as sp
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_language_passed_to_generate(self, mock_load):
+        """用户指定的语言被透传给 generate（约束识别语言）。"""
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{"sentence_info": []}]
+        mock_load.return_value = mock_model
 
-        mock_run.side_effect = sp.CalledProcessError(1, "cmd", stderr="boom")
-        backend = self._make_backend()
-        with self.assertRaises(AsrError):
-            backend._run_binary(["llama-funasr-vad", "-m", "x"], label="VAD")
+        self._make_backend().transcribe("/tmp/a.wav", "English")
+        call_kwargs = mock_model.generate.call_args.kwargs
+        self.assertEqual(call_kwargs["language"], "en")
 
 
 if __name__ == "__main__":

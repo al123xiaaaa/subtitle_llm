@@ -49,7 +49,7 @@ class TestTuiAnimation(unittest.TestCase):
                     self.assertIsNotNone(app.query_one("#status"))
                     progress_label = app.query_one("#progress_label", Static)
                     chunk_progress = app.query_one("#chunk_progress", ProgressBar)
-                    self.assertEqual(str(progress_label.renderable), "进度 1/4 | 当前片段 4/4 | 待处理 1")
+                    self.assertEqual(str(progress_label.render()), "进度 1/4 | 当前片段 4/4 | 待处理 1")
                     self.assertEqual(chunk_progress.progress, 1)
                     self.assertEqual(chunk_progress.total, 4)
                     self.assertIsNotNone(app.query_one("#subtitles_table"))
@@ -57,7 +57,7 @@ class TestTuiAnimation(unittest.TestCase):
 
         asyncio.run(run_app())
 
-    def test_review_tui_defaults_to_cascade_from_first_issue(self):
+    def test_review_tui_defaults_to_flagged_entries_only(self):
         async def run_app() -> None:
             with tempfile.NamedTemporaryFile(suffix=".json") as temp_file:
                 app = CustomHandlingApp(
@@ -71,9 +71,32 @@ class TestTuiAnimation(unittest.TestCase):
                 async with app.run_test():
                     self.assertFalse(app.subtitle_entries[0].needs_retranslation)
                     self.assertTrue(app.subtitle_entries[1].needs_retranslation)
-                    self.assertTrue(app.subtitle_entries[2].needs_retranslation)
+                    self.assertFalse(app.subtitle_entries[2].needs_retranslation)
+                    self.assertIsNone(app.cascade_start_index())
                     progress_label = app.query_one("#progress_label", Static)
-                    self.assertIn("待处理 2", str(progress_label.renderable))
+                    self.assertIn("待处理 1", str(progress_label.render()))
+
+        asyncio.run(run_app())
+
+    def test_review_tui_defaults_to_cascade_for_broad_missing_translation_failure(self):
+        async def run_app() -> None:
+            with tempfile.NamedTemporaryFile(suffix=".json") as temp_file:
+                app = CustomHandlingApp(
+                    [
+                        SubtitleEntry(1, "00:00:00,000", "00:00:01,000", "First.", "第一句", False),
+                        SubtitleEntry(2, "00:00:01,000", "00:00:02,000", "Second.", "第二句", False),
+                        SubtitleEntry(3, "00:00:02,000", "00:00:03,000", "Third.", "短", True),
+                        SubtitleEntry(4, "00:00:03,000", "00:00:04,000", "Fourth.", "Translation missing line - 4", True),
+                        SubtitleEntry(5, "00:00:04,000", "00:00:05,000", "Fifth.", "Translation missing line - 5", True),
+                        SubtitleEntry(6, "00:00:05,000", "00:00:06,000", "Sixth.", "第六句", False),
+                    ],
+                    temp_file.name,
+                )
+                async with app.run_test():
+                    self.assertEqual(app.cascade_start_index(), 3)
+                    self.assertEqual([entry.index for entry in app.selected_entries()], [3, 4, 5, 6])
+                    progress_label = app.query_one("#progress_label", Static)
+                    self.assertIn("待处理 4", str(progress_label.render()))
 
         asyncio.run(run_app())
 

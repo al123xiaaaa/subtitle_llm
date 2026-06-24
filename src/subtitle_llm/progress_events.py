@@ -57,7 +57,12 @@ class ProgressEmitter:
             }
         )
         line = PROGRESS_EVENT_PREFIX + json.dumps(payload, ensure_ascii=False, sort_keys=True)
-        print(line, flush=True)
+        try:
+            print(line, flush=True)
+        except BrokenPipeError:
+            # 消费端（GUI）已关闭 stdout 管道：不再打印进度，但任务可继续。
+            # 不 raise，避免 GUI 关闭/重启时整个翻译进程崩溃。
+            pass
         logger.info("进度事件: %s", json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return payload
 

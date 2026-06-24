@@ -681,8 +681,12 @@ class QualityGate:
         original_numbers = extract_number_tokens(original)
         if not original_numbers:
             return []
-        translated_numbers = set(extract_number_tokens(translated))
-        return [number for number in original_numbers if number not in translated_numbers][:5]
+        translated_numbers = number_token_equivalents(extract_number_tokens(translated))
+        return [
+            number
+            for number in original_numbers
+            if number_token_equivalents([number]).isdisjoint(translated_numbers)
+        ][:5]
 
     def missing_literal_tokens(self, original: str, translated: str) -> list[str]:
         literals = extract_literal_tokens(original)
@@ -734,8 +738,38 @@ def is_chinese_char(char: str) -> bool:
 
 
 def extract_number_tokens(value: str) -> list[str]:
-    tokens = re.findall(r"\d+(?:[.,:/-]\d+)*(?:%|[A-Za-z]+)?", value)
-    return [re.sub(r"[^\dA-Za-z%]", "", token) for token in tokens]
+    tokens = re.findall(r"\d+(?:[.,:/-]\d+)*(?:%|[A-Za-z]+|[十百千万亿]+|年代)?", value)
+    return [re.sub(r"[^\dA-Za-z%十百千万亿年代]", "", token) for token in tokens]
+
+
+def number_token_equivalents(tokens: list[str]) -> set[str]:
+    equivalents: set[str] = set()
+    for token in tokens:
+        normalized = token.strip().lower()
+        if not normalized:
+            continue
+        equivalents.add(normalized)
+
+        if normalized.endswith("s") and normalized[:-1].isdigit():
+            equivalents.add(f"decade:{normalized[:-1]}")
+        if normalized.endswith("年代") and normalized[:-2].isdigit():
+            equivalents.add(f"decade:{normalized[:-2]}")
+
+        match = re.fullmatch(r"(\d+)([十百千万亿])", normalized)
+        if match:
+            value = int(match.group(1)) * chinese_number_unit_multiplier(match.group(2))
+            equivalents.add(str(value))
+    return equivalents
+
+
+def chinese_number_unit_multiplier(unit: str) -> int:
+    return {
+        "十": 10,
+        "百": 100,
+        "千": 1_000,
+        "万": 10_000,
+        "亿": 100_000_000,
+    }[unit]
 
 
 def extract_literal_tokens(value: str) -> list[str]:

@@ -1,11 +1,11 @@
-"""ASR 转写：通过 FunASR llama.cpp / GGUF runtime 把音频转成 SRT 字幕。
+"""ASR 转写：通过 FunASR Python SDK 把音频转成 SRT 字幕。
 
 转写流程：
 1. ASR 后端产出带时间戳的识别片段（AsrCue）
 2. 按时间戳组装时间轴字幕（SubtitleEntry）
 3. 写出 source-only SRT
 
-语言映射、标签清洗、进度事件与旧 funasr 实现保持一致；后端细节由 asr_backend 封装。
+语言映射、标签清洗、进度事件与旧实现保持一致；后端细节由 asr_backend 封装。
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from typing import Final
 
 from subtitle_llm.domain import Subtitle, SubtitleEntry
 from subtitle_llm.io import SubtitleIO, seconds_to_srt_time
-from subtitle_llm.media.asr_backend import AsrBackend, AsrCue, LlamacppAsrBackend
+from subtitle_llm.media.asr_backend import AsrBackend, AsrCue, FunasrAsrBackend
 from subtitle_llm.progress_events import ProgressEmitter
 from subtitle_llm.settings import ASRConfig
 
@@ -168,12 +168,12 @@ def transcribe(
     config: ASRConfig | None = None,
     progress: ProgressEmitter | None = None,
 ) -> str:
-    """使用 FunASR llama.cpp runtime 将音频转写为 SRT 字幕文件。
+    """使用 FunASR Python SDK 将音频转写为 SRT 字幕文件。
 
     策略：ASR 后端产出带时间戳的识别片段，按时间戳组装时间轴字幕。
     """
     config = config or ASRConfig()
-    backend = LlamacppAsrBackend(config=config)
+    backend = FunasrAsrBackend(config=config)
     return transcribe_with_backend(audio_path, language, output_path, backend, progress=progress)
 
 
