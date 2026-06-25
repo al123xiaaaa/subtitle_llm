@@ -135,6 +135,18 @@ ipcMain.handle("job:cancel", async (_event, jobId: string) => {
   return runtime.cancelJob(jobId);
 });
 
+ipcMain.handle("tasks:list", async (_event, includeDeleted = false) => {
+  return runtime.listTranslationTasks(Boolean(includeDeleted));
+});
+
+ipcMain.handle("tasks:soft-delete", async (_event, taskId: string) => {
+  return runtime.softDeleteTranslationTask(taskId);
+});
+
+ipcMain.handle("tasks:restore", async (_event, taskId: string) => {
+  return runtime.restoreTranslationTask(taskId);
+});
+
 ipcMain.handle("shell:open-path", async (_event, filePath: string) => {
   const target = runtime.resolveUserPath(filePath);
   if (!target) {

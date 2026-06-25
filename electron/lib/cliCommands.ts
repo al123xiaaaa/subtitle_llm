@@ -28,6 +28,14 @@ function addOption(args: string[], flag: string, value: unknown): void {
 }
 
 function buildTranslateArgs(options: TranslateJobOptions): string[] {
+  const taskId = cleanString(options.taskId);
+  if (taskId) {
+    if (!options.resume) {
+      throw new Error("任务记录恢复必须启用继续任务");
+    }
+    return ["main.py", "translate", "--task-id", taskId, "--resume"];
+  }
+
   const input = required(options.input, "输入文件或 URL");
   const targetLanguage = required(options.targetLanguage, "目标语言");
   const args = ["main.py", "translate", "--input", input, "--target-language", targetLanguage];
@@ -56,6 +64,10 @@ function buildTranslateArgs(options: TranslateJobOptions): string[] {
 
   if (options.refineTranslation) {
     args.push("--refine");
+  }
+
+  if (options.forceAsr) {
+    args.push("--force-asr");
   }
 
   if (options.embedVideo) {

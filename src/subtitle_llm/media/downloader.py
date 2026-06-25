@@ -18,6 +18,7 @@ def download(
     output_dir: str | Path,
     source_language: str = "en",
     progress: ProgressEmitter | None = None,
+    force_asr: bool = False,
 ):
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -28,7 +29,13 @@ def download(
         "读取视频元信息",
         "正在读取视频元信息",
     )
-    logger.info("读取视频元信息: url=%s output_dir=%s source_language=%s", url, output_path, source_language)
+    logger.info(
+        "读取视频元信息: url=%s output_dir=%s source_language=%s force_asr=%s",
+        url,
+        output_path,
+        source_language,
+        force_asr,
+    )
     with YoutubeDL({"quiet": True}) as ydl:
         info = ydl.extract_info(url, download=False)
 
@@ -43,7 +50,7 @@ def download(
     subtitle_path = _find_file(output_path, title, f".{lang_code}.srt", ".srt")
     audio_path = _find_file(output_path, title, ".wav")
 
-    if subtitle_path:
+    if subtitle_path and not force_asr:
         emit_progress(
             progress,
             "reuse_subtitle",
@@ -64,7 +71,7 @@ def download(
         logger.info("复用已下载音频: title=%s video=%s audio=%s", title, video_path, audio_path)
         return video_path, None, audio_path
 
-    if has_manual or has_auto:
+    if (has_manual or has_auto) and not force_asr:
         emit_progress(
             progress,
             "download_subtitle",
@@ -101,9 +108,9 @@ def download(
         progress,
         "extract_audio",
         "提取音频",
-        "未找到字幕，正在下载视频并提取音频",
+        "已选择 ASR，正在下载视频并提取音频" if force_asr else "未找到字幕，正在下载视频并提取音频",
     )
-    logger.info("开始下载视频并提取音频: title=%s", title)
+    logger.info("开始下载视频并提取音频: title=%s force_asr=%s", title, force_asr)
     ydl_opts = {
         "format": "bestvideo+bestaudio/best",
         "outtmpl": outtmpl,

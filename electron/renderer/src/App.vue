@@ -3,10 +3,11 @@ import ConfigDrawer from "./components/ConfigDrawer.vue";
 import OnboardingDialog from "./components/OnboardingDialog.vue";
 import RunPanel from "./components/RunPanel.vue";
 import SidebarNav from "./components/SidebarNav.vue";
+import TaskRecordsPanel from "./components/TaskRecordsPanel.vue";
 import { useAppController } from "./composables/useAppController";
 
 const controller = useAppController();
-const { formActions, forms, isBusy, job, onboarding, providerState, shell } = controller;
+const { formActions, forms, isBusy, job, onboarding, providerState, records, shell } = controller;
 </script>
 
 <template>
@@ -22,7 +23,13 @@ const { formActions, forms, isBusy, job, onboarding, providerState, shell } = co
     />
 
     <div class="workspace">
-      <RunPanel :job="job" />
+      <main class="main-workspace">
+        <RunPanel :job="job" />
+        <TaskRecordsPanel
+          :is-busy="isBusy"
+          :records="records"
+        />
+      </main>
       <ConfigDrawer
         :form-actions="formActions"
         :forms="forms"

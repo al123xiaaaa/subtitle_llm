@@ -31,7 +31,6 @@ class RunLedgerTest(unittest.TestCase):
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="checkpoint.json",
             context_file="context.txt",
         )
         ledger = RunLedger(removed_entry_indices={2})

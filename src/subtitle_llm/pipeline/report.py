@@ -31,8 +31,10 @@ class AutoLayoutRepair(BaseModel):
 class TranslationReport(BaseModel):
     input_file: str
     output_file: str
-    checkpoint_file: str
     context_file: str
+    task_id: str | None = None
+    task_db_file: str | None = None
+    target_language: str = ""
     stage: str = "初始化"
     total_entries: int = 0
     processed_entries: int = 0

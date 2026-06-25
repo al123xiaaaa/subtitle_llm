@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
-from dataclasses import dataclass, field
+import os
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -10,7 +11,7 @@ from subtitle_llm.domain import Subtitle, SubtitleEntry
 from subtitle_llm.io import SubtitleIO
 from subtitle_llm.llm import ChatClient, create_chat_client
 from subtitle_llm.llm.types import CompletionUsage
-from subtitle_llm.pipeline.checkpoint import CheckpointStore, file_fingerprint, sidecar_path
+from subtitle_llm.pipeline.checkpoint import file_fingerprint, sidecar_path
 from subtitle_llm.pipeline.chunk_translator import ChunkTranslationResult, ChunkTranslator
 from subtitle_llm.pipeline.chunks import ChunkPlanner, PlannedChunk
 from subtitle_llm.pipeline.context import ContextService
@@ -44,6 +45,11 @@ from subtitle_llm.pipeline.source_corrections import (
     source_corrections_from_context,
     subtitle_with_source_display_corrections,
 )
+from subtitle_llm.pipeline.task_store import (
+    TranslationTaskRecord,
+    TranslationTaskStore,
+    config_from_snapshot,
+)
 from subtitle_llm.pipeline.text import parse_translation_results
 from subtitle_llm.progress_contract import ProgressContract
 from subtitle_llm.progress_events import ProgressEmitter
@@ -65,7 +71,7 @@ STRUCTURAL_REPAIR_ISSUES = {
 
 @dataclass
 class TranslationRequest:
-    input_file: str
+    input_file: str | None
     output_file: str | None
     target_language: str
     source_language: str = "en"
@@ -73,6 +79,8 @@ class TranslationRequest:
     resume: bool = False
     review_mode: str | None = None
     refine_translation: bool | None = None
+    force_asr: bool = False
+    task_id: str | None = None
 
 
 @dataclass
@@ -113,11 +121,15 @@ class TranslationService:
         translation_client: ChatClient | None = None,
         summary_client: ChatClient | None = None,
         review_port: ReviewPort | None = None,
+        task_store: TranslationTaskStore | None = None,
     ):
         self.config = config
+        self._translation_client_injected = translation_client is not None
+        self._summary_client_injected = summary_client is not None
         self.translation_client = translation_client or create_chat_client(config.translation_model)
         self.summary_client = summary_client or create_chat_client(config.summary_model)
         self.review_port = review_port
+        self.task_store = task_store or TranslationTaskStore()
 
     def translate(
         self,
@@ -125,19 +137,32 @@ class TranslationService:
         progress: ProgressEmitter | None = None,
         emit_complete: bool = True,
     ) -> TranslationResult:
+        task_record = self._prepare_task_record_request(request)
+        if task_record is not None:
+            request = self._request_from_task_record(request, task_record)
+            self._apply_task_config_snapshot(task_record)
+        if not request.input_file:
+            raise ValueError("input_file is required unless resuming with task_id")
+
         progress = progress or ProgressEmitter("translate")
         progress_contract = ProgressContract(progress)
         progress_contract.task_prepared()
         logger.info(
-            "翻译任务开始: input=%s target_language=%s source_language=%s resume=%s review_mode=%s refine_translation=%s",
+            "翻译任务开始: input=%s target_language=%s source_language=%s resume=%s review_mode=%s refine_translation=%s force_asr=%s",
             request.input_file,
             request.target_language,
             request.source_language,
             request.resume,
             request.review_mode or self.config.pipeline.review_mode,
             self._refine_translation_enabled(request),
+            request.force_asr,
         )
-        resolved_input = self._resolve_input(request.input_file, request.source_language, progress_contract)
+        resolved_input = self._resolve_input(
+            request.input_file,
+            request.source_language,
+            progress_contract,
+            force_asr=request.force_asr,
+        )
         input_file = resolved_input.subtitle_file
         output_file = request.output_file or self._default_output_file(
             input_file,
@@ -146,13 +171,12 @@ class TranslationService:
         )
         progress_contract.output_resolved(output_file)
         output_format = request.output_format or self.config.default_output_format
-        checkpoint_file = sidecar_path(output_file, "_checkpoint.json")
         context_file = sidecar_path(output_file, "_context.txt")
         report = TranslationReport(
             input_file=str(input_file),
             output_file=output_file,
-            checkpoint_file=str(checkpoint_file),
             context_file=str(context_file),
+            target_language=request.target_language,
             output_format=output_format,
             source_video_file=resolved_input.video_file,
         )
@@ -161,10 +185,9 @@ class TranslationService:
         progress_contract.diagnostics_prepared(trace_recorder.trace_dir)
         logger.info("LLM诊断目录已准备: %s", trace_recorder.trace_dir)
         logger.info(
-            "翻译文件已准备: resolved_input=%s output=%s checkpoint=%s context=%s",
+            "翻译文件已准备: resolved_input=%s output=%s context=%s",
             input_file,
             output_file,
-            checkpoint_file,
             context_file,
         )
 
@@ -193,7 +216,7 @@ class TranslationService:
         report.normalization_applied = normalization.applied
         report.normalization_reason = normalization.reason
         report.normalization_stats = normalization.stats.to_dict()
-        checkpoint_input_file = input_file
+        task_input_file = input_file
         if normalization.applied:
             normalized_source_file = self._normalized_source_file(output_file, input_file, request.source_language)
             normalization_map_file = sidecar_path(output_file, "_normalization_map.json")
@@ -202,7 +225,7 @@ class TranslationService:
             subtitle = normalization.subtitle
             report.normalized_source_file = str(normalized_source_file)
             report.normalization_map_file = str(normalization_map_file)
-            checkpoint_input_file = str(normalized_source_file)
+            task_input_file = str(normalized_source_file)
             report.total_entries = len(subtitle.entries)
             progress_contract.normalization_done(
                 original_entries=normalization.stats.original_entries,
@@ -224,48 +247,93 @@ class TranslationService:
                 normalization.stats.to_dict(),
             )
 
-        checkpoint = CheckpointStore(
-            checkpoint_file=checkpoint_file,
-            input_fingerprint=file_fingerprint(checkpoint_input_file),
-            target_language=request.target_language,
-            output_format=output_format,
-            config_version=self.config.config_version,
-        )
-        checkpoint_restore = RunLedger.restore_checkpoint(
-            resume=request.resume,
+        normalized_input_fingerprint = file_fingerprint(task_input_file)
+        output_file_for_record = self._absolute_path(output_file)
+        should_restore = False
+        if task_record is None and request.resume:
+            task_record = self.task_store.find_resume_task(
+                normalized_input_fingerprint=normalized_input_fingerprint,
+                target_language=request.target_language,
+                output_format=output_format,
+                output_file=output_file_for_record,
+            )
+            should_restore = task_record is not None
+        elif task_record is not None:
+            self.task_store.validate_task(
+                task_record,
+                normalized_input_fingerprint=normalized_input_fingerprint,
+                target_language=request.target_language,
+                output_format=output_format,
+                output_file=output_file_for_record,
+            )
+            should_restore = request.resume
+
+        if task_record is None:
+            task_record = self.task_store.create_task(
+                input_display=request.input_file,
+                working_directory=os.getcwd(),
+                source_subtitle_path=self._absolute_path(input_file),
+                normalized_input_fingerprint=normalized_input_fingerprint,
+                target_language=request.target_language,
+                source_language=request.source_language,
+                output_format=output_format,
+                output_file=output_file_for_record,
+                config=self.config,
+                context_file=str(context_file),
+                llm_trace_dir=str(trace_recorder.trace_dir),
+                source_video_file=resolved_input.video_file,
+                source_url=request.input_file if self._is_url(request.input_file) else None,
+            )
+        report.task_id = task_record.task_id
+        report.task_db_file = str(self.task_store.db_path)
+        self.task_store.update_status(task_record.task_id, "running")
+
+        task_state_restore = RunLedger.restore_task_state(
+            resume=should_restore,
+            task_id=task_record.task_id,
             subtitle=subtitle,
-            checkpoint=checkpoint,
+            task_store=self.task_store,
             report=report,
         )
-        resumed_indices = checkpoint_restore.resumed_indices
-        run_ledger = checkpoint_restore.ledger
-        progress_contract.checkpoint_restored(len(resumed_indices))
+        resumed_indices = task_state_restore.resumed_indices
+        run_ledger = task_state_restore.ledger
+        run_ledger.save_task_state(self.task_store, task_record.task_id, subtitle, report, [])
+        progress_contract.task_record_restored(len(resumed_indices))
         if resumed_indices:
-            logger.info("断点恢复完成: resumed_entries=%s", len(resumed_indices))
+            logger.info(
+                "翻译任务记录恢复完成: task_id=%s resumed_entries=%s",
+                task_record.task_id,
+                len(resumed_indices),
+            )
 
-        progress_contract.context_generating(self.config.summary_model)
-        context_service = ContextService(
-            self.summary_client,
-            self.config.summary_model,
-            review_enabled=self.config.pipeline.context_review,
-            trace_recorder=trace_recorder,
-        )
-        context_source = "\n".join(
-            [entry.original_text for entry in subtitle.entries if len(entry.original_text) >= 10]
-        )
-        context, context_usage = context_service.build_context(context_source, request.target_language)
-        report.token_usage.add_usage(context_usage.to_dict())
-        context_service.save_context(context, context_file)
-        progress_contract.context_generated(
-            context_file=context_file,
-            model=self.config.summary_model,
-            usage=context_usage,
-        )
-        logger.info(
-            "上下文生成完成: context_file=%s context_tokens=%s",
-            context_file,
-            context_usage.total_tokens,
-        )
+        try:
+            progress_contract.context_generating(self.config.summary_model)
+            context_service = ContextService(
+                self.summary_client,
+                self.config.summary_model,
+                review_enabled=self.config.pipeline.context_review,
+                trace_recorder=trace_recorder,
+            )
+            context_source = "\n".join(
+                [entry.original_text for entry in subtitle.entries if len(entry.original_text) >= 10]
+            )
+            context, context_usage = context_service.build_context(context_source, request.target_language)
+            report.token_usage.add_usage(context_usage.to_dict())
+            context_service.save_context(context, context_file)
+            progress_contract.context_generated(
+                context_file=context_file,
+                model=self.config.summary_model,
+                usage=context_usage,
+            )
+            logger.info(
+                "上下文生成完成: context_file=%s context_tokens=%s",
+                context_file,
+                context_usage.total_tokens,
+            )
+            run_ledger.save_task_state(self.task_store, task_record.task_id, subtitle, report, [])
+        except Exception as exc:
+            self.task_store.update_status(task_record.task_id, "failed", error_summary=str(exc))
+            raise
 
         review_mode = request.review_mode or self.config.pipeline.review_mode
         refine_translation = self._refine_translation_enabled(request)
@@ -358,7 +426,8 @@ class TranslationService:
                     subtitle,
                     translated_entries,
                     run_ledger,
-                    checkpoint,
+                    self.task_store,
+                    task_record.task_id,
                     report,
                     refine_translation,
                 )
@@ -373,14 +442,14 @@ class TranslationService:
                     subtitle,
                     translated_entries,
                     run_ledger,
-                    checkpoint,
+                    self.task_store,
+                    task_record.task_id,
                     report,
                     refine_translation,
                 )
 
             progress_contract.finalizing_subtitle()
             run_ledger.finalize_subtitle(subtitle, translated_entries, report)
-            run_ledger.save_checkpoint(checkpoint, subtitle, report, translated_entries)
             output_subtitle, source_display_corrections = subtitle_with_source_display_corrections(
                 subtitle,
                 source_corrections_from_context(context),
@@ -390,6 +459,7 @@ class TranslationService:
             progress_contract.writing_srt(output_file)
             SubtitleIO.write_srt(output_subtitle, output_file, output_format=output_format)
             progress_contract.srt_written(output_file)
+            run_ledger.save_task_state(self.task_store, task_record.task_id, subtitle, report, translated_entries)
             if emit_complete:
                 progress_contract.complete(total_chunks=report.total_chunks)
             logger.info(
@@ -399,10 +469,50 @@ class TranslationService:
                 report.token_usage.total_tokens,
             )
             return TranslationResult(subtitle=subtitle, report=report)
+        except Exception as exc:
+            self.task_store.update_status(task_record.task_id, "failed", error_summary=str(exc))
+            raise
         finally:
             stop_review = getattr(review_port, "stop", None)
             if callable(stop_review):
                 stop_review()
+
+    def _prepare_task_record_request(self, request: TranslationRequest) -> TranslationTaskRecord | None:
+        if not request.task_id:
+            return None
+        if not request.resume:
+            raise ValueError("--task-id 只能和 --resume 一起使用")
+        if request.input_file or request.output_file:
+            raise ValueError("--task-id 恢复不能同时指定新的 --input 或 --output")
+        return self.task_store.get_task(request.task_id)
+
+    def _request_from_task_record(
+        self,
+        request: TranslationRequest,
+        record: TranslationTaskRecord,
+    ) -> TranslationRequest:
+        return replace(
+            request,
+            input_file=record.source_subtitle_path,
+            output_file=record.output_file,
+            target_language=record.target_language,
+            source_language=record.source_language,
+            output_format=record.output_format,
+        )
+
+    def _apply_task_config_snapshot(self, record: TranslationTaskRecord) -> None:
+        config = config_from_snapshot(record.config_snapshot_json)
+        self.config = config
+        if not self._translation_client_injected:
+            self.translation_client = create_chat_client(config.translation_model)
+        if not self._summary_client_injected:
+            self.summary_client = create_chat_client(config.summary_model)
+
+    def _absolute_path(self, file_path: str | Path) -> str:
+        path = Path(file_path).expanduser()
+        if path.is_absolute():
+            return str(path)
+        return str((Path(os.getcwd()) / path).resolve())
 
     def _run_chunks(
         self,
@@ -415,7 +525,8 @@ class TranslationService:
         subtitle: Subtitle,
         translated_entries: list[SubtitleEntry],
         run_ledger: RunLedger,
-        checkpoint: CheckpointStore,
+        task_store: TranslationTaskStore,
+        task_id: str,
         report: TranslationReport,
         refine_translation: bool,
     ) -> None:
@@ -474,8 +585,16 @@ class TranslationService:
                     finally:
                         report.completed_chunks += 1
                         report.processed_entries = run_ledger.processed_entry_count(translated_entries)
-                        run_ledger.save_checkpoint(checkpoint, subtitle, report, translated_entries)
-                        translator_progress_contract(translator).checkpoint_saved(
+                        run_ledger.save_task_state(task_store, task_id, subtitle, report, translated_entries)
+                        task_store.save_chunk_state(
+                            task_id,
+                            chunk_index=planned.index,
+                            entry_indices=[entry.index for entry in planned.entries],
+                            status="failed" if report.failed_chunks and any(
+                                failed.chunk_index == planned.index for failed in report.failed_chunks
+                            ) else "done",
+                        )
+                        translator_progress_contract(translator).task_state_saved(
                             planned.entries,
                             chunk_index=planned.index,
                             total_chunks=report.total_chunks,
@@ -494,7 +613,8 @@ class TranslationService:
         subtitle: Subtitle,
         translated_entries: list[SubtitleEntry],
         run_ledger: RunLedger,
-        checkpoint: CheckpointStore,
+        task_store: TranslationTaskStore,
+        task_id: str,
         report: TranslationReport,
         refine_translation: bool,
     ) -> None:
@@ -580,8 +700,16 @@ class TranslationService:
                     finally:
                         report.completed_chunks += 1
                         report.processed_entries = run_ledger.processed_entry_count(translated_entries)
-                        run_ledger.save_checkpoint(checkpoint, subtitle, report, translated_entries)
-                        translator_progress_contract(translator).checkpoint_saved(
+                        run_ledger.save_task_state(task_store, task_id, subtitle, report, translated_entries)
+                        task_store.save_chunk_state(
+                            task_id,
+                            chunk_index=planned.index,
+                            entry_indices=[entry.index for entry in planned.entries],
+                            status="failed" if report.failed_chunks and any(
+                                failed.chunk_index == planned.index for failed in report.failed_chunks
+                            ) else "done",
+                        )
+                        translator_progress_contract(translator).task_state_saved(
                             planned.entries,
                             chunk_index=planned.index,
                             total_chunks=report.total_chunks,
@@ -2068,7 +2196,14 @@ class TranslationService:
             return TuiReviewPort()
         return AutoReviewPort()
 
-    def _resolve_input(self, input_file: str, source_language: str, progress: ProgressContract) -> ResolvedInput:
+    def _resolve_input(
+        self,
+        input_file: str,
+        source_language: str,
+        progress: ProgressContract,
+        *,
+        force_asr: bool = False,
+    ) -> ResolvedInput:
         if not self._is_url(input_file):
             progress.local_input_selected(input_file)
             return ResolvedInput(subtitle_file=input_file)
@@ -2076,9 +2211,20 @@ class TranslationService:
         from subtitle_llm.media import download, transcribe
 
         progress.url_input_detected()
-        logger.info("检测到URL输入，准备下载或复用媒体: url=%s source_language=%s", input_file, source_language)
+        logger.info(
+            "检测到URL输入，准备下载或复用媒体: url=%s source_language=%s force_asr=%s",
+            input_file,
+            source_language,
+            force_asr,
+        )
         output_dir = Path.cwd() / "data" / "input"
-        result = download(input_file, output_dir, source_language, progress=progress.emitter)
+        result = download(
+            input_file,
+            output_dir,
+            source_language,
+            progress=progress.emitter,
+            force_asr=force_asr,
+        )
         if len(result) == 3:
             _video_path, subtitle_path, audio_path = result
         else:

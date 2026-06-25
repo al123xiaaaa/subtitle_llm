@@ -15,6 +15,9 @@ const bridge: SubtitleLlmBridge = {
   saveSrt: (defaultName?: string) => ipcRenderer.invoke("dialog:save-srt", defaultName),
   startJob: (request: DesktopJobRequest) => ipcRenderer.invoke("job:start", request),
   cancelJob: (jobId: string) => ipcRenderer.invoke("job:cancel", jobId),
+  listTranslationTasks: (includeDeleted?: boolean) => ipcRenderer.invoke("tasks:list", includeDeleted),
+  softDeleteTranslationTask: (taskId: string) => ipcRenderer.invoke("tasks:soft-delete", taskId),
+  restoreTranslationTask: (taskId: string) => ipcRenderer.invoke("tasks:restore", taskId),
   openPath: (filePath: string) => ipcRenderer.invoke("shell:open-path", filePath),
   showInFolder: (filePath: string) => ipcRenderer.invoke("shell:show-in-folder", filePath),
   onJobEvent: (callback: (event: JobEvent) => void) => {

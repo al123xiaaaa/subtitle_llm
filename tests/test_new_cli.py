@@ -21,7 +21,6 @@ class TestNewCLI(unittest.TestCase):
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="output_checkpoint.json",
             context_file="output_context.txt",
             llm_trace_dir="data/logs/demo_llm_trace",
             total_entries=1,
@@ -59,13 +58,13 @@ class TestNewCLI(unittest.TestCase):
 
             request = fake_service.translate.call_args.args[0]
             self.assertIsNone(request.review_mode)
+            self.assertFalse(request.force_asr)
 
     def test_translate_command_maps_review_flags(self):
         runner = CliRunner()
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="output_checkpoint.json",
             context_file="output_context.txt",
             total_entries=1,
             processed_entries=1,
@@ -95,12 +94,43 @@ class TestNewCLI(unittest.TestCase):
             request = fake_service.translate.call_args.args[0]
             self.assertEqual(request.review_mode, "tui")
 
+    def test_translate_command_maps_force_asr_flag(self):
+        runner = CliRunner()
+        report = TranslationReport(
+            input_file="input.srt",
+            output_file="output.srt",
+            context_file="output_context.txt",
+            total_entries=1,
+            processed_entries=1,
+            total_chunks=1,
+            completed_chunks=1,
+        )
+        fake_service = Mock()
+        fake_service.translate.return_value = Mock(report=report)
+
+        with runner.isolated_filesystem():
+            with patch("subtitle_llm.cli.app._load_service", return_value=fake_service):
+                result = runner.invoke(
+                    app,
+                    [
+                        "translate",
+                        "--input",
+                        "https://example.test/video",
+                        "--target-language",
+                        "Chinese",
+                        "--force-asr",
+                    ],
+                )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            request = fake_service.translate.call_args.args[0]
+            self.assertTrue(request.force_asr)
+
     def test_translate_command_allows_omitting_output(self):
         runner = CliRunner()
         report = TranslationReport(
             input_file="input.srt",
             output_file="data/output/input.zh.srt",
-            checkpoint_file="data/output/input.zh_checkpoint.json",
             context_file="data/output/input.zh_context.txt",
             total_entries=1,
             processed_entries=1,
@@ -127,12 +157,59 @@ class TestNewCLI(unittest.TestCase):
             request = fake_service.translate.call_args.args[0]
             self.assertIsNone(request.output_file)
 
+    def test_translate_command_allows_task_id_resume_without_input(self):
+        runner = CliRunner()
+        report = TranslationReport(
+            input_file="/tmp/input.srt",
+            output_file="/tmp/output.srt",
+            context_file="/tmp/output_context.txt",
+            task_id="task-123",
+            task_db_file="/tmp/tasks.sqlite3",
+            total_entries=1,
+            processed_entries=1,
+            total_chunks=1,
+            completed_chunks=1,
+        )
+        fake_service = Mock()
+        fake_service.translate.return_value = Mock(report=report)
+
+        with runner.isolated_filesystem():
+            with patch("subtitle_llm.cli.app._load_service", return_value=fake_service):
+                result = runner.invoke(app, ["translate", "--task-id", "task-123", "--resume"])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("任务记录：task-123", result.output)
+            request = fake_service.translate.call_args.args[0]
+            self.assertEqual(request.task_id, "task-123")
+            self.assertTrue(request.resume)
+            self.assertIsNone(request.input_file)
+
+    def test_translate_command_rejects_task_id_with_new_input(self):
+        runner = CliRunner()
+
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                app,
+                [
+                    "translate",
+                    "--task-id",
+                    "task-123",
+                    "--resume",
+                    "--input",
+                    "other.srt",
+                    "--target-language",
+                    "Chinese",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 2)
+        self.assertIn("不能同时指定新的 --input 或 --output", result.output)
+
     def test_translate_command_can_embed_video_after_translation(self):
         runner = CliRunner()
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="output_checkpoint.json",
             context_file="output_context.txt",
             source_video_file="downloaded.mp4",
             total_entries=1,
@@ -179,7 +256,6 @@ class TestNewCLI(unittest.TestCase):
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="output_checkpoint.json",
             context_file="output_context.txt",
             total_entries=1,
             processed_entries=1,

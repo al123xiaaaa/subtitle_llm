@@ -81,14 +81,16 @@ export interface ModelSelection {
 }
 
 export interface TranslateJobOptions {
-  input: string;
-  targetLanguage: string;
+  input?: string;
+  targetLanguage?: string;
+  taskId?: string;
   sourceLanguage?: string;
   output?: string;
   config?: string;
   outputFormat?: OutputFormat | "";
   reviewMode?: ReviewMode;
   refineTranslation?: boolean;
+  forceAsr?: boolean;
   resume?: boolean;
   embedVideo?: boolean;
   video?: string;
@@ -187,7 +189,8 @@ export interface CliResultEvent {
   output_video_file?: string | null;
   embedded_video_error?: string | null;
   context_file?: string | null;
-  checkpoint_file?: string | null;
+  task_id?: string | null;
+  task_db_file?: string | null;
   llm_trace_dir?: string | null;
   output_format?: OutputFormat | string | null;
 }
@@ -239,6 +242,24 @@ export interface ShellResult {
   message?: string;
 }
 
+export interface TranslationTaskSummary {
+  task_id: string;
+  status: string;
+  input_display: string;
+  working_directory: string;
+  source_subtitle_path: string;
+  target_language: string;
+  source_language: string;
+  output_format: string;
+  output_file: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+  context_file?: string | null;
+  llm_trace_dir?: string | null;
+  source_video_file?: string | null;
+}
+
 export interface SubtitleLlmBridge {
   getState: () => Promise<AppState>;
   saveApiKey: (providerId: string, apiKey: string) => Promise<AppState>;
@@ -253,6 +274,9 @@ export interface SubtitleLlmBridge {
   saveSrt: (defaultName?: string) => Promise<string | null>;
   startJob: (request: DesktopJobRequest) => Promise<JobStartResponse>;
   cancelJob: (jobId: string) => Promise<ShellResult>;
+  listTranslationTasks: (includeDeleted?: boolean) => Promise<TranslationTaskSummary[]>;
+  softDeleteTranslationTask: (taskId: string) => Promise<ShellResult>;
+  restoreTranslationTask: (taskId: string) => Promise<ShellResult>;
   openPath: (filePath: string) => Promise<ShellResult>;
   showInFolder: (filePath: string) => Promise<ShellResult>;
   onJobEvent: (callback: (event: JobEvent) => void) => () => void;

@@ -179,6 +179,18 @@ export function resolveCredential(
   throw new Error(`${provider.name} API Key 未配置`);
 }
 
+export function savedCredentialEnvOverrides(settingsPath: string): Record<string, string> {
+  const settings = readSettings(settingsPath);
+  const overrides: Record<string, string> = {};
+  for (const provider of listProviders()) {
+    const saved = cleanString(settings.apiKeys[provider.id]);
+    if (saved) {
+      overrides[provider.envKey] = saved;
+    }
+  }
+  return overrides;
+}
+
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
 }

@@ -118,13 +118,13 @@ class ProgressContract:
             message=f"无需规范化字幕：{reason}",
         )
 
-    def checkpoint_restored(self, resumed_entries: int) -> dict[str, Any]:
+    def task_record_restored(self, resumed_entries: int) -> dict[str, Any]:
         return self.emitter.emit(
             stage="prepare_translation",
-            detail="restore_checkpoint",
+            detail="restore_task_record",
             status="done" if resumed_entries else "skipped",
-            label="加载断点",
-            message=f"从断点恢复 {resumed_entries} 条字幕" if resumed_entries else "没有可恢复断点，本次从头处理",
+            label="加载任务记录",
+            message=f"从任务记录恢复 {resumed_entries} 条字幕" if resumed_entries else "没有可恢复任务记录，本次从头处理",
         )
 
     def context_generating(self, model: ModelConfig) -> dict[str, Any]:
@@ -214,7 +214,7 @@ class ProgressContract:
             total_chunks=total_chunks,
         )
 
-    def checkpoint_saved(
+    def task_state_saved(
         self,
         entries: list[SubtitleEntry],
         *,
@@ -225,16 +225,16 @@ class ProgressContract:
     ) -> dict[str, Any]:
         return self.emitter.emit(
             stage="processing_chunks",
-            detail="checkpoint",
+            detail="save_task_state",
             status="done",
-            label="保存断点",
+            label="保存进度",
             message=f"已保存{'语义片段' if semantic else '片段'} {chunk_index + 1}/{total_chunks} 的进度",
             chunk=chunk_payload(
                 entries,
                 chunk_index=chunk_index,
                 total_chunks=total_chunks,
                 status="warning" if warning else "done",
-                detail="checkpoint",
+                detail="save_task_state",
             ),
             total_chunks=total_chunks,
         )

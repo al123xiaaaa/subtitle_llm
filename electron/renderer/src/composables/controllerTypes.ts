@@ -21,6 +21,7 @@ export interface TranslateFormState {
   config: string;
   useYamlConfig: boolean;
   refineTranslation: boolean;
+  forceAsr: boolean;
   resume: boolean;
   embedMkv: boolean;
   video: string;

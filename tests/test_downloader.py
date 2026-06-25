@@ -85,6 +85,29 @@ class TestDownloader(unittest.TestCase):
         self.assertTrue(str(video_path).endswith("Demo Video.webm"))
         self.assertTrue(str(subtitle_path).endswith("Demo Video.en.srt"))
 
+    def test_force_asr_ignores_available_and_cached_subtitles(self):
+        FakeYoutubeDL.info = {
+            "title": "Demo Video",
+            "subtitles": {"en": [{}]},
+            "automatic_captions": {},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp)
+            (output_path / "Demo Video.webm").write_text("video", encoding="utf-8")
+            (output_path / "Demo Video.en.srt").write_text("subtitle", encoding="utf-8")
+
+            with patch("subtitle_llm.media.downloader.YoutubeDL", FakeYoutubeDL):
+                result = downloader.download("https://example.test/video", tmp, "en", force_asr=True)
+
+        self.assertEqual(len(FakeYoutubeDL.instances), 2)
+        download_options = FakeYoutubeDL.instances[1].options
+        self.assertNotIn("writesubtitles", download_options)
+        self.assertEqual(download_options["postprocessors"][0]["key"], "FFmpegExtractAudio")
+        video_path, subtitle_path, audio_path = cast(tuple[str | None, None, str | None], result)
+        self.assertTrue(str(video_path).endswith("Demo Video.webm"))
+        self.assertIsNone(subtitle_path)
+        self.assertTrue(str(audio_path).endswith("Demo Video.wav"))
+
     def test_reuses_existing_audio_without_downloading_video(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_path = Path(tmp)

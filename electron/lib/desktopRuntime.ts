@@ -8,6 +8,7 @@ import type {
   DesktopPreferences,
   FfmpegStatus,
   JobEvent,
+  TranslationTaskSummary,
 } from "../types.js";
 import { buildEnv, buildPythonArgs } from "./cliCommands.js";
 import { prepareDesktopTaskIntent } from "./desktopTaskIntent.js";
@@ -135,7 +136,7 @@ export function createDesktopRuntime({
       detectFfmpeg,
     });
     const args = buildPythonArgs(runRequest);
-    const childEnv = buildEnv(env, runRequest.envOverrides);
+    const childEnv = withUserDataEnv(buildEnv(env, runRequest.envOverrides));
     const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const child = spawnFn(pythonExecutable, args, {
       cwd: projectRoot,
@@ -210,6 +211,51 @@ export function createDesktopRuntime({
 
   function hasRunningJob(): boolean {
     return Array.from(activeJobs.values()).some((job) => !job.finished);
+  }
+
+  function withUserDataEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    return {
+      ...baseEnv,
+      SUBTITLE_LLM_USER_DATA_DIR: app.getPath("userData"),
+    };
+  }
+
+  function runTasksCommand(args: string[]) {
+    const result = spawnSyncFn(resolvePythonExecutable(), ["main.py", "tasks", ...args], {
+      cwd: projectRoot,
+      env: withUserDataEnv(buildEnv(env, {})),
+      encoding: "utf8",
+    });
+    if (result.error) {
+      throw result.error;
+    }
+    if (result.status !== 0) {
+      throw new Error(result.stderr || result.stdout || `任务记录命令失败：${result.status}`);
+    }
+    return result.stdout || "";
+  }
+
+  function listTranslationTasks(includeDeleted = false): TranslationTaskSummary[] {
+    const stdout = runTasksCommand(["--json", ...(includeDeleted ? ["--include-deleted"] : [])]);
+    return JSON.parse(stdout || "[]") as TranslationTaskSummary[];
+  }
+
+  function softDeleteTranslationTask(taskId: string) {
+    const cleaned = cleanText(taskId);
+    if (!cleaned) {
+      return { ok: false, error: "任务记录为空" };
+    }
+    runTasksCommand(["--delete", cleaned]);
+    return { ok: true };
+  }
+
+  function restoreTranslationTask(taskId: string) {
+    const cleaned = cleanText(taskId);
+    if (!cleaned) {
+      return { ok: false, error: "任务记录为空" };
+    }
+    runTasksCommand(["--restore", cleaned]);
+    return { ok: true };
   }
 
   function assertPythonEnvironmentReady(pythonExecutable: string, command: DesktopJobRequest["command"]): void {
@@ -303,8 +349,11 @@ export function createDesktopRuntime({
     cancelJob,
     clearProviderApiKey,
     getAppState,
+    listTranslationTasks,
     resolveUserPath,
+    restoreTranslationTask,
     saveProviderApiKey,
+    softDeleteTranslationTask,
     startJob,
     stopAllJobs,
     updatePreferences,

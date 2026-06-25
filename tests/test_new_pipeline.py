@@ -16,10 +16,11 @@ from typing import Any, cast
 
 from subtitle_llm.llm.types import CompletionResult, CompletionUsage
 from subtitle_llm.pipeline import TranslationRequest, TranslationService
-from subtitle_llm.pipeline.checkpoint import CheckpointMismatch, CheckpointStore, file_fingerprint
+from subtitle_llm.pipeline.checkpoint import file_fingerprint
 from subtitle_llm.pipeline.chunk_translator import ChunkTranslator
 from subtitle_llm.pipeline.quality import QualityGate
 from subtitle_llm.pipeline.run_ledger import RunLedger
+from subtitle_llm.pipeline.task_store import TranslationTaskMismatch, TranslationTaskStore
 from subtitle_llm.progress_events import PROGRESS_EVENT_PREFIX
 from subtitle_llm.review.tui import TuiReviewPort
 from subtitle_llm.settings import AppConfig, ModelConfig, ModelProvider, PipelineConfig
@@ -228,7 +229,10 @@ class TestNewPipeline(unittest.TestCase):
             self.assertEqual(result.report.total_entries, 2)
             self.assertEqual(result.report.failed_chunks, [])
             self.assertTrue(Path(result.report.context_file).exists())
-            self.assertTrue(Path(result.report.checkpoint_file).exists())
+            self.assertTrue(result.report.task_id)
+            self.assertTrue(result.report.task_db_file)
+            self.assertTrue(Path(result.report.task_db_file or "").exists())
+            self.assertFalse((output_path.parent / "output_checkpoint.json").exists())
             trace_dir = Path(result.report.llm_trace_dir or "")
             self.assertTrue(trace_dir.exists())
             trace_json_files = sorted(trace_dir.glob("*.json"))
@@ -406,9 +410,125 @@ class TestNewPipeline(unittest.TestCase):
                 any(
                     event.get("chunk", {}).get("status") == "done"
                     for event in events
-                    if event["detail"] in {"quality", "accept_chunk", "checkpoint"}
+                    if event["detail"] in {"quality", "accept_chunk", "save_task_state"}
                 )
             )
+
+    def test_translate_resume_restores_from_task_record(self):
+        from subtitle_llm.domain import Subtitle, SubtitleEntry
+        from subtitle_llm.pipeline.report import TranslationReport
+
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.srt"
+            output_path = Path(tmp) / "output.srt"
+            input_path.write_text(
+                "1\n00:00:01,000 --> 00:00:02,000\nHello world.\n\n"
+                "2\n00:00:03,000 --> 00:00:04,000\nThis is a second line.\n\n",
+                encoding="utf-8",
+            )
+            task_store = TranslationTaskStore(Path(tmp) / "tasks.sqlite3")
+            record = task_store.create_task(
+                input_display=str(input_path),
+                working_directory=tmp,
+                source_subtitle_path=str(input_path),
+                normalized_input_fingerprint=file_fingerprint(input_path),
+                target_language="Chinese",
+                source_language="en",
+                output_format="source-first",
+                output_file=str(output_path),
+                config=make_config(),
+            )
+            partial_subtitle = Subtitle([
+                SubtitleEntry(1, "00:00:01,000", "00:00:02,000", "Hello world.", "旧译文一"),
+                SubtitleEntry(2, "00:00:03,000", "00:00:04,000", "This is a second line."),
+            ])
+            partial_report = TranslationReport(
+                input_file=str(input_path),
+                output_file=str(output_path),
+                context_file=str(Path(tmp) / "context.txt"),
+                task_id=record.task_id,
+                task_db_file=str(task_store.db_path),
+            )
+            RunLedger().save_task_state(task_store, record.task_id, partial_subtitle, partial_report, [partial_subtitle.entries[0]])
+
+            service = TranslationService(
+                make_config(),
+                translation_client=FakeLLMClient(),
+                summary_client=FakeLLMClient(),
+                task_store=task_store,
+            )
+
+            result = service.translate(
+                TranslationRequest(
+                    input_file=str(input_path),
+                    output_file=str(output_path),
+                    target_language="Chinese",
+                    resume=True,
+                )
+            )
+
+            output_text = output_path.read_text(encoding="utf-8")
+            self.assertEqual(result.report.resumed_entries, 1)
+            self.assertIn("旧译文一", output_text)
+            self.assertIn("译文1", output_text)
+
+    def test_translate_task_id_resume_uses_stored_paths(self):
+        from subtitle_llm.domain import Subtitle, SubtitleEntry
+        from subtitle_llm.pipeline.report import TranslationReport
+
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.srt"
+            output_path = Path(tmp) / "output.srt"
+            input_path.write_text(
+                "1\n00:00:01,000 --> 00:00:02,000\nHello world.\n\n"
+                "2\n00:00:03,000 --> 00:00:04,000\nThis is a second line.\n\n",
+                encoding="utf-8",
+            )
+            task_store = TranslationTaskStore(Path(tmp) / "tasks.sqlite3")
+            record = task_store.create_task(
+                input_display=str(input_path),
+                working_directory=tmp,
+                source_subtitle_path=str(input_path),
+                normalized_input_fingerprint=file_fingerprint(input_path),
+                target_language="Chinese",
+                source_language="en",
+                output_format="source-first",
+                output_file=str(output_path),
+                config=make_config(),
+            )
+            partial_subtitle = Subtitle([
+                SubtitleEntry(1, "00:00:01,000", "00:00:02,000", "Hello world.", "旧译文一"),
+                SubtitleEntry(2, "00:00:03,000", "00:00:04,000", "This is a second line."),
+            ])
+            partial_report = TranslationReport(
+                input_file=str(input_path),
+                output_file=str(output_path),
+                context_file=str(Path(tmp) / "context.txt"),
+                task_id=record.task_id,
+                task_db_file=str(task_store.db_path),
+            )
+            RunLedger().save_task_state(task_store, record.task_id, partial_subtitle, partial_report, [partial_subtitle.entries[0]])
+
+            service = TranslationService(
+                make_config(),
+                translation_client=FakeLLMClient(),
+                summary_client=FakeLLMClient(),
+                task_store=task_store,
+            )
+
+            result = service.translate(
+                TranslationRequest(
+                    input_file=None,
+                    output_file=None,
+                    target_language="",
+                    resume=True,
+                    task_id=record.task_id,
+                )
+            )
+
+            self.assertEqual(result.report.task_id, record.task_id)
+            self.assertEqual(result.report.resumed_entries, 1)
+            self.assertTrue(output_path.exists())
 
     def test_failed_auto_repair_replaces_partial_placeholders_with_source_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -710,21 +830,25 @@ class TestNewPipeline(unittest.TestCase):
             self.assertIn("First sentence. Second sentence. Third sentence.", output_text)
             self.assertNotIn("\n2\n00:00:03,000 --> 00:00:04,000", output_text)
 
-    def test_checkpoint_resume_preserves_tui_merge_removals(self):
+    def test_task_record_resume_preserves_tui_merge_removals(self):
         from subtitle_llm.domain import Subtitle, SubtitleEntry
         from subtitle_llm.pipeline.report import TranslationReport
 
         with tempfile.TemporaryDirectory() as tmp:
             input_path = Path(tmp) / "input.srt"
             output_path = Path(tmp) / "output.srt"
-            checkpoint_path = Path(tmp) / "checkpoint.json"
             input_path.write_text("checkpoint source", encoding="utf-8")
-            checkpoint = CheckpointStore(
-                checkpoint_path,
-                file_fingerprint(input_path),
-                "Chinese",
-                "source-first",
-                "2",
+            task_store = TranslationTaskStore(Path(tmp) / "tasks.sqlite3")
+            record = task_store.create_task(
+                input_display=str(input_path),
+                working_directory=tmp,
+                source_subtitle_path=str(input_path),
+                normalized_input_fingerprint=file_fingerprint(input_path),
+                target_language="Chinese",
+                source_language="en",
+                output_format="source-first",
+                output_file=str(output_path),
+                config=make_config(),
             )
             subtitle = Subtitle([
                 SubtitleEntry(1, "00:00:01,000", "00:00:02,000", "First sentence.", "旧译文一"),
@@ -741,12 +865,13 @@ class TestNewPipeline(unittest.TestCase):
             report = TranslationReport(
                 input_file=str(input_path),
                 output_file=str(output_path),
-                checkpoint_file=str(checkpoint_path),
                 context_file=str(Path(tmp) / "context.txt"),
+                task_id=record.task_id,
+                task_db_file=str(task_store.db_path),
             )
             ledger = RunLedger(removed_entry_indices={2, 3})
 
-            ledger.save_checkpoint(checkpoint, subtitle, report, [merged_entry])
+            ledger.save_task_state(task_store, record.task_id, subtitle, report, [merged_entry])
 
             resumed_subtitle = Subtitle([
                 SubtitleEntry(1, "00:00:01,000", "00:00:02,000", "First sentence."),
@@ -756,13 +881,15 @@ class TestNewPipeline(unittest.TestCase):
             resume_report = TranslationReport(
                 input_file=str(input_path),
                 output_file=str(output_path),
-                checkpoint_file=str(checkpoint_path),
                 context_file=str(Path(tmp) / "context.txt"),
+                task_id=record.task_id,
+                task_db_file=str(task_store.db_path),
             )
-            restore = RunLedger.restore_checkpoint(
+            restore = RunLedger.restore_task_state(
                 resume=True,
+                task_id=record.task_id,
                 subtitle=resumed_subtitle,
-                checkpoint=checkpoint,
+                task_store=task_store,
                 report=resume_report,
             )
 
@@ -777,33 +904,31 @@ class TestNewPipeline(unittest.TestCase):
             )
             self.assertEqual(resumed_subtitle.entries[0].translated_text, "合并译文")
 
-    def test_checkpoint_rejects_mismatched_fingerprint(self):
+    def test_task_record_rejects_mismatched_fingerprint(self):
         with tempfile.TemporaryDirectory() as tmp:
             input_path = Path(tmp) / "input.srt"
             input_path.write_text("data", encoding="utf-8")
-            checkpoint_path = Path(tmp) / "checkpoint.json"
-            store = CheckpointStore(
-                checkpoint_path,
-                file_fingerprint(input_path),
-                "Chinese",
-                "source-first",
-                "2",
-            )
-            from subtitle_llm.domain import Subtitle, SubtitleEntry
-            from subtitle_llm.pipeline.report import TranslationReport
-
-            subtitle = Subtitle([SubtitleEntry(1, "a", "b", "hello", "你好")])
-            report = TranslationReport(
-                input_file=str(input_path),
+            task_store = TranslationTaskStore(Path(tmp) / "tasks.sqlite3")
+            record = task_store.create_task(
+                input_display=str(input_path),
+                working_directory=tmp,
+                source_subtitle_path=str(input_path),
+                normalized_input_fingerprint=file_fingerprint(input_path),
+                target_language="Chinese",
+                source_language="en",
+                output_format="source-first",
                 output_file=str(Path(tmp) / "out.srt"),
-                checkpoint_file=str(checkpoint_path),
-                context_file=str(Path(tmp) / "context.txt"),
+                config=make_config(),
             )
-            store.save(subtitle, report)
 
-            bad_store = CheckpointStore(checkpoint_path, "different", "Chinese", "source-first", "2")
-            with self.assertRaises(CheckpointMismatch):
-                bad_store.load()
+            with self.assertRaises(TranslationTaskMismatch):
+                task_store.validate_task(
+                    record,
+                    normalized_input_fingerprint="different",
+                    target_language="Chinese",
+                    output_format="source-first",
+                    output_file=str(Path(tmp) / "out.srt"),
+                )
 
     def test_tui_adapter_applies_merge_map_contract(self):
         from subtitle_llm.domain import SubtitleEntry

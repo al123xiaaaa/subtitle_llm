@@ -19,11 +19,9 @@ const {
   hasVideoResult,
   lastEmbeddedVideoPath,
   lastLlmTraceDir,
-  lastOutputPath,
   lastSubtitlePath,
   logBody,
   logText,
-  openOutput,
   openResult,
   progressChunkLegendItems,
   progressChunkSummary,
@@ -37,14 +35,13 @@ const {
   runStatus,
   selectChunk,
   selectedProgressChunk,
-  showOutput,
   showResult,
 } = props.job;
 </script>
 
 <template>
   <section
-    class="run-panel"
+    :class="['run-panel', { 'is-idle': progressIsEmpty }]"
     aria-labelledby="runTitle"
   >
     <div class="run-heading">
@@ -56,35 +53,21 @@ const {
           {{ runStatus }}
         </p>
       </div>
-      <div class="run-actions">
+      <div
+        v-if="activeJobId || logText"
+        class="run-actions"
+      >
         <button
-          id="openOutput"
-          class="secondary-button"
-          type="button"
-          :disabled="!lastOutputPath"
-          @click="openOutput"
-        >
-          打开输出
-        </button>
-        <button
-          id="showOutput"
-          class="secondary-button"
-          type="button"
-          :disabled="!lastOutputPath"
-          @click="showOutput"
-        >
-          定位文件
-        </button>
-        <button
+          v-if="activeJobId"
           id="cancelJob"
           class="danger-button"
           type="button"
-          :disabled="!activeJobId"
           @click="cancelJob"
         >
           取消
         </button>
         <button
+          v-if="logText"
           id="clearLog"
           class="secondary-button"
           type="button"
@@ -98,7 +81,10 @@ const {
       id="progressDashboard"
       class="progress-dashboard"
     >
-      <div :class="['current-progress', progressStatusClass]">
+      <div
+        v-if="!progressIsEmpty"
+        :class="['current-progress', progressStatusClass]"
+      >
         <div>
           <span class="progress-kicker">{{ progressState.currentLabel }}</span>
           <strong id="progressCurrentMessage">{{ progressState.currentMessage }}</strong>

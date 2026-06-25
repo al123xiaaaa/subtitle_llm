@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Annotated
@@ -14,6 +15,7 @@ from subtitle_llm.media.muxer import MuxError
 from subtitle_llm.media import transcribe as transcribe_audio
 from subtitle_llm.pipeline import TranslationRequest, TranslationService
 from subtitle_llm.pipeline.report import TranslationReport
+from subtitle_llm.pipeline.task_store import TranslationTaskStore
 from subtitle_llm.progress_events import ProgressEmitter
 from subtitle_llm.runtime_logging import configure_run_logging
 from subtitle_llm.settings import ConfigError, load_config
@@ -31,6 +33,30 @@ app = typer.Typer(
 logger = logging.getLogger(__name__)
 
 
+def _validate_translate_options(
+    *,
+    input_file: str | None,
+    target_language: str | None,
+    output_file: str | None,
+    resume: bool,
+    task_id: str | None,
+) -> None:
+    if task_id:
+        if not resume:
+            typer.secho("--task-id 只能和 --resume 一起使用", fg=typer.colors.RED, err=True)
+            raise typer.Exit(2)
+        if input_file or output_file:
+            typer.secho("--task-id 恢复不能同时指定新的 --input 或 --output", fg=typer.colors.RED, err=True)
+            raise typer.Exit(2)
+        return
+    if not input_file:
+        typer.secho("缺少 --input；如需精确恢复任务，请使用 --task-id --resume", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2)
+    if not target_language:
+        typer.secho("缺少 --target-language", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2)
+
+
 def _load_service(config_path: Path | None) -> TranslationService:
     try:
         config = load_config(config_path)
@@ -42,8 +68,14 @@ def _load_service(config_path: Path | None) -> TranslationService:
 
 @app.command()
 def translate(
-    input_file: Annotated[str, typer.Option("--input", "-i", help="Input .srt/.json file or video URL.")],
-    target_language: Annotated[str, typer.Option("--target-language", "-t", help="Target translation language.")],
+    input_file: Annotated[
+        str | None,
+        typer.Option("--input", "-i", help="Input .srt/.json file or video URL."),
+    ] = None,
+    target_language: Annotated[
+        str | None,
+        typer.Option("--target-language", "-t", help="Target translation language."),
+    ] = None,
     output_file: Annotated[
         str | None,
         typer.Option(
@@ -63,7 +95,11 @@ def translate(
             help="source-first, target-first, target-only, source-only, or bilingual.",
         ),
     ] = None,
-    resume: Annotated[bool, typer.Option("--resume", help="Resume from checkpoint if metadata matches.")] = False,
+    resume: Annotated[bool, typer.Option("--resume", help="Resume from a translation task record.")] = False,
+    task_id: Annotated[
+        str | None,
+        typer.Option("--task-id", help="Resume a specific translation task record."),
+    ] = None,
     review: Annotated[
         bool | None,
         typer.Option("--review/--no-review", help="Use TUI review for suspicious chunks."),
@@ -72,6 +108,10 @@ def translate(
         bool | None,
         typer.Option("--refine/--no-refine", help="Run a second LLM refinement pass after the rough translation."),
     ] = None,
+    force_asr: Annotated[
+        bool,
+        typer.Option("--force-asr/--no-force-asr", help="For URL input, skip source subtitles and generate subtitles with ASR."),
+    ] = False,
     embed_video: Annotated[
         bool,
         typer.Option("--embed-video/--no-embed-video", help="Generate an MKV with the translated SRT as a soft subtitle track."),
@@ -87,6 +127,13 @@ def translate(
     ffmpeg: Annotated[str, typer.Option("--ffmpeg", help="FFmpeg executable path.")] = "ffmpeg",
 ) -> None:
     """Translate an SRT file, word-level JSON transcript, or video URL."""
+    _validate_translate_options(
+        input_file=input_file,
+        target_language=target_language,
+        output_file=output_file,
+        resume=resume,
+        task_id=task_id,
+    )
     log_path = configure_run_logging("translate")
     progress = ProgressEmitter("translate")
     progress.emit(
@@ -96,7 +143,7 @@ def translate(
         message="正在加载模型和翻译配置",
     )
     logger.info(
-        "用户操作: translate input=%s output=%s target_language=%s source_language=%s config=%s format=%s resume=%s review=%s refine=%s embed_video=%s video=%s video_output=%s",
+        "用户操作: translate input=%s output=%s target_language=%s source_language=%s config=%s format=%s resume=%s task_id=%s review=%s refine=%s force_asr=%s embed_video=%s video=%s video_output=%s",
         input_file,
         output_file,
         target_language,
@@ -104,8 +151,10 @@ def translate(
         config,
         output_format,
         resume,
+        task_id,
         review,
         refine,
+        force_asr,
         embed_video,
         video_file,
         video_output,
@@ -116,12 +165,14 @@ def translate(
             TranslationRequest(
                 input_file=input_file,
                 output_file=output_file,
-                target_language=target_language,
+                target_language=target_language or "",
                 source_language=source_language,
                 output_format=output_format,
                 resume=resume,
                 review_mode=None if review is None else ("tui" if review else "auto"),
                 refine_translation=refine,
+                force_asr=force_asr,
+                task_id=task_id,
             ),
             progress=progress,
             emit_complete=not embed_video,
@@ -131,7 +182,7 @@ def translate(
                 report=result.report,
                 video_file=video_file,
                 video_output=video_output,
-                target_language=target_language,
+                target_language=result.report.target_language or target_language or "Chinese",
                 ffmpeg=ffmpeg,
                 progress=progress,
             )
@@ -317,6 +368,71 @@ def transcribe(
     typer.echo(f"日志文件：{log_path}")
 
 
+@app.command("tasks")
+def list_tasks(
+    include_deleted: Annotated[
+        bool,
+        typer.Option("--include-deleted", help="Include soft-deleted translation task records."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print task records as JSON."),
+    ] = False,
+    delete: Annotated[
+        str | None,
+        typer.Option("--delete", help="Soft-delete a translation task record by task id."),
+    ] = None,
+    restore: Annotated[
+        str | None,
+        typer.Option("--restore", help="Restore a soft-deleted translation task record by task id."),
+    ] = None,
+) -> None:
+    """List or soft-delete translation task records."""
+    store = TranslationTaskStore()
+    if delete:
+        store.soft_delete(delete)
+        typer.echo(f"已删除任务记录：{delete}")
+        return
+    if restore:
+        store.restore_deleted(restore)
+        typer.echo(f"已恢复任务记录：{restore}")
+        return
+
+    records = [
+        {
+            "task_id": record.task_id,
+            "status": record.status,
+            "input_display": record.input_display,
+            "working_directory": record.working_directory,
+            "source_subtitle_path": record.source_subtitle_path,
+            "target_language": record.target_language,
+            "source_language": record.source_language,
+            "output_format": record.output_format,
+            "output_file": record.output_file,
+            "context_file": record.context_file,
+            "llm_trace_dir": record.llm_trace_dir,
+            "source_video_file": record.source_video_file,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+            "deleted_at": record.deleted_at,
+        }
+        for record in store.list_tasks(include_deleted=include_deleted)
+    ]
+    if json_output:
+        typer.echo(json.dumps(records, ensure_ascii=False))
+        return
+
+    if not records:
+        typer.echo("暂无翻译任务记录")
+        return
+    for record in records:
+        deleted = " 已删除" if record.get("deleted_at") else ""
+        typer.echo(
+            f"{record['task_id']} [{record['status']}]{deleted} "
+            f"{record['input_display']} -> {record['output_file']}"
+        )
+
+
 def _embed_translated_subtitle(
     report: TranslationReport,
     video_file: Path | None,
@@ -390,7 +506,10 @@ def _print_report(report) -> None:
     if report.embedded_video_error:
         typer.echo(f"视频封装：{report.embedded_video_error}")
     typer.echo(f"上下文文件：{report.context_file}")
-    typer.echo(f"断点文件：{report.checkpoint_file}")
+    if report.task_id:
+        typer.echo(f"任务记录：{report.task_id}")
+    if report.task_db_file:
+        typer.echo(f"任务数据库：{report.task_db_file}")
     if report.llm_trace_dir:
         typer.echo(f"LLM诊断：{report.llm_trace_dir}")
     typer.echo(f"输出格式：{report.output_format}")
@@ -419,7 +538,8 @@ def _print_report(report) -> None:
         embedded_video_file=report.embedded_video_file,
         embedded_video_error=report.embedded_video_error,
         context_file=report.context_file,
-        checkpoint_file=report.checkpoint_file,
+        task_id=report.task_id,
+        task_db_file=report.task_db_file,
         llm_trace_dir=report.llm_trace_dir,
         output_format=report.output_format,
     )

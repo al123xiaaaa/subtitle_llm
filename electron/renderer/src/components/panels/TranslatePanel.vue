@@ -209,6 +209,15 @@ const { ffmpegAvailable } = props.providerState;
               :disabled="isBusy"
             >
           </label>
+          <label class="check-row">
+            <input
+              id="forceAsr"
+              v-model="translateForm.forceAsr"
+              type="checkbox"
+              :disabled="isBusy"
+            >
+            <span>不下载原字幕，改用 ASR</span>
+          </label>
         </div>
       </div>
 

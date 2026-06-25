@@ -11,7 +11,6 @@ if str(SRC_DIR) not in sys.path:
 
 from subtitle_llm.media.asr_backend import (
     AsrCue,
-    AsrError,
     FunasrAsrBackend,
     clean_sensevoice_text,
 )
@@ -186,6 +185,105 @@ class TestFunasrAsrBackend(unittest.TestCase):
         self.assertEqual(cues[1].start_ms, 3500)
         self.assertEqual(cues[1].end_ms, 6000)
         self.assertEqual(cues[1].text, "goodbye")
+
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_prefers_word_timestamps_over_drifting_sentence_info(self, mock_load):
+        """sentence_info 句级时间漂移时，优先使用顶层 words/timestamp 重建原始时间轴。"""
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{
+            "sentence_info": [
+                {
+                    "start": 100020,
+                    "end": 107770,
+                    "text": "or if you feel shaking.Take cover under furniture.In sacramento.",
+                }
+            ],
+            "words": [
+                "or",
+                "if",
+                "you",
+                "feel",
+                "shaking",
+                ".",
+                "Take",
+                "cover",
+                ".",
+                "In",
+                "sacramento",
+                ".",
+            ],
+            "timestamp": [
+                [100020, 100080],
+                [100260, 100320],
+                [100440, 100500],
+                [100620, 100680],
+                [100860, 101160],
+                [101160, 101220],
+                [115470, 115530],
+                [115830, 116250],
+                [116250, 116310],
+                [120160, 120220],
+                [120460, 121000],
+                [123640, 123700],
+            ],
+        }]
+        mock_load.return_value = mock_model
+
+        cues = self._make_backend().transcribe("/tmp/a.wav", "English")
+
+        self.assertEqual(len(cues), 3)
+        self.assertEqual(cues[-1].text, "In sacramento.")
+        self.assertEqual(cues[-1].start_ms, 120160)
+        self.assertEqual(cues[-1].end_ms, 123700)
+
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_word_timestamp_rebuild_preserves_decimal_numbers(self, mock_load):
+        """词级重建不能把 5.6 里的小数点当句号切开。"""
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{
+            "words": ["after", "a", "5", ".", "6", "magnitude", "quake", "."],
+            "timestamp": [
+                [1000, 1060],
+                [1120, 1180],
+                [1240, 1300],
+                [1300, 1360],
+                [1360, 1420],
+                [1480, 1540],
+                [1600, 1660],
+                [1660, 1720],
+            ],
+        }]
+        mock_load.return_value = mock_model
+
+        cues = self._make_backend().transcribe("/tmp/a.wav", "English")
+
+        self.assertEqual(len(cues), 1)
+        self.assertEqual(cues[0].text, "after a 5.6 magnitude quake.")
+
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_word_timestamp_rebuild_cleans_sentencepiece_and_joined_tokens(self, mock_load):
+        """词级重建清理 SentencePiece 标记，并合并常见拆分 token。"""
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{
+            "words": ["▁most", "people", "wasn", "'", "t", "1", "0", "0", "miles", "."],
+            "timestamp": [
+                [1000, 1060],
+                [1120, 1180],
+                [1240, 1300],
+                [1300, 1360],
+                [1360, 1420],
+                [1480, 1540],
+                [1540, 1600],
+                [1600, 1660],
+                [1720, 1780],
+                [1780, 1840],
+            ],
+        }]
+        mock_load.return_value = mock_model
+
+        cues = self._make_backend().transcribe("/tmp/a.wav", "English")
+
+        self.assertEqual(cues[0].text, "most people wasn't 100 miles.")
 
     @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
     def test_strips_sensevoice_tags(self, mock_load):

@@ -89,6 +89,27 @@ assert.equal(
   }).includes("--refine"),
   true,
 );
+assert.equal(
+  buildPythonArgs({
+    command: "translate",
+    options: {
+      input: "https://example.com/video",
+      targetLanguage: "Chinese",
+    },
+  }).includes("--force-asr"),
+  false,
+);
+assert.equal(
+  buildPythonArgs({
+    command: "translate",
+    options: {
+      input: "https://example.com/video",
+      targetLanguage: "Chinese",
+      forceAsr: true,
+    },
+  }).includes("--force-asr"),
+  true,
+);
 
 assert.deepEqual(
   buildPythonArgs({

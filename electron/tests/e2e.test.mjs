@@ -50,6 +50,11 @@ if (commandLog) {
 }
 
 setTimeout(() => {
+  if (command === "tasks") {
+    console.log("[]");
+    process.exit(0);
+  }
+
   if (command === "translate") {
     const output = optionValue("--output") || "data/output/youtube.zh.srt";
     progress({
@@ -120,7 +125,8 @@ setTimeout(() => {
       embedded_video_file: args.includes("--embed-video") ? "data/output/youtube.zh.mkv" : null,
       embedded_video_error: null,
       context_file: "data/output/youtube.zh_context.txt",
-      checkpoint_file: "data/output/youtube.zh_checkpoint.json",
+      task_id: "e2e-task-1",
+      task_db_file: "data/user/translation-tasks.sqlite3",
       llm_trace_dir: "data/logs/e2e_translate_llm_trace",
       output_format: "source-first",
     }));
@@ -166,6 +172,7 @@ process.exit(0);
 const tests = [
   ["首次启动可以保存 DeepSeek API Key，且不泄露明文", testOnboardingSavesKey],
   ["YouTube URL 翻译会自动启用 MKV，并传递正确 CLI 参数", testYoutubeTranslateWithMkv],
+  ["YouTube URL 可以勾选强制 ASR，不下载原字幕", testYoutubeTranslateForceAsr],
   ["翻译默认不二次润色，勾选后传递 refine 参数", testRefineToggle],
   ["已有字幕和视频可以单独生成 MKV", testManualMuxFlow],
   ["API Key 可以从环境变量回退，跳过首次配置", testEnvCredentialFallback],
@@ -201,6 +208,7 @@ async function testYoutubeTranslateWithMkv() {
     await page.locator("#embedMkv").waitFor({ state: "visible" });
     assert.equal(await page.locator("#embedMkv").isChecked(), true);
     assert.equal(await page.locator("#refineTranslation").isChecked(), false);
+    assert.equal(await page.locator("#forceAsr").isChecked(), false);
     await page.locator("#modelSelect").selectOption("deepseek-v4-pro");
 
     await page.locator("#startTranslate").click();
@@ -214,9 +222,8 @@ async function testYoutubeTranslateWithMkv() {
     await page.locator("#videoResultPath", { hasText: "data/output/youtube.zh.mkv" }).waitFor();
     await page.locator("#traceResultPath", { hasText: "data/logs/e2e_translate_llm_trace" }).waitFor();
 
-    const commands = readCommands(commandLogPath);
+    const commands = readCommands(commandLogPath).filter((entry) => entry.command === "translate");
     assert.equal(commands.length, 1);
-    assert.equal(commands[0].command, "translate");
     assert.deepEqual(commands[0].args.slice(0, 4), ["main.py", "translate", "--input", youtubeUrl]);
     assertHasArg(commands[0].args, "--target-language", "Chinese");
     assertHasArg(commands[0].args, "--source-language", "en");
@@ -224,11 +231,28 @@ async function testYoutubeTranslateWithMkv() {
     assert.equal(commands[0].args.includes("--embed-video"), true);
     assert.equal(commands[0].args.includes("--no-review"), true);
     assert.equal(commands[0].args.includes("--refine"), false);
+    assert.equal(commands[0].args.includes("--force-asr"), false);
     assert.equal(commands[0].env.DEEPSEEK_API_KEY, "sk-e2e-deepseek");
 
     const configPath = valueAfter(commands[0].args, "--config");
     assert.ok(configPath, "expected generated config path");
     assert.match(fs.readFileSync(configPath, "utf8"), /model: "deepseek-v4-pro"/);
+  });
+}
+
+async function testYoutubeTranslateForceAsr() {
+  await withApp(async ({ page, commandLogPath }) => {
+    await saveOnboardingKey(page);
+    await page.locator("#translateInput").fill(youtubeUrl);
+    await page.locator("#forceAsr").check();
+    assert.equal(await page.locator("#forceAsr").isChecked(), true);
+
+    await page.locator("#startTranslate").click();
+    await waitForRunStatus(page, "完成");
+
+    const commands = readCommands(commandLogPath).filter((entry) => entry.command === "translate");
+    assert.equal(commands.length, 1);
+    assert.equal(commands[0].args.includes("--force-asr"), true);
   });
 }
 
@@ -241,9 +265,8 @@ async function testRefineToggle() {
     await page.locator("#startTranslate").click();
     await waitForRunStatus(page, "完成");
 
-    const commands = readCommands(commandLogPath);
+    const commands = readCommands(commandLogPath).filter((entry) => entry.command === "translate");
     assert.equal(commands.length, 1);
-    assert.equal(commands[0].command, "translate");
     assert.equal(commands[0].args.includes("--refine"), true);
   });
 }
@@ -278,7 +301,7 @@ async function testManualMuxFlow() {
     await waitForRunStatus(page, "完成");
     await page.locator("#videoResultPath", { hasText: "data/output/manual.zh.mkv" }).waitFor();
 
-    const commands = readCommands(commandLogPath);
+    const commands = readCommands(commandLogPath).filter((entry) => entry.command === "mux");
     assert.equal(commands.length, 1);
     assert.deepEqual(commands[0].args.slice(0, 4), ["main.py", "mux", videoPath, subtitlePath]);
     assertHasArg(commands[0].args, "--target-language", "Chinese");

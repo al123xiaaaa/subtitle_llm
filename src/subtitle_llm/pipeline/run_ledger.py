@@ -4,12 +4,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from subtitle_llm.domain import Subtitle, SubtitleEntry
-from subtitle_llm.pipeline.checkpoint import CheckpointStore
 from subtitle_llm.pipeline.report import AutoLayoutRepair, TranslationReport
+from subtitle_llm.pipeline.task_store import TranslationTaskStore
 
 
 @dataclass
-class CheckpointRestore:
+class TaskStateRestore:
     resumed_indices: set[int]
     ledger: "RunLedger"
 
@@ -19,20 +19,21 @@ class RunLedger:
     removed_entry_indices: set[int] = field(default_factory=set)
 
     @classmethod
-    def restore_checkpoint(
+    def restore_task_state(
         cls,
         *,
         resume: bool,
+        task_id: str,
         subtitle: Subtitle,
-        checkpoint: CheckpointStore,
+        task_store: TranslationTaskStore,
         report: TranslationReport,
-    ) -> CheckpointRestore:
+    ) -> TaskStateRestore:
         ledger = cls()
         if not resume:
             ledger.sync_report(report)
-            return CheckpointRestore(resumed_indices=set(), ledger=ledger)
+            return TaskStateRestore(resumed_indices=set(), ledger=ledger)
 
-        data = checkpoint.load()
+        data = task_store.load_resume_state(task_id)
         entries = data.get("entries", {})
         report_data = data.get("report", {})
         ledger.record_removed_indices(
@@ -70,7 +71,7 @@ class RunLedger:
         ]
         report.final_output_entries = int(report_data.get("final_output_entries", 0) or 0)
         ledger.sync_report(report)
-        return CheckpointRestore(resumed_indices=resumed_indices, ledger=ledger)
+        return TaskStateRestore(resumed_indices=resumed_indices, ledger=ledger)
 
     def record_removed_indices(self, indices: Iterable[int]) -> None:
         self.removed_entry_indices.update(int(index) for index in indices)
@@ -105,17 +106,18 @@ class RunLedger:
             if not self.is_removed(entry.index)
         })
 
-    def save_checkpoint(
+    def save_task_state(
         self,
-        checkpoint: CheckpointStore,
+        task_store: TranslationTaskStore,
+        task_id: str,
         subtitle: Subtitle,
         report: TranslationReport,
         translated_entries: list[SubtitleEntry],
     ) -> None:
         self.sync_report(report)
-        checkpoint.save(self.checkpoint_subtitle(subtitle, translated_entries), report)
+        task_store.save_resume_state(task_id, self.resume_state_subtitle(subtitle, translated_entries), report)
 
-    def checkpoint_subtitle(
+    def resume_state_subtitle(
         self,
         subtitle: Subtitle,
         translated_entries: list[SubtitleEntry],

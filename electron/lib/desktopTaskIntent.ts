@@ -1,7 +1,7 @@
 import type { DesktopJobRequest, FfmpegStatus, PreparedDesktopJobRequest } from "../types.js";
 import { getProvider } from "./providerCatalog.js";
 import { writeDesktopModelConfig } from "./modelConfig.js";
-import { resolveCredential } from "./settingsStore.js";
+import { resolveCredential, savedCredentialEnvOverrides } from "./settingsStore.js";
 
 export interface DesktopTaskIntentContext {
   projectRoot: string;
@@ -15,6 +15,13 @@ export function prepareDesktopTaskIntent(
   context: DesktopTaskIntentContext,
 ): PreparedDesktopJobRequest {
   const nextRequest = cloneDesktopJobRequest(request);
+
+  if (nextRequest.command === "translate") {
+    nextRequest.envOverrides = {
+      ...savedCredentialEnvOverrides(context.settingsPath),
+      ...nextRequest.envOverrides,
+    };
+  }
 
   if (nextRequest.command === "translate" && nextRequest.modelSelection?.mode === "service") {
     const provider = getProvider(nextRequest.modelSelection.providerId);

@@ -12,12 +12,13 @@ if str(SRC_DIR) not in sys.path:
 from subtitle_llm.domain import Subtitle, SubtitleEntry
 from subtitle_llm.llm.types import CompletionResult, CompletionUsage
 from subtitle_llm.pipeline import TranslationRequest, TranslationService
-from subtitle_llm.pipeline.checkpoint import CheckpointStore, file_fingerprint, sidecar_path
+from subtitle_llm.pipeline.checkpoint import file_fingerprint
 from subtitle_llm.pipeline.chunk_translator import ChunkTranslationResult, TracedTranslationText
 from subtitle_llm.pipeline.chunks import PlannedChunk
 from subtitle_llm.pipeline.quality import QualityGate
 from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.pipeline.run_ledger import RunLedger
+from subtitle_llm.pipeline.task_store import TranslationTaskStore
 from subtitle_llm.pipeline.semantic_layout import diagnose_layout_pair, is_orphan_punctuation
 from subtitle_llm.pipeline.semantic_units import (
     apply_semantic_translation,
@@ -488,7 +489,6 @@ class TestSemanticUnits(unittest.TestCase):
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="checkpoint.json",
             context_file="context.txt",
             total_chunks=1,
         )
@@ -521,7 +521,6 @@ class TestSemanticUnits(unittest.TestCase):
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="checkpoint.json",
             context_file="context.txt",
             total_chunks=1,
         )
@@ -555,7 +554,6 @@ class TestSemanticUnits(unittest.TestCase):
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="checkpoint.json",
             context_file="context.txt",
             total_chunks=1,
         )
@@ -587,12 +585,17 @@ class TestSemanticUnits(unittest.TestCase):
                 encoding="utf-8",
             )
             config = make_config(review_mode="tui")
-            checkpoint = CheckpointStore(
-                sidecar_path(output_path, "_checkpoint.json"),
-                file_fingerprint(input_path),
-                "Chinese",
-                "source-first",
-                config.config_version,
+            task_store = TranslationTaskStore(Path(tmp) / "tasks.sqlite3")
+            record = task_store.create_task(
+                input_display=str(input_path),
+                working_directory=tmp,
+                source_subtitle_path=str(input_path),
+                normalized_input_fingerprint=file_fingerprint(input_path),
+                target_language="Chinese",
+                source_language="en",
+                output_format="source-first",
+                output_file=str(output_path),
+                config=config,
             )
             subtitle = Subtitle([
                 SubtitleEntry(1, "00:00:00,000", "00:00:02,000", "Hi .", "好。"),
@@ -600,21 +603,14 @@ class TestSemanticUnits(unittest.TestCase):
             report = TranslationReport(
                 input_file=str(input_path),
                 output_file=str(output_path),
-                checkpoint_file=str(sidecar_path(output_path, "_checkpoint.json")),
-                context_file=str(sidecar_path(output_path, "_context.txt")),
+                context_file=str(output_path.with_name("output_context.txt")),
+                task_id=record.task_id,
+                task_db_file=str(task_store.db_path),
                 auto_layout_repairs=[],
             )
             ledger = RunLedger()
             ledger.record_auto_layout_repair(report, merged_index=1, removed_index=2, reason="punctuation_only")
-            ledger.save_checkpoint(checkpoint, subtitle, report, subtitle.entries)
-
-            checkpoint = CheckpointStore(
-                sidecar_path(output_path, "_checkpoint.json"),
-                file_fingerprint(input_path),
-                "Chinese",
-                "source-first",
-                config.config_version,
-            )
+            ledger.save_task_state(task_store, record.task_id, subtitle, report, subtitle.entries)
             resumed_subtitle = Subtitle([
                 SubtitleEntry(
                     1,
@@ -627,14 +623,16 @@ class TestSemanticUnits(unittest.TestCase):
             resume_report = TranslationReport(
                 input_file=str(input_path),
                 output_file=str(output_path),
-                checkpoint_file=str(sidecar_path(output_path, "_checkpoint.json")),
-                context_file=str(sidecar_path(output_path, "_context.txt")),
+                context_file=str(output_path.with_name("output_context.txt")),
+                task_id=record.task_id,
+                task_db_file=str(task_store.db_path),
             )
 
-            restore = RunLedger.restore_checkpoint(
+            restore = RunLedger.restore_task_state(
                 resume=True,
+                task_id=record.task_id,
                 subtitle=resumed_subtitle,
-                checkpoint=checkpoint,
+                task_store=task_store,
                 report=resume_report,
             )
 
@@ -665,7 +663,6 @@ class TestSemanticUnits(unittest.TestCase):
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="checkpoint.json",
             context_file="context.txt",
             total_chunks=1,
         )
@@ -936,7 +933,6 @@ class TestSemanticUnits(unittest.TestCase):
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="checkpoint.json",
             context_file="context.txt",
             total_chunks=1,
         )
@@ -984,7 +980,6 @@ class TestSemanticUnits(unittest.TestCase):
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="checkpoint.json",
             context_file="context.txt",
             total_chunks=1,
         )
@@ -1031,7 +1026,6 @@ class TestSemanticUnits(unittest.TestCase):
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="checkpoint.json",
             context_file="context.txt",
             total_chunks=1,
         )
@@ -1077,7 +1071,6 @@ class TestSemanticUnits(unittest.TestCase):
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="checkpoint.json",
             context_file="context.txt",
             total_chunks=1,
         )
@@ -1128,7 +1121,6 @@ class TestSemanticUnits(unittest.TestCase):
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="checkpoint.json",
             context_file="context.txt",
             total_chunks=1,
         )
@@ -1178,7 +1170,6 @@ class TestSemanticUnits(unittest.TestCase):
         report = TranslationReport(
             input_file="input.srt",
             output_file="output.srt",
-            checkpoint_file="checkpoint.json",
             context_file="context.txt",
             total_chunks=1,
         )

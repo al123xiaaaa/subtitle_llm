@@ -1,5 +1,5 @@
 import { computed, onMounted, ref } from "vue";
-import type { ModelSelection, ProviderSummary } from "../../../types";
+import type { ModelSelection, ProviderSummary, TranslationTaskSummary } from "../../../types";
 import { useAppShell } from "./useAppShell";
 import { useJobLifecycle } from "./useJobLifecycle";
 import { useProviderSettings } from "./useProviderSettings";
@@ -9,6 +9,9 @@ import { cleanString, looksLikeUrl } from "./controllerUtils";
 export function useAppController() {
   const api = window.subtitleLLM;
   const isBusy = ref(false);
+  const taskRecords = ref<TranslationTaskSummary[]>([]);
+  const taskRecordsStatus = ref("加载中");
+  const showDeletedTaskRecords = ref(false);
   const shell = useAppShell(isBusy);
   let taskForms = {} as ReturnType<typeof useTaskForms>;
   let jobLifecycle = {} as ReturnType<typeof useJobLifecycle>;
@@ -64,6 +67,7 @@ export function useAppController() {
         outputFormat: taskForms.translateForm.outputFormat,
         reviewMode: taskForms.translateForm.reviewMode,
         refineTranslation: taskForms.translateForm.refineTranslation,
+        forceAsr: taskForms.translateForm.forceAsr,
         resume: taskForms.translateForm.resume,
         embedVideo,
         video,
@@ -112,6 +116,62 @@ export function useAppController() {
     return providerState.modelSelection();
   }
 
+  async function refreshTaskRecords(): Promise<void> {
+    try {
+      taskRecords.value = await api.listTranslationTasks(showDeletedTaskRecords.value);
+      taskRecordsStatus.value = taskRecords.value.length ? "" : "暂无翻译任务记录";
+    } catch (error) {
+      taskRecordsStatus.value = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function continueTaskRecord(record: TranslationTaskSummary): Promise<void> {
+    if (isBusy.value) {
+      return;
+    }
+    await jobLifecycle.startJob({
+      command: "translate",
+      options: {
+        taskId: record.task_id,
+        resume: true,
+      },
+      modelSelection: null,
+    });
+  }
+
+  async function softDeleteTaskRecord(record: TranslationTaskSummary): Promise<void> {
+    const result = await api.softDeleteTranslationTask(record.task_id);
+    if (!result.ok) {
+      jobLifecycle.appendLog(`${result.error || result.message || "删除任务记录失败"}\n`, "stderr");
+    }
+    await refreshTaskRecords();
+  }
+
+  async function restoreTaskRecord(record: TranslationTaskSummary): Promise<void> {
+    const result = await api.restoreTranslationTask(record.task_id);
+    if (!result.ok) {
+      jobLifecycle.appendLog(`${result.error || result.message || "恢复任务记录失败"}\n`, "stderr");
+    }
+    await refreshTaskRecords();
+  }
+
+  async function openTaskOutput(record: TranslationTaskSummary): Promise<void> {
+    if (record.output_file) {
+      await api.openPath(record.output_file);
+    }
+  }
+
+  async function showTaskOutput(record: TranslationTaskSummary): Promise<void> {
+    if (record.output_file) {
+      await api.showInFolder(record.output_file);
+    }
+  }
+
+  async function toggleDeletedTaskRecords(): Promise<void> {
+    showDeletedTaskRecords.value = !showDeletedTaskRecords.value;
+    await refreshTaskRecords();
+  }
+
   const formActions = {
     canStartMux,
     canStartTranslate,
@@ -132,10 +192,24 @@ export function useAppController() {
     visibleOnboardingProviders: providerState.visibleOnboardingProviders,
   };
 
+  const records = {
+    continueTaskRecord,
+    openTaskOutput,
+    refreshTaskRecords,
+    restoreTaskRecord,
+    showDeletedTaskRecords,
+    showTaskOutput,
+    softDeleteTaskRecord,
+    taskRecords,
+    taskRecordsStatus,
+    toggleDeletedTaskRecords,
+  };
+
   onMounted(async () => {
     try {
       providerState.updateAppState(await api.getState());
       taskForms.syncEmbedDefault();
+      await refreshTaskRecords();
     } catch (error) {
       jobLifecycle.appendLog(`${error instanceof Error ? error.message : String(error)}\n`, "stderr");
     }
@@ -148,6 +222,7 @@ export function useAppController() {
     job: jobLifecycle,
     onboarding,
     providerState,
+    records,
     shell,
   };
 }

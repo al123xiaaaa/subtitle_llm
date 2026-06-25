@@ -21,6 +21,7 @@ export function useTaskForms(api: Window["subtitleLLM"], options: TaskFormsOptio
     config: "",
     useYamlConfig: false,
     refineTranslation: false,
+    forceAsr: false,
     resume: false,
     embedMkv: false,
     video: "",
