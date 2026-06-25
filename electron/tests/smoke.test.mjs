@@ -10,6 +10,7 @@ import { createFfmpegDetector } from "../../dist/electron/lib/ffmpegStatus.js";
 import { buildDesktopModelConfigContent } from "../../dist/electron/lib/modelConfig.js";
 import {
   applyProgressEvent,
+  chunkLegendItems,
   chunkSummary,
   createInitialJobProgressState,
   finishProgress,
@@ -277,6 +278,10 @@ progress = applyProgressEvent(
   1300,
 );
 assert.equal(progress.chunks[1].status, "repairing");
+assert.deepEqual(chunkLegendItems(progress.chunks), [
+  { status: "waiting", label: "等待" },
+  { status: "repairing", label: "修复中" },
+]);
 progress = applyProgressEvent(
   progress,
   {

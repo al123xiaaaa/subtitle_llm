@@ -32,6 +32,11 @@ export interface ChunkActivityItem {
   updatedAt: number;
 }
 
+export interface ChunkLegendItem {
+  status: ChunkProgressStatus;
+  label: string;
+}
+
 export interface JobProgressState {
   command: CommandName | "";
   stages: ProgressStageItem[];
@@ -71,6 +76,17 @@ const EMPTY_USAGE: Required<CliProgressUsage> = {
   completion_tokens: 0,
   total_tokens: 0,
 };
+
+const CHUNK_STATUS_ORDER: ChunkProgressStatus[] = [
+  "waiting",
+  "running",
+  "repairing",
+  "review",
+  "done",
+  "warning",
+  "failed",
+  "skipped",
+];
 
 export function createInitialJobProgressState(command: CommandName | "" = "", now = Date.now()): JobProgressState {
   return {
@@ -184,6 +200,14 @@ export function chunkSummary(chunks: ChunkActivityItem[]): string {
     })
     .filter(Boolean);
   return `${chunks.length} 个片段${parts.length ? `，${parts.join("，")}` : ""}`;
+}
+
+export function chunkLegendItems(chunks: ChunkActivityItem[]): ChunkLegendItem[] {
+  const visibleStatuses = new Set(chunks.map((chunk) => chunk.status));
+  return CHUNK_STATUS_ORDER.filter((status) => visibleStatuses.has(status)).map((status) => ({
+    status,
+    label: statusLabel(status),
+  }));
 }
 
 export function chunkTooltip(chunk: ChunkActivityItem): string {

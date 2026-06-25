@@ -2,6 +2,7 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import type { CliProgressEvent, CommandName } from "../../../types";
 import {
   applyProgressEvent,
+  chunkLegendItems,
   chunkSummary,
   chunkTooltip,
   createInitialJobProgressState,
@@ -19,6 +20,7 @@ export function useJobProgress() {
 
   const progressStages = computed(() => progressState.value.stages);
   const progressChunks = computed(() => progressState.value.chunks);
+  const progressChunkLegendItems = computed(() => chunkLegendItems(progressState.value.chunks));
   const selectedProgressChunk = computed(() => selectedChunk(progressState.value));
   const progressChunkSummary = computed(() => chunkSummary(progressState.value.chunks));
   // 进度主区状态视觉：空闲/运行/完成/失败/带风险，驱动 current-progress 卡片配色。
@@ -83,6 +85,7 @@ export function useJobProgress() {
     chunkTooltip,
     clearProgress,
     finishJobProgress,
+    progressChunkLegendItems,
     progressChunkSummary,
     progressChunks,
     progressIsEmpty,
