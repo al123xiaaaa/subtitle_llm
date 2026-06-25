@@ -51,12 +51,17 @@ if (commandLog) {
 
 setTimeout(() => {
   if (command === "tasks") {
-    console.log("[]");
+    console.log(process.env.SUBTITLE_LLM_E2E_TASKS_JSON || "[]");
     process.exit(0);
   }
 
   if (command === "translate") {
     const output = optionValue("--output") || "data/output/youtube.zh.srt";
+    if (process.env.SUBTITLE_LLM_E2E_NOISY_STDOUT === "1") {
+      for (let index = 1; index <= 28; index += 1) {
+        console.log("[stderr] Fetching model shard " + String(index).padStart(2, "0") + "/28 " + "█".repeat(18) + " /Users/xiaguangwei/.cache/huggingface/hub/models--FunAudioLLM--SenseVoiceSmall/snapshots/3847d57b6bdf2dd8875cb1508d2af43d80a16bf7/very-long-requirements-path.txt");
+      }
+    }
     progress({
       stage: "startup",
       detail: "load_config",
@@ -172,6 +177,7 @@ process.exit(0);
 const tests = [
   ["首次启动可以保存 DeepSeek API Key，且不泄露明文", testOnboardingSavesKey],
   ["YouTube URL 翻译会自动启用 MKV，并传递正确 CLI 参数", testYoutubeTranslateWithMkv],
+  ["长日志和多条任务记录保持在各自滚动区域", testBusyLayoutKeepsSectionsBounded],
   ["YouTube URL 可以勾选强制 ASR，不下载原字幕", testYoutubeTranslateForceAsr],
   ["翻译默认不二次润色，勾选后传递 refine 参数", testRefineToggle],
   ["已有字幕和视频可以单独生成 MKV", testManualMuxFlow],
@@ -238,6 +244,74 @@ async function testYoutubeTranslateWithMkv() {
     assert.ok(configPath, "expected generated config path");
     assert.match(fs.readFileSync(configPath, "utf8"), /model: "deepseek-v4-pro"/);
   });
+}
+
+async function testBusyLayoutKeepsSectionsBounded() {
+  const taskRecords = Array.from({ length: 12 }, (_, index) => ({
+    task_id: `layout-task-${index + 1}`,
+    status: index % 3 === 0 ? "failed" : "completed",
+    input_display:
+      index === 0
+        ? "Q3xdkWCVNx0?si=TI8BIOJKpsbbHTBY"
+        : `/Users/xiaguangwei/development/python/subtitle_llm/data/input/Anatoli Kopadze - Peter Steinberger, the guy who built OpenClaw just shared his actual workflow ${index + 1}.wav`,
+    working_directory: projectRoot,
+    source_subtitle_path: "",
+    target_language: "Chinese",
+    source_language: "en",
+    output_format: "source-first",
+    output_file: `/Users/xiaguangwei/development/python/subtitle_llm/data/output/Anatoli Kopadze - Peter Steinberger, the guy who built OpenClaw just shared his actual workflow ${index + 1}.zh.srt`,
+    created_at: "2026-06-25T10:00:00.000Z",
+    updated_at: `2026-06-25T10:${String(index).padStart(2, "0")}:00.000Z`,
+    deleted_at: null,
+  }));
+
+  await withApp(
+    {
+      env: {
+        DEEPSEEK_API_KEY: "env-e2e-deepseek",
+        SUBTITLE_LLM_E2E_NOISY_STDOUT: "1",
+        SUBTITLE_LLM_E2E_TASKS_JSON: JSON.stringify(taskRecords),
+      },
+    },
+    async ({ page }) => {
+      await page.locator("#onboarding").waitFor({ state: "hidden" });
+      await page.locator(".task-record-item").first().waitFor({ state: "visible" });
+      await page.locator("#translateInput").fill("input.srt");
+      await page.locator("#startTranslate").click();
+      await waitForRunStatus(page, "完成");
+      await page.locator("#logDetails summary").click();
+
+      const layout = await page.evaluate(() => {
+        const mainWorkspace = document.querySelector(".main-workspace");
+        const logBody = document.querySelector("#logBody");
+        const taskList = document.querySelector(".task-record-list");
+        if (!mainWorkspace || !logBody || !taskList) {
+          throw new Error("layout nodes missing");
+        }
+        return {
+          mainScrollHeight: mainWorkspace.scrollHeight,
+          mainClientHeight: mainWorkspace.clientHeight,
+          logScrollHeight: logBody.scrollHeight,
+          logClientHeight: logBody.clientHeight,
+          taskScrollHeight: taskList.scrollHeight,
+          taskClientHeight: taskList.clientHeight,
+        };
+      });
+
+      assert.ok(
+        layout.mainScrollHeight <= layout.mainClientHeight + 1,
+        `main workspace should not become the overflow container: ${layout.mainScrollHeight} > ${layout.mainClientHeight}`,
+      );
+      assert.ok(
+        layout.logScrollHeight > layout.logClientHeight,
+        `log body should own log overflow: ${layout.logScrollHeight} <= ${layout.logClientHeight}`,
+      );
+      assert.ok(
+        layout.taskScrollHeight > layout.taskClientHeight,
+        `task list should own record overflow: ${layout.taskScrollHeight} <= ${layout.taskClientHeight}`,
+      );
+    },
+  );
 }
 
 async function testYoutubeTranslateForceAsr() {

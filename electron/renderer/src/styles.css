@@ -237,7 +237,7 @@ p {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 /* —— 进度主区（主角）—— */
@@ -249,6 +249,7 @@ p {
   flex-direction: column;
   border-radius: 0;
   background: transparent;
+  overflow: hidden;
 }
 
 .run-panel.is-idle {
@@ -748,8 +749,12 @@ select {
 
 .progress-dashboard {
   display: grid;
+  flex: 1 1 auto;
   gap: var(--space-4);
+  min-height: 0;
   padding: var(--space-5) var(--space-6);
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .run-panel.is-idle .progress-dashboard {
@@ -1083,10 +1088,13 @@ select {
 /* —— 结果文件 —— */
 .result-files {
   display: grid;
+  flex: 0 0 auto;
   gap: var(--space-2);
+  max-height: min(30vh, 260px);
   padding: var(--space-4) var(--space-6);
   border-top: 1px solid var(--line);
   background: var(--surface-soft);
+  overflow: auto;
 }
 
 .result-file-row {
@@ -1128,8 +1136,10 @@ select {
 /* —— 详细日志 —— */
 .log-details {
   display: grid;
+  flex: 0 0 auto;
   min-height: 0;
   border-top: 1px solid var(--line);
+  overflow: hidden;
 }
 
 .log-details summary {
@@ -1141,7 +1151,7 @@ select {
 }
 
 #logBody {
-  max-height: 280px;
+  max-height: clamp(160px, 24vh, 280px);
   margin: 0;
   padding: var(--space-4) var(--space-6);
   overflow: auto;
@@ -1150,17 +1160,21 @@ select {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: var(--text-xs);
   line-height: 1.6;
-  white-space: pre-wrap;
+  white-space: pre;
 }
 
 /* ===================== 翻译任务记录 ===================== */
 .task-records-panel {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   flex: 0 0 auto;
   gap: var(--space-4);
   min-width: 0;
+  max-height: clamp(220px, 32vh, 340px);
   border-top: 1px solid var(--line);
   padding: var(--space-5) var(--space-6);
+  overflow: hidden;
+  background: var(--bg);
 }
 
 .task-records-heading {
@@ -1199,6 +1213,9 @@ select {
 .task-record-list {
   display: grid;
   gap: var(--space-2);
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .task-record-item {
