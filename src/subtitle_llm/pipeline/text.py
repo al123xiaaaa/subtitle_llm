@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from subtitle_llm.domain import SubtitleEntry
+
+if TYPE_CHECKING:
+    import tiktoken
 
 STRONG_SENTENCE_ENDINGS = {".", "!", "?", "。", "！", "？", "…"}
 TRAILING_CLOSERS = set("\"'”’)]}）】》」』〉")
@@ -117,22 +120,54 @@ def build_boundary_context(
     return {"text": text, "risks": risks}
 
 
-def chunk_list(entries: list[SubtitleEntry], chunk_size: int) -> list[list[SubtitleEntry]]:
+def chunk_list(
+    entries: list[SubtitleEntry],
+    chunk_size: int,
+    *,
+    max_output_tokens: int | None = None,
+    encoder: tiktoken.Encoding | None = None,
+) -> list[list[SubtitleEntry]]:
+    """按条目数与（可选的）输出 token 预算切分字幕。
+
+    - ``chunk_size``：每个块的条目数上限（始终生效）。
+    - ``max_output_tokens``：每块的输出 token 预算。命中即切，避免翻译输出超过
+      ``max_tokens`` 被截断。需与 ``encoder`` 同时提供；不传则只按条目数切（向后兼容）。
+
+    两条约束取严格者。块内仍优先落在句末标点（在两约束都未超的窗口内）；
+    若 token 预算先到则按预算切（截断防护优先于断句美观）。
+    """
     chunks: list[list[SubtitleEntry]] = []
     i = 0
     n = len(entries)
     sentence_endings = {".", "!", "?"}
+    budget_active = max_output_tokens is not None and encoder is not None
 
     while i < n:
         end = min(i + chunk_size, n)
         split = end
 
+        # token 预算约束：在 [i, end) 内找不超预算的最远切点。
+        if budget_active:
+            assert max_output_tokens is not None and encoder is not None
+            budget_end = i
+            for j in range(i, end):
+                candidate_texts = [entries[k].original_text for k in range(i, j + 1)]
+                if estimate_chunk_output_tokens(candidate_texts, encoder) > max_output_tokens:
+                    break
+                budget_end = j + 1
+            # 至少保留 1 条，避免零长块死循环。
+            budget_end = max(budget_end, i + 1)
+            if budget_end < end:
+                end = budget_end
+                split = end
+
+        # 句子边界对齐：在 [i, end) 内优先落在句末标点。
         for j in range(end - 1, i - 1, -1):
             if any(entries[j].original_text.rstrip().endswith(punct) for punct in sentence_endings):
                 split = j + 1
                 break
 
-        if split == end:
+        if split == end and not budget_active:
             extended_end = min(end + chunk_size, n)
             for j in range(end, extended_end):
                 if any(entries[j].original_text.rstrip().endswith(punct) for punct in sentence_endings):
@@ -145,6 +180,13 @@ def chunk_list(entries: list[SubtitleEntry], chunk_size: int) -> list[list[Subti
         i = split
 
     return chunks
+
+
+def estimate_chunk_output_tokens(source_texts: list[str], encoder: tiktoken.Encoding) -> int:
+    """估算一批源文本翻译后的输出 token（膨胀系数 + 每条结构开销）。"""
+    from subtitle_llm.llm.token_counter import estimate_output_tokens
+
+    return estimate_output_tokens(source_texts, encoder)
 
 
 def format_chunk(chunk: list[SubtitleEntry]) -> str:

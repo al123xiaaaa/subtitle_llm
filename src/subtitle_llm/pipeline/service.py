@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from subtitle_llm.domain import Subtitle, SubtitleEntry
 from subtitle_llm.io import SubtitleIO
 from subtitle_llm.llm import ChatClient, create_chat_client
+from subtitle_llm.llm.token_counter import build_token_encoder
 from subtitle_llm.llm.types import CompletionUsage
 from subtitle_llm.pipeline.checkpoint import file_fingerprint, sidecar_path
 from subtitle_llm.pipeline.chunk_translator import ChunkTranslationResult, ChunkTranslator
@@ -374,6 +375,8 @@ class TranslationService:
             chunk_size=self.config.pipeline.chunk_size,
             context_window_size=self.config.pipeline.context_window_size,
             ignore_subtitle_length=self.config.pipeline.ignore_subtitle_length,
+            max_output_tokens=self._chunk_output_token_budget(),
+            encoder=build_token_encoder(self.config.translation_model.model),
         )
         planned_chunks = planner.plan(translation_entries, resumed_indices=planner_resumed_indices)
         report.total_chunks = len(planned_chunks)
@@ -2183,6 +2186,14 @@ class TranslationService:
         if mode == "always":
             return bool(units)
         return any(len(unit.entries) > 1 for unit in units)
+
+    def _chunk_output_token_budget(self) -> int:
+        """每个 chunk 的输出 token 预算：max_tokens × 0.8，留 20% 余量防 JSON 截断。
+
+        让 chunk 规划感知模型输出上限，避免单个 chunk 的翻译 JSON 超过 max_tokens
+        被强制截断（表现为「Unterminated string」解析失败、整片回退原文）。
+        """
+        return int(self.config.translation_model.max_tokens * 0.8)
 
     def _refine_translation_enabled(self, request: TranslationRequest) -> bool:
         if request.refine_translation is not None:

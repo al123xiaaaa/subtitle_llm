@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from subtitle_llm.domain import SubtitleEntry
 from subtitle_llm.pipeline.text import build_boundary_context, chunk_list
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 @dataclass
@@ -15,14 +19,29 @@ class PlannedChunk:
 
 
 class ChunkPlanner:
-    def __init__(self, chunk_size: int, context_window_size: int, ignore_subtitle_length: int):
+    def __init__(
+        self,
+        chunk_size: int,
+        context_window_size: int,
+        ignore_subtitle_length: int,
+        *,
+        max_output_tokens: int | None = None,
+        encoder: tiktoken.Encoding | None = None,
+    ):
         self.chunk_size = chunk_size
         self.context_window_size = context_window_size
         self.ignore_subtitle_length = ignore_subtitle_length
+        self.max_output_tokens = max_output_tokens
+        self.encoder = encoder
 
     def plan(self, all_entries: list[SubtitleEntry], resumed_indices: set[int] | None = None) -> list[PlannedChunk]:
         resumed_indices = resumed_indices or set()
-        chunks = chunk_list(all_entries, self.chunk_size)
+        chunks = chunk_list(
+            all_entries,
+            self.chunk_size,
+            max_output_tokens=self.max_output_tokens,
+            encoder=self.encoder,
+        )
         planned: list[PlannedChunk] = []
 
         for chunk in chunks:
