@@ -845,6 +845,37 @@ select {
   font-weight: var(--weight-semibold);
 }
 
+/* 进度主区状态色：current-progress 左侧色条随 currentStatus 变化 */
+.current-progress {
+  border-left: 3px solid var(--gray-300);
+}
+
+.current-progress.is-running {
+  border-left-color: var(--accent);
+}
+
+.current-progress.is-done {
+  border-left-color: var(--success);
+}
+
+.current-progress.is-warning {
+  border-left-color: var(--warning);
+}
+
+.current-progress.is-failed {
+  border-left-color: var(--danger);
+}
+
+.progress-empty-hint {
+  padding: var(--space-3) var(--space-4);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
 .progress-hint {
   padding: 0 var(--space-1);
   color: var(--warning);
@@ -1012,6 +1043,45 @@ select {
 .chunk-cell.is-selected {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
+}
+
+.chunk-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.chunk-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 1px solid rgba(28, 33, 31, 0.08);
+  border-radius: 3px;
+}
+
+.legend-swatch.is-running {
+  background: var(--info);
+}
+
+.legend-swatch.is-done {
+  background: var(--success);
+}
+
+.legend-swatch.is-warning {
+  background: linear-gradient(135deg, var(--success) 0 58%, var(--warning) 58% 100%);
+}
+
+.legend-swatch.is-failed {
+  background: var(--danger);
 }
 
 .chunk-detail {

@@ -58,9 +58,11 @@ const {
   providers,
   progressChunkSummary,
   progressChunks,
+  progressIsEmpty,
   progressLongWaitHint,
   progressStages,
   progressState,
+  progressStatusClass,
   progressWaitText,
   runStatus,
   runtimeInfo,
@@ -262,7 +264,9 @@ const {
           id="progressDashboard"
           class="progress-dashboard"
         >
-          <div class="current-progress">
+          <div
+            :class="['current-progress', progressStatusClass]"
+          >
             <div>
               <span class="progress-kicker">{{ progressState.currentLabel }}</span>
               <strong id="progressCurrentMessage">{{ progressState.currentMessage }}</strong>
@@ -272,6 +276,12 @@ const {
               class="progress-wait"
             >{{ progressWaitText }}</span>
           </div>
+          <p
+            v-if="progressIsEmpty"
+            class="progress-empty-hint"
+          >
+            从右侧选择一个任务并配置，然后开始。运行时这里会显示程序当前在做什么。
+          </p>
           <p
             id="progressLongWaitHint"
             :class="['progress-hint', { 'is-hidden': !progressLongWaitHint }]"
@@ -322,6 +332,15 @@ const {
                 :aria-label="chunkTooltip(chunk)"
                 @click="selectChunk(chunk.index)"
               />
+            </div>
+            <div
+              class="chunk-legend"
+              aria-hidden="true"
+            >
+              <span class="chunk-legend-item"><i class="legend-swatch is-running" />处理中</span>
+              <span class="chunk-legend-item"><i class="legend-swatch is-done" />完成</span>
+              <span class="chunk-legend-item"><i class="legend-swatch is-warning" />带风险</span>
+              <span class="chunk-legend-item"><i class="legend-swatch is-failed" />失败</span>
             </div>
             <div
               v-if="selectedProgressChunk"

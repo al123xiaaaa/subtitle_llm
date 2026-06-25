@@ -21,6 +21,11 @@ export function useJobProgress() {
   const progressChunks = computed(() => progressState.value.chunks);
   const selectedProgressChunk = computed(() => selectedChunk(progressState.value));
   const progressChunkSummary = computed(() => chunkSummary(progressState.value.chunks));
+  // 进度主区状态视觉：空闲/运行/完成/失败/带风险，驱动 current-progress 卡片配色。
+  const progressStatusClass = computed(() => `is-${progressState.value.currentStatus}`);
+  const progressIsEmpty = computed(
+    () => progressState.value.currentStatus === "waiting" && progressChunks.value.length === 0,
+  );
   const progressWaitSeconds = computed(() => {
     if (!progressState.value.lastActivityAt || progressState.value.currentStatus !== "running") {
       return 0;
@@ -80,9 +85,11 @@ export function useJobProgress() {
     finishJobProgress,
     progressChunkSummary,
     progressChunks,
+    progressIsEmpty,
     progressLongWaitHint,
     progressStages,
     progressState,
+    progressStatusClass,
     progressWaitText,
     recordProgress,
     resetProgress,
