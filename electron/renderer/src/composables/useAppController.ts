@@ -1,4 +1,5 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { Languages, Download, AudioLines, Settings as SettingsIcon, X } from "@lucide/vue";
 import type {
   AppState,
   CliResultEvent,
@@ -20,11 +21,11 @@ const PROGRESS_EVENT_PREFIX = "SUBTITLE_LLM_PROGRESS ";
 type TaskTab = "translate" | "download" | "transcribe" | "settings";
 type ResultTarget = "subtitle" | "trace" | "video";
 
-const taskTabs: Array<{ id: TaskTab; label: string }> = [
-  { id: "translate", label: "翻译字幕" },
-  { id: "download", label: "下载字幕" },
-  { id: "transcribe", label: "音频转写" },
-  { id: "settings", label: "设置" },
+const taskTabs: Array<{ id: TaskTab; label: string; icon: unknown }> = [
+  { id: "translate", label: "翻译字幕", icon: Languages },
+  { id: "download", label: "下载字幕", icon: Download },
+  { id: "transcribe", label: "音频转写", icon: AudioLines },
+  { id: "settings", label: "设置", icon: SettingsIcon },
 ];
 
 function cleanString(value: unknown): string {
@@ -48,6 +49,7 @@ export function useAppController() {
   const api = window.subtitleLLM;
   const appState = ref<AppState | null>(null);
   const activeTab = ref<TaskTab>("translate");
+  const configDrawerOpen = ref(true);
   const activeJobId = ref("");
   const activeCommand = ref<CommandName | "">("");
   const isBusy = ref(false);
@@ -144,6 +146,20 @@ export function useAppController() {
     }
     return appState.value.hasMainPy ? appState.value.pythonExecutable : "未找到 main.py";
   });
+  const drawerSubtitle = computed(() => {
+    switch (activeTab.value) {
+      case "translate":
+        return "SRT、转写 JSON 或视频 URL";
+      case "download":
+        return "视频地址与字幕语言";
+      case "transcribe":
+        return "生成 SRT 后可继续翻译";
+      case "settings":
+        return "管理翻译服务 API Key";
+      default:
+        return "";
+    }
+  });
   const visibleOnboardingProviders = computed(() =>
     providers.value.filter((provider) => ["deepseek", "gemini", "openai"].includes(provider.id)),
   );
@@ -230,13 +246,20 @@ export function useAppController() {
   }
 
   function setActiveTab(tab: TaskTab): void {
-    if (!isBusy.value) {
-      activeTab.value = tab;
-    }
+    activeTab.value = tab;
+    configDrawerOpen.value = true;
+  }
+
+  function toggleConfigDrawer(): void {
+    configDrawerOpen.value = !configDrawerOpen.value;
   }
 
   function setBusy(nextBusy: boolean): void {
     isBusy.value = nextBusy;
+    // 任务运行时收起配置抽屉，让进度主区独占；任务结束后不自动展开，留给用户决定。
+    if (nextBusy) {
+      configDrawerOpen.value = false;
+    }
     if (!nextBusy) {
       activeJobId.value = "";
     }
@@ -749,6 +772,7 @@ export function useAppController() {
     chunkStatusLabel,
     chunkTooltip,
     chooseAudio,
+    configDrawerOpen,
     chooseDownloadDir,
     chooseInput,
     chooseMuxSubtitle,
@@ -764,6 +788,8 @@ export function useAppController() {
     configureProviderText,
     customModelInput,
     downloadForm,
+    drawerCloseIcon: X,
+    drawerSubtitle,
     ffmpegAvailable,
     hasAnyResult,
     hasSubtitleResult,
@@ -824,5 +850,6 @@ export function useAppController() {
     transcribeForm,
     translateForm,
     visibleOnboardingProviders,
+    toggleConfigDrawer,
   };
 }
