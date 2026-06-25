@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from subtitle_llm.domain import SubtitleEntry
+from subtitle_llm.domain import Subtitle, SubtitleEntry
 
 HARD_CORRECTION_TYPES = {"person", "place", "street", "inn", "organization", "institution"}
 
@@ -176,6 +176,93 @@ def find_unadopted_hard_corrections(
     return flags
 
 
+def subtitle_with_source_display_corrections(
+    subtitle: Subtitle,
+    corrections: list[SourceCorrection],
+) -> tuple[Subtitle, int]:
+    if not corrections:
+        return subtitle, 0
+
+    source_by_index = {entry.index: entry.original_text for entry in subtitle.entries}
+    corrections_by_index: dict[int, list[SourceCorrection]] = {}
+    for correction in corrections:
+        if not should_enforce_hard(correction):
+            continue
+        for cue_id in locate_observed_cues(correction, source_by_index):
+            corrections_by_index.setdefault(cue_id, []).append(correction)
+
+    if not corrections_by_index:
+        return subtitle, 0
+
+    changed = 0
+    corrected_entries: list[SubtitleEntry] = []
+    for entry in subtitle.entries:
+        original_text = entry.original_text
+        display_text = corrected_source_display_text(
+            original_text,
+            corrections_by_index.get(entry.index, []),
+        )
+        if display_text != original_text:
+            changed += 1
+        corrected_entries.append(
+            SubtitleEntry(
+                index=entry.index,
+                start_time=entry.start_time,
+                end_time=entry.end_time,
+                original_text=display_text,
+                translated_text=entry.translated_text,
+                needs_retranslation=entry.needs_retranslation,
+            )
+        )
+    return Subtitle(corrected_entries), changed
+
+
+def corrected_source_display_text(text: str, corrections: list[SourceCorrection]) -> str:
+    corrected = text
+    for correction in corrections:
+        if not should_enforce_hard(correction):
+            continue
+        corrected = replace_source_display_correction(corrected, correction)
+    return normalize_source_display_punctuation(corrected)
+
+
+def replace_source_display_correction(text: str, correction: SourceCorrection) -> str:
+    observed = source_display_replacement_observed_phrase(correction)
+    pattern = flexible_ascii_phrase_pattern(observed)
+    if pattern is None:
+        return text
+    return pattern.sub(correction.corrected, text, count=1)
+
+
+def source_display_replacement_observed_phrase(correction: SourceCorrection) -> str:
+    tokens = ascii_tokens(correction.observed)
+    corrected_compact = compact_ascii(correction.corrected)
+    if len(tokens) <= 1 or not corrected_compact:
+        return correction.observed
+
+    exact_candidates: list[tuple[int, str]] = []
+    for start in range(len(tokens)):
+        for end in range(len(tokens), start, -1):
+            phrase = " ".join(tokens[start:end])
+            if compact_ascii(phrase) == corrected_compact:
+                exact_candidates.append((end - start, phrase))
+    if exact_candidates:
+        return max(exact_candidates, key=lambda item: item[0])[1]
+    return correction.observed
+
+
+def flexible_ascii_phrase_pattern(phrase: str) -> re.Pattern[str] | None:
+    tokens = ascii_tokens(phrase)
+    if not tokens:
+        return None
+    pattern = r"(?<![A-Za-z0-9])" + r"[\W_]+".join(re.escape(token) for token in tokens) + r"(?![A-Za-z0-9])"
+    return re.compile(pattern, re.IGNORECASE)
+
+
+def normalize_source_display_punctuation(text: str) -> str:
+    return re.sub(r"([.!?])(?=[A-Z])", r"\1 ", text)
+
+
 def should_enforce_hard(correction: SourceCorrection) -> bool:
     if correction.confidence not in {"high", "medium"}:
         return False
@@ -223,3 +310,7 @@ def collapse_spaces(value: str) -> str:
 
 def compact_ascii(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def ascii_tokens(value: str) -> list[str]:
+    return re.findall(r"[A-Za-z0-9]+", value)

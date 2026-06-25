@@ -852,6 +852,13 @@ class TestSemanticUnits(unittest.TestCase):
                 [entry.translated_text for entry in result.subtitle.entries],
                 ["我到达了都铎伦敦，", "所以，齐普赛街。都铎伦敦的主要市场大街。"],
             )
+            self.assertEqual(
+                result.subtitle.entries[1].original_text,
+                "so cheap side.The main market street of Tudor London",
+            )
+            output_text = output_path.read_text(encoding="utf-8")
+            self.assertIn("so Cheapside. The main market street of Tudor London", output_text)
+            self.assertNotIn("so cheap side.The main market street of Tudor London", output_text)
             self.assertTrue(any("Repair exactly one timed subtitle cue" in prompt for prompt in client.prompts))
             self.assertEqual(result.report.token_usage.total_tokens, 11)
 

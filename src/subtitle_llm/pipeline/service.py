@@ -42,6 +42,7 @@ from subtitle_llm.pipeline.source_corrections import (
     SourceCorrectionFlag,
     find_unadopted_hard_corrections,
     source_corrections_from_context,
+    subtitle_with_source_display_corrections,
 )
 from subtitle_llm.pipeline.text import parse_translation_results
 from subtitle_llm.progress_contract import ProgressContract
@@ -380,8 +381,14 @@ class TranslationService:
             progress_contract.finalizing_subtitle()
             run_ledger.finalize_subtitle(subtitle, translated_entries, report)
             run_ledger.save_checkpoint(checkpoint, subtitle, report, translated_entries)
+            output_subtitle, source_display_corrections = subtitle_with_source_display_corrections(
+                subtitle,
+                source_corrections_from_context(context),
+            )
+            if source_display_corrections:
+                logger.info("写出字幕时应用源文展示修正: entries=%s", source_display_corrections)
             progress_contract.writing_srt(output_file)
-            SubtitleIO.write_srt(subtitle, output_file, output_format=output_format)
+            SubtitleIO.write_srt(output_subtitle, output_file, output_format=output_format)
             progress_contract.srt_written(output_file)
             if emit_complete:
                 progress_contract.complete(total_chunks=report.total_chunks)
