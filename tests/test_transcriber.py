@@ -188,7 +188,11 @@ class TestFunasrAsrBackend(unittest.TestCase):
 
     @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
     def test_prefers_word_timestamps_over_drifting_sentence_info(self, mock_load):
-        """sentence_info 句级时间漂移时，优先使用顶层 words/timestamp 重建原始时间轴。"""
+        """sentence_info 句级时间漂移时，优先使用顶层 words/timestamp 重建原始时间轴。
+
+        这里 sentence_info 不带段内子时间戳（timestamp 字段缺失），对齐路径会失败并
+        退化为按标点断句，时间仍取自顶层 timestamp（无漂移）。
+        """
         mock_model = MagicMock()
         mock_model.generate.return_value = [{
             "sentence_info": [
@@ -235,6 +239,107 @@ class TestFunasrAsrBackend(unittest.TestCase):
         self.assertEqual(cues[-1].text, "In sacramento.")
         self.assertEqual(cues[-1].start_ms, 120160)
         self.assertEqual(cues[-1].end_ms, 123700)
+
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_sentence_alignment_uses_semantic_segments(self, mock_load):
+        """方向 A：sentence_info 子时间戳对齐顶层词轴，按语义段切而非按句号切。
+
+        关键：sentence_info 第一段文本含中间句号 "workflow. I think"，对齐后应保留在同一
+        条 cue（不会在 workflow. 处断开），且起止毫秒取自顶层 timestamp（无漂移）。
+        """
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{
+            "sentence_info": [
+                {
+                    "start": 1000000,  # 故意漂移的句级时间，不应被采用
+                    "end": 1003000,
+                    "text": "people love your workflow. I think",
+                    "timestamp": [[30, 90], [330, 390], [990, 1050], [2070, 2130], [2250, 2310], [2790, 2850]],
+                },
+                {
+                    "start": 1004000,
+                    "end": 1007000,
+                    "text": "this is great",
+                    "timestamp": [[3210, 3270], [3450, 3510], [3690, 3750]],
+                },
+            ],
+            "words": ["people", "love", "your", "workflow", ".", "I", "think", "this", "is", "great", "."],
+            "timestamp": [
+                [30, 90], [330, 390], [990, 1050], [2070, 2130], [2130, 2190],
+                [2250, 2310], [2790, 2850], [3210, 3270], [3450, 3510], [3690, 3750], [3750, 3810],
+            ],
+        }]
+        mock_load.return_value = mock_model
+
+        cues = self._make_backend().transcribe("/tmp/a.wav", "English")
+
+        # 语义两段，而非按句号切成三段。
+        self.assertEqual(len(cues), 2)
+        # 第一段保留中间句号，时间取自顶层 timestamp（30..2850，不是漂移的 1000xxx）。
+        self.assertEqual(cues[0].text, "people love your workflow. I think")
+        self.assertEqual(cues[0].start_ms, 30)
+        self.assertEqual(cues[0].end_ms, 2850)
+        # 第二段时间同样取自顶层轴。
+        self.assertEqual(cues[1].start_ms, 3210)
+        self.assertEqual(cues[1].end_ms, 3750)
+
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_sentence_alignment_strips_leading_punctuation(self, mock_load):
+        """方向 A：cam++ 把上一句句末标点算进下段首位时，剥离前导孤立标点。"""
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{
+            "sentence_info": [
+                {
+                    "start": 0, "end": 2000,
+                    "text": "rather than the",
+                    "timestamp": [[1000, 1060], [1120, 1180], [1240, 1300]],
+                },
+                {
+                    "start": 2500, "end": 4000,
+                    "text": ". Po request",  # 前导句号来自上一句句末
+                    "timestamp": [[1360, 1420], [1480, 1540], [1600, 1660]],
+                },
+            ],
+            "words": ["rather", "than", "the", ".", "Po", "request"],
+            "timestamp": [
+                [1000, 1060], [1120, 1180], [1240, 1300],
+                [1360, 1420], [1480, 1540], [1600, 1660],
+            ],
+        }]
+        mock_load.return_value = mock_model
+
+        cues = self._make_backend().transcribe("/tmp/a.wav", "English")
+
+        self.assertEqual(len(cues), 2)
+        self.assertEqual(cues[0].text, "rather than the")
+        # 第二段剥离前导句号，且起点对齐到 'Po' 的时间戳。
+        self.assertEqual(cues[1].text, "Po request")
+        self.assertEqual(cues[1].start_ms, 1480)
+
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_sentence_alignment_falls_back_when_subtimestamps_off_axis(self, mock_load):
+        """方向 A：子时间戳不在顶层轴上时，整体退化为按标点断句。"""
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{
+            "sentence_info": [
+                {
+                    "start": 0, "end": 2000,
+                    "text": "hello world",
+                    "timestamp": [[99999, 99999]],  # 不在顶层轴上
+                },
+            ],
+            "words": ["hello", "world", "."],
+            "timestamp": [[1000, 1060], [1120, 1180], [1180, 1240]],
+        }]
+        mock_load.return_value = mock_model
+
+        cues = self._make_backend().transcribe("/tmp/a.wav", "English")
+
+        # 对齐失败，退化为标点断句：一句。
+        self.assertEqual(len(cues), 1)
+        self.assertEqual(cues[0].text, "hello world.")
+        self.assertEqual(cues[0].start_ms, 1000)
+        self.assertEqual(cues[0].end_ms, 1240)
 
     @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
     def test_word_timestamp_rebuild_preserves_decimal_numbers(self, mock_load):

@@ -2,7 +2,15 @@
 
 后端只产出带时间戳的识别片段（AsrCue），不碰 SRT 写出。
 FunasrAsrBackend 通过 ``funasr.AutoModel`` 一次调用完成 VAD 分段 + 识别 + 标点恢复，
-优先用顶层 ``words`` + ``timestamp`` 重建时间轴，避免 ``sentence_info`` 句级漂移。
+重建时间轴时把「断句」和「取时间戳」解耦：
+
+- ``sentence_info`` 提供语义分段边界（哪些词属于同一句），但其 ``start/end`` 在长音频上
+  会累积漂移，不能直接用作时间戳；
+- 顶层 ``words`` + ``timestamp`` 提供原始音频的词级时间轴（无漂移），但不带语义断句。
+
+因此主路径用 ``sentence_info`` 的段内子时间戳定位到顶层词序列的区间，再用顶层
+``timestamp`` 取每段的起止毫秒——语义段不碎 + 时间准确。当 ``sentence_info`` 缺失或无法
+对齐时，退化为按标点断句（``_build_cues_by_punctuation``）。
 
 相比旧的 llama.cpp 二进制方案（ADR 0002），Python SDK 方案的优势：
 - ``language`` 参数约束语言检测，从源头杜绝跨语言幻觉（英语视频不再冒出中文词）；
@@ -84,8 +92,134 @@ def clean_sensevoice_text(text: str) -> str:
     return _SENSEVOICE_TAG_PATTERN.sub("", text).replace("▁", "").strip()
 
 
-def _build_cues_from_word_timestamps(words: object, timestamps: object) -> list[AsrCue]:
-    """从 FunASR 顶层 words/timestamp 重建字幕，避开 sentence_info 句级时间漂移。"""
+def _build_cues_by_sentence_alignment(
+    words: object,
+    timestamps: object,
+    sentence_info: object,
+) -> list[AsrCue]:
+    """主路径：用 sentence_info 的语义边界对齐顶层词级时间轴重建字幕。
+
+    思路是把「断句」和「取时间戳」解耦：
+
+    - ``sentence_info`` 的段内子时间戳（``timestamp`` 字段）能精确定位到顶层
+      ``timestamp`` 数组里的连续词索引区间，且各段首尾相接。用它决定在哪几个词之间切，
+      得到语义完整的段落（不会在 ct-punc 误插的中间句号处断开）。
+    - 每段的起止毫秒取自顶层 ``timestamp``（绝对音频时间轴，无 cam++ 累积漂移），
+      而非 ``sentence_info`` 的 ``start/end``（长音频上会漂移）。
+
+    ``sentence_info`` 的子时间戳只覆盖实词（标点 token 在子数组里通常缺失），因此段间
+    的标点/未覆盖词会归入下一段，保证不丢内容。当 ``sentence_info`` 未覆盖到音频尾部
+    （cam++ 分段可能提前结束）或子时间戳无法在顶层对齐时，未覆盖部分退化为按标点断句。
+
+    返回空列表表示对齐失败，调用方应回退到 ``_build_cues_by_punctuation``。
+    """
+    if not isinstance(words, list) or not isinstance(timestamps, list):
+        return []
+    if not words or len(words) != len(timestamps):
+        return []
+    if not isinstance(sentence_info, list) or not sentence_info:
+        return []
+
+    # 顶层时间戳轴：建立「值 -> 索引」查找表。子时间戳里的元素形如 [start_ms, end_ms]。
+    flat_timestamps: list[tuple[int, int]] = []
+    for ts in timestamps:
+        parsed = _parse_word_timestamp(ts)
+        if parsed is None:
+            return []
+        flat_timestamps.append(parsed)
+    if not flat_timestamps:
+        return []
+
+    # 把每个 sentence_info 段的子时间戳首/末元素映射到顶层词索引，得到连续区间。
+    # 各段首尾相接（seg[i].last+1 == seg[i+1].first），因此直接以 first_idx..last_idx
+    # 取区间即可覆盖全部词，不会丢内容。标点 token 若落在段首（cam++ 把句末标点算进下段），
+    # 会在 _cue_from_word_range 里被当作前导标点剥离。
+    segments: list[tuple[int, int]] = []
+    last_end_idx = -1
+    for seg in sentence_info:
+        if not isinstance(seg, dict):
+            continue
+        sub_ts = seg.get("timestamp", [])
+        if not isinstance(sub_ts, list) or not sub_ts:
+            continue
+        first_parsed = _parse_word_timestamp(sub_ts[0])
+        last_parsed = _parse_word_timestamp(sub_ts[-1])
+        if first_parsed is None or last_parsed is None:
+            # 子时间戳格式异常，整体对齐失败，交由调用方回退。
+            return []
+        try:
+            first_idx = flat_timestamps.index(first_parsed)
+            last_idx = flat_timestamps.index(last_parsed)
+        except ValueError:
+            # 子时间戳不在顶层轴上，对齐失败。
+            return []
+        if last_idx < first_idx or first_idx <= last_end_idx:
+            # 段顺序错乱（非单调/回退），放弃对齐避免错配。
+            return []
+        last_end_idx = last_idx
+        segments.append((first_idx, last_idx))
+
+    if not segments:
+        return []
+
+    cues: list[AsrCue] = []
+    for start_idx, end_idx in segments:
+        cue = _cue_from_word_range(words, flat_timestamps, start_idx, end_idx)
+        if cue is not None:
+            cues.append(cue)
+
+    # sentence_info 未覆盖的尾部词（cam++ 分段可能提前结束）退化为按标点断句补齐。
+    first_uncovered = segments[-1][1] + 1
+    if first_uncovered < len(flat_timestamps):
+        tail_cues = _build_cues_by_punctuation(
+            words[first_uncovered : len(flat_timestamps)],
+            timestamps[first_uncovered : len(flat_timestamps)],
+        )
+        cues.extend(tail_cues)
+
+    return cues
+
+
+def _cue_from_word_range(
+    words: list,
+    flat_timestamps: list[tuple[int, int]],
+    start_idx: int,
+    end_idx: int,
+) -> AsrCue | None:
+    """把顶层词序列的一个连续区间拼成一条 AsrCue，时间取区间首词起点、末词终点。"""
+    range_words = [clean_sensevoice_text(str(words[i])).strip() for i in range(start_idx, end_idx + 1)]
+    range_words = [word for word in range_words if word]
+    if not range_words:
+        return None
+    # cam++ 有时把上一句的句末标点算进本段首位（如 ". Po request"），剥离前导纯标点，
+    # 避免字幕以孤立句号开头；同时把起点时间戳前移到第一个实词。
+    while (
+        len(range_words) > 1
+        and start_idx < end_idx
+        and _is_punctuation_only(range_words[0])
+    ):
+        range_words.pop(0)
+        start_idx += 1
+    text = _format_word_tokens(range_words)
+    text = clean_sensevoice_text(text).strip()
+    if not text:
+        return None
+    start_ms, _ = flat_timestamps[start_idx]
+    _, end_ms = flat_timestamps[end_idx]
+    return AsrCue(start_ms=start_ms, end_ms=max(end_ms, start_ms + 1), text=text)
+
+
+# 纯标点判断：仅由标点符号组成的 token（如 "."、","、"。。"），不含任何字母数字。
+_PUNCTUATION_CHARS = set(".,!?;:，。！？；：、")
+
+
+def _build_cues_by_punctuation(words: object, timestamps: object) -> list[AsrCue]:
+    """退化路径：仅凭顶层 words/timestamp，按句末标点断句重建字幕。
+
+    用作 ``sentence_info`` 缺失或无法对齐时的回退，也用于补齐 ``sentence_info`` 未覆盖的
+    尾部。缺点是 ct-punc 会在话中间误插句号，导致每条都强以句号结尾、语义被切碎；但在
+    没有 ``sentence_info`` 语义边界可用时，这是唯一能拿到时间轴的路径。
+    """
     if not isinstance(words, list) or not isinstance(timestamps, list):
         return []
     if not words or len(words) != len(timestamps):
@@ -115,7 +249,8 @@ def _build_cues_from_word_timestamps(words: object, timestamps: object) -> list[
             _append_word_timestamp_cue(cues, current)
             current = []
     _append_word_timestamp_cue(cues, current)
-    return cues
+    # 过滤仅含标点的孤立片段（如尾部残留的 ","/"."），不构成有效字幕。
+    return [cue for cue in cues if not _is_punctuation_only(cue.text)]
 
 
 def _parse_word_timestamp(timestamp: object) -> tuple[int, int] | None:
@@ -189,6 +324,11 @@ def _is_sentence_boundary_token(
     return token[-1:] in _SENTENCE_END_TOKENS
 
 
+def _is_punctuation_only(token: str) -> bool:
+    """token 是否仅由标点组成（无字母数字），用于剥离段首孤立标点。"""
+    return bool(token) and all(ch in _PUNCTUATION_CHARS for ch in token)
+
+
 @dataclass
 class FunasrAsrBackend:
     """基于 FunASR Python SDK 的 ASR 后端。
@@ -235,23 +375,37 @@ class FunasrAsrBackend:
             return []
 
         res = result[0]
-        word_timestamp_cues = _build_cues_from_word_timestamps(
-            res.get("words", []),
-            res.get("timestamp", []),
-        )
-        if word_timestamp_cues:
+        words = res.get("words", [])
+        timestamps = res.get("timestamp", [])
+        sentence_info = res.get("sentence_info", [])
+
+        # 主路径：用 sentence_info 的语义边界对齐顶层词级时间轴——语义段完整、时间无漂移。
+        aligned_cues = _build_cues_by_sentence_alignment(words, timestamps, sentence_info)
+        if aligned_cues:
             logger.info(
-                "FunASR 词级时间戳重建出 %s 个片段: audio=%s",
-                len(word_timestamp_cues),
+                "FunASR sentence_info 对齐重建出 %s 个片段: audio=%s",
+                len(aligned_cues),
                 audio_path,
             )
-            return word_timestamp_cues
+            return aligned_cues
 
-        sentence_info = res.get("sentence_info", [])
-        cues: list[AsrCue] = []
+        # 退路径一：sentence_info 缺失/无法对齐但有词级时间戳，按标点断句（语义可能偏碎）。
+        cues = _build_cues_by_punctuation(words, timestamps)
+        if cues:
+            logger.info(
+                "FunASR 词级时间戳按标点重建出 %s 个片段: audio=%s",
+                len(cues),
+                audio_path,
+            )
+            return cues
 
-        if sentence_info:
-            # 正常路径：sentence_info 提供带时间戳的分段（需 spk_model 触发）
+        # 退路径二：连词级时间戳都没有，用 sentence_info 的 start/end（有漂移风险）兜底。
+        cues = []
+        if isinstance(sentence_info, list) and sentence_info:
+            logger.warning(
+                "FunASR 无法对齐词级时间戳，退用 sentence_info 句级时间: audio=%s",
+                audio_path,
+            )
             for seg in sentence_info:
                 raw_text = seg.get("text", seg.get("sentence", ""))
                 text = rich_transcription_postprocess(raw_text)
@@ -263,19 +417,15 @@ class FunasrAsrBackend:
                     end_ms=int(seg.get("end", 0)),
                     text=text,
                 ))
-            logger.info(
-                "FunASR 识别出 %s 个片段: audio=%s", len(cues), audio_path
-            )
         else:
-            # 降级：模型未返回 sentence_info（通常未配 spk_model），整段一条。
+            # 退路径三：全都没有，整段一条（无时间戳信息）。
             logger.warning(
-                "FunASR 未返回 sentence_info，降级为整段一条: audio=%s", audio_path
+                "FunASR 未返回时间戳与 sentence_info，降级为整段一条: audio=%s", audio_path
             )
             text = clean_sensevoice_text(
                 rich_transcription_postprocess(res.get("text", ""))
             )
             if text:
-                # 无时间戳信息，用 0 占位（build_subtitle 会处理）
                 cues.append(AsrCue(start_ms=0, end_ms=0, text=text))
 
         return cues
