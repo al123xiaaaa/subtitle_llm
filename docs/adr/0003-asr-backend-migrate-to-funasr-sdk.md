@@ -24,3 +24,14 @@ The SDK reintroduces **PyTorch** (the dependency ADR 0002 removed). We accept th
 - A future `funasr-onnx` path (documented by FunASR) can later remove PyTorch again if distribution weight becomes a concern.
 
 Configuration moved from binary paths (`vad_binary`, `sensevoice_binary`, `model_dir`, `model_path()`) to SDK parameters (`model_name`, `punc_model`, `spk_model`, `max_single_segment_time`, `device`, `hub`, `trust_remote_code`). First run auto-downloads models (~1GB) to the HuggingFace cache; `scripts/setup-funasr.sh` is now a one-line `pip install funasr`.
+
+## Revision — sentence_info timestamps drift; segmentation and timestamps are now decoupled
+
+The original decision relied on `sentence_info`'s `start`/`end` for per-segment timestamps. On long audio (verified at ~1137s) these **cumulatively drift** because they are produced under the `cam++` speaker pipeline and stop advancing before the audio ends — a segment near the 90% mark was off by −212s, and the last ~24% of the audio had no `sentence_info` coverage at all. The "clean timestamps" claim above therefore does not hold for `sentence_info.start/end`.
+
+Two corrections were made in `asr_backend.py`, decoupling **segmentation** from **timestamp extraction**:
+
+- **Timestamps** now come from the top-level `words` + `timestamp` arrays (absolute audio time, no drift), not from `sentence_info.start/end`.
+- **Segmentation** uses `sentence_info` only for its semantic boundaries: each segment's in-segment `timestamp` sub-array is aligned to the top-level word axis to locate a continuous word-index range, so `sentence_info` decides *where to cut* (semantic segments stay intact, instead of being shattered at every `ct-punc` period) while the top-level axis decides *the start/end milliseconds*. `sentence_info` is still the fallback when alignment is impossible.
+
+The unrelated `WARNING:root:length mismatch between punc and timestamp` emitted by `ct-punc` is internal to funasr and does not affect the produced cues.
