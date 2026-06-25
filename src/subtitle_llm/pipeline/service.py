@@ -38,6 +38,11 @@ from subtitle_llm.pipeline.semantic_units import (
     make_unit,
     semantic_entries,
 )
+from subtitle_llm.pipeline.source_corrections import (
+    SourceCorrectionFlag,
+    find_unadopted_hard_corrections,
+    source_corrections_from_context,
+)
 from subtitle_llm.pipeline.text import parse_translation_results
 from subtitle_llm.progress_contract import ProgressContract
 from subtitle_llm.progress_events import ProgressEmitter
@@ -498,13 +503,13 @@ class TranslationService:
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.config.pipeline.threads) as executor:
             future_to_chunk = {
                 executor.submit(
-                    translator.translate_semantic_and_refine,
-                    planned.entries,
+                    self._translate_planned_semantic_chunk,
+                    translator,
+                    planned,
+                    semantic_unit_by_index,
                     context,
                     target_language,
-                    planned.boundary_context,
-                    planned.index,
-                    refine_translation=refine_translation,
+                    refine_translation,
                 ): planned
                 for planned in planned_chunks
             }
@@ -520,20 +525,37 @@ class TranslationService:
                     planned = future_to_chunk[future]
                     try:
                         result = future.result()
-                        self._accept_semantic_chunk(
-                            planned,
-                            result,
-                            semantic_unit_by_index,
-                            translator,
-                            quality_gate,
-                            review_port,
-                            context,
-                            target_language,
-                            translated_entries,
-                            run_ledger,
-                            report,
-                            refine_translation,
-                        )
+                        semantic_units = self._semantic_units_for_planned(planned, semantic_unit_by_index)
+                        if self.config.pipeline.semantic_output_granularity == "cue":
+                            self._accept_semantic_timed_chunk(
+                                planned,
+                                result,
+                                semantic_units,
+                                translator,
+                                quality_gate,
+                                review_port,
+                                context,
+                                target_language,
+                                translated_entries,
+                                run_ledger,
+                                report,
+                                refine_translation,
+                            )
+                        else:
+                            self._accept_semantic_chunk(
+                                planned,
+                                result,
+                                semantic_unit_by_index,
+                                translator,
+                                quality_gate,
+                                review_port,
+                                context,
+                                target_language,
+                                translated_entries,
+                                run_ledger,
+                                report,
+                                refine_translation,
+                            )
                     except Exception as exc:
                         logger.exception(
                             "语义chunk处理失败: chunk=%s units=%s",
@@ -561,6 +583,192 @@ class TranslationService:
                                 planned.entries and any(entry.needs_retranslation for entry in planned.entries)
                             ),
                         )
+
+    def _translate_planned_semantic_chunk(
+        self,
+        translator: ChunkTranslator,
+        planned: PlannedChunk,
+        semantic_unit_by_index: dict[int, SemanticUnit],
+        context: str,
+        target_language: str,
+        refine_translation: bool,
+    ) -> ChunkTranslationResult:
+        if self.config.pipeline.semantic_output_granularity == "cue":
+            return translator.translate_semantic_timed_cues(
+                self._semantic_units_for_planned(planned, semantic_unit_by_index),
+                context,
+                target_language,
+                planned.boundary_context,
+                planned.index,
+            )
+        return translator.translate_semantic_and_refine(
+            planned.entries,
+            context,
+            target_language,
+            planned.boundary_context,
+            planned.index,
+            refine_translation=refine_translation,
+        )
+
+    def _semantic_units_for_planned(
+        self,
+        planned: PlannedChunk,
+        semantic_unit_by_index: dict[int, SemanticUnit],
+    ) -> list[SemanticUnit]:
+        return [semantic_unit_by_index[semantic_entry.index] for semantic_entry in planned.entries]
+
+    def _accept_semantic_timed_chunk(
+        self,
+        planned: PlannedChunk,
+        result: ChunkTranslationResult,
+        semantic_units: list[SemanticUnit],
+        translator: ChunkTranslator,
+        quality_gate: QualityGate,
+        review_port: ReviewPort,
+        context: str,
+        target_language: str,
+        translated_entries: list[SubtitleEntry],
+        run_ledger: RunLedger,
+        report: TranslationReport,
+        refine_translation: bool,
+    ) -> None:
+        del refine_translation
+        report.token_usage.add_usage(result.usage.to_dict())
+        source_entries = result.chunk
+        diagnosis = quality_gate.diagnose_chunk(
+            source_entries,
+            translation=result.translation,
+            target_language=target_language,
+        )
+        if translator.trace_recorder:
+            translator.trace_recorder.update_quality(result.final_trace_id, diagnosis)
+        quality_gate.apply_diagnosis(source_entries, diagnosis)
+        review_policy = ReviewPolicy.from_review_port(review_port)
+        translator_progress_contract(translator).quality_checked(
+            source_entries,
+            chunk_index=planned.index,
+            total_chunks=report.total_chunks,
+            diagnosis=diagnosis,
+            auto_repair=review_policy.quality_visual_auto_repair(diagnosis),
+        )
+
+        if diagnosis.has_issues and review_policy.should_auto_repair(diagnosis):
+            before_repair = snapshot_entry_translations(source_entries)
+            selected_entries = [entry for entry in source_entries if entry.needs_retranslation]
+            if not selected_entries:
+                selected_entries = source_entries
+            outcome = self._run_semantic_repair_batches(
+                planned,
+                selected_entries,
+                semantic_units,
+                source_entries,
+                diagnosis,
+                translator,
+                context,
+                target_language,
+                report,
+                intent="auto_quality",
+                selected_indices={entry.index for entry in selected_entries},
+                stage="semantic-repair",
+            )
+            repaired_diagnosis = quality_gate.diagnose_chunk(source_entries, target_language=target_language)
+            repair_downgraded = repair_diagnosis_is_downgrade(diagnosis, repaired_diagnosis)
+            if translator.trace_recorder:
+                for trace_id in outcome.trace_ids:
+                    translator.trace_recorder.update_quality(
+                        trace_id,
+                        repaired_diagnosis,
+                        status="failed" if repair_downgraded else None,
+                    )
+            if repair_downgraded:
+                restore_entry_translations(before_repair)
+                quality_gate.apply_diagnosis(source_entries, diagnosis)
+                logger.warning(
+                    "语义cue自动修复劣化，已回滚到初译: chunk=%s before=%s/%s after=%s/%s",
+                    planned.index + 1,
+                    diagnosis.reliability,
+                    diagnosis.flagged_entries,
+                    repaired_diagnosis.reliability,
+                    repaired_diagnosis.flagged_entries,
+                )
+            else:
+                quality_gate.apply_diagnosis(source_entries, repaired_diagnosis)
+                diagnosis = repaired_diagnosis
+            translator_progress_contract(translator).quality_checked(
+                source_entries,
+                chunk_index=planned.index,
+                total_chunks=report.total_chunks,
+                diagnosis=repaired_diagnosis,
+                auto_repair=False,
+                stage_status=review_policy.post_repair_stage_status(repaired_diagnosis),
+                chunk_status=review_policy.post_repair_chunk_status(repaired_diagnosis),
+            )
+
+            source_entries = self._repair_semantic_layout(
+                planned,
+                source_entries,
+                semantic_units,
+                run_ledger,
+                report,
+                target_language,
+                allow_auto_merge=False,
+            )
+        source_entries = self._apply_source_correction_gate(
+            planned,
+            source_entries,
+            translator,
+            context,
+            target_language,
+            report,
+        )
+        layout_review_indices = {
+            entry.index
+            for entry in source_entries
+            if entry.needs_retranslation
+        }
+        source_diagnosis = quality_gate.diagnose_chunk(source_entries, target_language=target_language)
+        quality_gate.apply_diagnosis(source_entries, source_diagnosis)
+        for entry in source_entries:
+            if entry.index in layout_review_indices:
+                entry.needs_retranslation = True
+        diagnosis = source_diagnosis
+
+        if review_policy.should_manual_review(source_diagnosis) or (
+            review_policy.uses_manual_review and layout_review_indices
+        ):
+            logger.warning(
+                "语义cue质量诊断命中，进入TUI复核: chunk=%s reliability=%s flagged=%s layout_review=%s summary=%s",
+                planned.index + 1,
+                source_diagnosis.reliability,
+                source_diagnosis.flagged_entries,
+                sorted(layout_review_indices),
+                source_diagnosis.summary if source_diagnosis.has_issues else "semantic layout diagnosis marked entries for review.",
+            )
+            source_entries = self._review_semantic_chunk_with_tui(
+                planned,
+                source_entries,
+                semantic_units,
+                translator,
+                quality_gate,
+                review_port,
+                context,
+                target_language,
+                run_ledger,
+                report,
+                False,
+                allow_layout_auto_merge=False,
+            )
+            diagnosis = quality_gate.diagnose_chunk(source_entries, target_language=target_language)
+
+        translated_entries.extend(source_entries)
+        translator_progress_contract(translator).chunk_accepted(
+            source_entries,
+            chunk_index=planned.index,
+            total_chunks=report.total_chunks,
+            semantic=True,
+            warning=bool(diagnosis.has_issues or any(entry.needs_retranslation for entry in source_entries)),
+        )
+        logger.info("语义cue chunk接受完成: chunk=%s entries=%s", planned.index + 1, len(source_entries))
 
     def _accept_semantic_chunk(
         self,
@@ -667,6 +875,14 @@ class TranslationService:
             report,
             target_language,
         )
+        source_entries = self._apply_source_correction_gate(
+            planned,
+            source_entries,
+            translator,
+            context,
+            target_language,
+            report,
+        )
         layout_review_indices = {
             entry.index
             for entry in source_entries
@@ -727,6 +943,7 @@ class TranslationService:
         run_ledger: RunLedger,
         report: TranslationReport,
         refine_translation: bool,
+        allow_layout_auto_merge: bool = True,
     ) -> list[SubtitleEntry]:
         max_rounds = 2
         cue_to_unit = {
@@ -795,6 +1012,7 @@ class TranslationService:
                 run_ledger,
                 report,
                 target_language,
+                allow_auto_merge=allow_layout_auto_merge,
             )
             layout_review_indices = {
                 entry.index
@@ -839,6 +1057,116 @@ class TranslationService:
         )
         return current_entries
 
+    def _apply_source_correction_gate(
+        self,
+        planned: PlannedChunk,
+        entries: list[SubtitleEntry],
+        translator: ChunkTranslator,
+        context: str,
+        target_language: str,
+        report: TranslationReport,
+    ) -> list[SubtitleEntry]:
+        corrections = source_corrections_from_context(context)
+        if not corrections:
+            return entries
+
+        flags = find_unadopted_hard_corrections(corrections, entries)
+        if not flags:
+            return entries
+
+        logger.warning(
+            "source_correction_gate命中: chunk=%s flags=%s",
+            planned.index + 1,
+            [
+                {
+                    "cue_id": flag.cue_id,
+                    "observed": flag.observed,
+                    "corrected": flag.corrected,
+                    "type": flag.correction_type,
+                }
+                for flag in flags
+            ],
+        )
+        entry_by_index = {entry.index: entry for entry in entries}
+        for flag in flags:
+            entry = entry_by_index.get(flag.cue_id)
+            if entry is None:
+                continue
+            self._repair_source_correction_flag(
+                planned,
+                entry,
+                flag,
+                entries,
+                translator,
+                target_language,
+                report,
+            )
+
+        remaining_flags = find_unadopted_hard_corrections(corrections, entries)
+        for flag in remaining_flags:
+            if entry := entry_by_index.get(flag.cue_id):
+                entry.needs_retranslation = True
+        if remaining_flags:
+            logger.warning(
+                "source_correction_gate仍有未采纳专名修正: chunk=%s flags=%s",
+                planned.index + 1,
+                [
+                    {
+                        "cue_id": flag.cue_id,
+                        "observed": flag.observed,
+                        "corrected": flag.corrected,
+                    }
+                    for flag in remaining_flags
+                ],
+            )
+        return entries
+
+    def _repair_source_correction_flag(
+        self,
+        planned: PlannedChunk,
+        entry: SubtitleEntry,
+        flag: SourceCorrectionFlag,
+        entries: list[SubtitleEntry],
+        translator: ChunkTranslator,
+        target_language: str,
+        report: TranslationReport,
+    ) -> None:
+        before_repair = snapshot_entry_translations([entry])
+        repair_usage = CompletionUsage()
+        try:
+            repaired = translator.repair_source_correction_traced(
+                entry,
+                flag,
+                self._nearby_entries(entries, entry.index, window=1),
+                target_language,
+                repair_usage,
+                chunk_index=planned.index,
+            )
+        except Exception as exc:
+            report.token_usage.add_usage(repair_usage.to_dict())
+            restore_entry_translations(before_repair)
+            entry.needs_retranslation = True
+            logger.warning(
+                "source_correction_gate单cue修复失败，保留当前译文: chunk=%s cue=%s observed=%r corrected=%r error=%s",
+                planned.index + 1,
+                entry.index,
+                flag.observed,
+                flag.corrected,
+                exc,
+            )
+            return
+
+        report.token_usage.add_usage(repair_usage.to_dict())
+        entry.set_translated_text(repaired.text.strip())
+        entry.needs_retranslation = False
+        logger.info(
+            "source_correction_gate单cue修复完成: chunk=%s cue=%s observed=%r corrected=%r",
+            planned.index + 1,
+            entry.index,
+            flag.observed,
+            flag.corrected,
+        )
+
     def _repair_semantic_layout(
         self,
         planned: PlannedChunk,
@@ -847,6 +1175,8 @@ class TranslationService:
         run_ledger: RunLedger,
         report: TranslationReport,
         target_language: str,
+        *,
+        allow_auto_merge: bool = True,
     ) -> list[SubtitleEntry]:
         source_by_index = {entry.index: entry for entry in source_entries}
         removed_in_chunk: set[int] = set()
@@ -879,7 +1209,11 @@ class TranslationService:
                         issue.reason,
                     )
                     if issue.action == "auto_merge" and left is not None:
-                        auto_merge_at = position
+                        if allow_auto_merge:
+                            auto_merge_at = position
+                        else:
+                            left.needs_retranslation = True
+                            entry.needs_retranslation = True
                         break
                     if issue.action == "review" and left is not None:
                         left.needs_retranslation = True
@@ -1414,6 +1748,27 @@ class TranslationService:
                     refine_translation,
                 )
 
+        planned.entries = self._apply_source_correction_gate(
+            planned,
+            planned.entries,
+            translator,
+            context,
+            target_language,
+            report,
+        )
+        if review_policy.uses_manual_review and any(entry.needs_retranslation for entry in planned.entries):
+            self._review_chunk_with_tui(
+                planned,
+                translator,
+                quality_gate,
+                review_port,
+                context,
+                target_language,
+                run_ledger,
+                report,
+                refine_translation,
+            )
+
         for entry in planned.entries:
             translated_entries.append(entry)
         translator_progress_contract(translator).chunk_accepted(
@@ -1614,6 +1969,20 @@ class TranslationService:
             if entry.index == entry_index:
                 return position
         return None
+
+    def _nearby_entries(
+        self,
+        entries: list[SubtitleEntry],
+        entry_index: int,
+        *,
+        window: int,
+    ) -> list[SubtitleEntry]:
+        position = self._entry_position(entries, entry_index)
+        if position is None:
+            return []
+        start = max(0, position - window)
+        end = min(len(entries), position + window + 1)
+        return entries[start:end]
 
     def _handle_chunk_failure(
         self,

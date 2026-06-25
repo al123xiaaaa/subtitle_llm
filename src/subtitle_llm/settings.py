@@ -70,6 +70,7 @@ class PipelineConfig(BaseModel):
     normalize_max_duration: float = 7.0
     normalize_min_duration: float = 0.8
     semantic_translation: Literal["auto", "always", "off"] = "auto"
+    semantic_output_granularity: Literal["cue", "unit"] = "cue"
     semantic_max_cues_per_unit: int = 6
     refine_translation: bool = False
     review_mode: Literal["auto", "tui"] = "auto"

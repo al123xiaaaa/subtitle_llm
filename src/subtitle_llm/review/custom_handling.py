@@ -106,8 +106,6 @@ class CustomHandlingApp(App):
         total = max(len(self.subtitle_entries), 1)
         if len(flagged_rows) >= 5 and len(flagged_rows) / total >= 0.25:
             return True
-        if longest_consecutive_run(flagged_rows) >= 3:
-            return True
 
         placeholder_rows = [
             index

@@ -59,6 +59,31 @@ def semantic_entries(units: list[SemanticUnit]) -> list[SubtitleEntry]:
     return [unit.to_entry() for unit in units]
 
 
+def semantic_unit_source_entries(units: list[SemanticUnit]) -> list[SubtitleEntry]:
+    return [entry for unit in units for entry in unit.entries]
+
+
+def format_semantic_timed_cues_json(units: list[SemanticUnit]) -> str:
+    cue_id = 0
+    data = []
+    for unit in units:
+        cue_rows = []
+        for entry in unit.entries:
+            cue_id += 1
+            cue_rows.append({
+                "cue_id": cue_id,
+                "source_index": entry.index,
+                "time": f"{entry.start_time} --> {entry.end_time}",
+                "source": entry.original_text,
+            })
+        data.append({
+            "unit_id": unit.index,
+            "source": unit.source_text,
+            "cues": cue_rows,
+        })
+    return json_dumps(data)
+
+
 def apply_semantic_translation(
     unit: SemanticUnit,
     translated_text: str,
@@ -96,3 +121,9 @@ def split_translation(
 
 def normalize_spaces(text: str) -> str:
     return WHITESPACE_RE.sub(" ", text.strip())
+
+
+def json_dumps(data: object) -> str:
+    import json
+
+    return json.dumps(data, ensure_ascii=False, indent=2)

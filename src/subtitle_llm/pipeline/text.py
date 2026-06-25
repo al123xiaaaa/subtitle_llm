@@ -331,6 +331,58 @@ def process_semantic_json_translation(content: str, chunk: list[SubtitleEntry]) 
     return "\n".join(lines)
 
 
+def process_timed_cue_json_translation(content: str, entries: list[SubtitleEntry]) -> str:
+    payload = extract_json_payload(content)
+    data = json.loads(payload)
+    rows = data.get("translations") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        raise ValueError("timed cue translation JSON must contain a translations list")
+
+    translations: dict[int, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("timed cue translation item must be an object")
+        cue_id_value = row.get("cue_id", row.get("index", row.get("source_index")))
+        if cue_id_value is None:
+            raise ValueError("timed cue translation item must contain cue_id")
+        cue_id = int(cue_id_value)
+        translation = str(row.get("translation", "")).strip()
+        if cue_id in translations:
+            raise ValueError(f"duplicate timed cue_id: {cue_id}")
+        translations[cue_id] = translation
+
+    local_ids = list(range(1, len(entries) + 1))
+    local_id_set = set(local_ids)
+    global_ids = [entry.index for entry in entries]
+    global_id_set = set(global_ids)
+    observed = set(translations)
+
+    if observed == local_id_set:
+        ordered_ids = local_ids
+    elif observed == global_id_set:
+        ordered_ids = global_ids
+    else:
+        missing_local = sorted(local_id_set - observed)
+        extra_local = sorted(observed - local_id_set)
+        missing_global = sorted(global_id_set - observed)
+        extra_global = sorted(observed - global_id_set)
+        raise ValueError(
+            "timed cue translation id mismatch: "
+            f"local_missing={missing_local}, local_extra={extra_local}, "
+            f"global_missing={missing_global}, global_extra={extra_global}"
+        )
+
+    lines: list[str] = []
+    for local_index, (entry, cue_id) in enumerate(zip(entries, ordered_ids, strict=True), start=1):
+        translated = translations[cue_id].strip()
+        if not translated:
+            raise ValueError(f"timed cue translation {cue_id} is empty")
+        entry.set_translated_text(translated)
+        lines.append(f"[{local_index}]")
+        lines.append(translated)
+    return "\n".join(lines)
+
+
 def combine_translations_by_index(original_translation: str, fixed_translation: str) -> str:
     original_lines = original_translation.strip().split("\n")
     fixed_lines = [line for line in fixed_translation.strip().split("\n") if line.strip()]

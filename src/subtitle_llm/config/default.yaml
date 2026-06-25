@@ -23,6 +23,7 @@ pipeline:
   normalize_max_duration: 7.0
   normalize_min_duration: 0.8
   semantic_translation: "auto"
+  semantic_output_granularity: "cue"
   semantic_max_cues_per_unit: 6
   refine_translation: false
 

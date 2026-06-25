@@ -1,18 +1,35 @@
-GENERATE_SUMMARY_PROMPT = """Analyze the following subtitle content and provide:
-1. A concise {target_language} summary of the video content (5-7 sentences).
-2. A list of technical terms, proper nouns, or specific terminology with {target_language} translation.
+GENERATE_SUMMARY_PROMPT = """Analyze the following subtitle content and provide structured translation context.
 
 Subtitle content:
 {content}
 
-Please format your response as follows:
-总结: [Your summary here]
+Return compact valid JSON only. No markdown fences, no explanations.
 
-短语术语:
-- [Term 1]({target_language} translation)
-- [Term 2]({target_language} translation)
-- [Term 3]({target_language} translation)
-...
+Required JSON shape:
+{{
+  "summary": "A concise {target_language} summary of the video content in 5-7 sentences.",
+  "terms": [
+    {{"source": "proper noun or term", "target": "{target_language} translation"}}
+  ],
+  "source_corrections": [
+    {{
+      "cue_ids": [1],
+      "observed": "exact source subtitle phrase",
+      "corrected": "correct source phrase",
+      "type": "person|place|street|inn|organization|institution|period_term|common_term|other",
+      "enforcement": "hard|soft",
+      "target_aliases": ["{target_language} rendering", "source proper noun if useful"],
+      "confidence": "high|medium|low",
+      "evidence": "short reason grounded in nearby subtitle context"
+    }}
+  ]
+}}
+
+Source correction rules:
+- Include only corrections with grounded evidence in the subtitles.
+- Use enforcement="hard" only for named entities or historically anchored proper nouns: people, places, streets, inns, organizations, institutions.
+- Use enforcement="soft" for ordinary vocabulary, clothing, foods, style choices, or uncertain period terms.
+- If there are no useful corrections, return "source_corrections": [].
 """
 
 TRANSLATE_CHUNK_PROMPT = """You are a professional translator tasked with translating subtitles into {target_language}.
@@ -107,6 +124,43 @@ Required JSON shape:
 Before answering, silently verify that the JSON contains exactly {chunk_size} translations with unit_id 1 through {chunk_size}.
 """
 
+TRANSLATE_SEMANTIC_TIMED_CUES_PROMPT = """You are a senior subtitle translator specializing in {target_language}.
+
+Translate with full semantic context, but output one translation per timed subtitle cue.
+
+**Context:**
+{context}
+
+**Readonly Boundary Context:**
+{boundary_context}
+
+**Semantic units with timed cues ({semantic_unit_count} units, {cue_count} output cues):**
+{unit_text}
+
+**Instructions:**
+1. Use the full semantic unit source to understand meaning, references, sentence continuation, and terminology.
+2. Output exactly one translation for each timed cue, using cue_id values 1 through {cue_count}.
+3. Preserve one-timed-cue-in, one-timed-cue-out alignment. Do not move meaning into neighboring cues.
+4. If a cue is only a fragment, translate it as a natural fragment that connects to adjacent cues.
+5. Preserve names, places, dates, numbers, and speaker intent. Use the provided context for likely ASR corrections when the source is clearly inconsistent with the context.
+6. For any hard source correction in the context that applies to a cue, the translation must preserve the corrected named entity using one of the target aliases.
+7. Do not output readonly boundary context cues.
+8. Output valid JSON only. No markdown fences, no explanations.
+
+Required JSON shape:
+{{
+  "translations": [
+    {{"cue_id": 1, "translation": "Translated text for timed cue 1"}},
+    {{"cue_id": 2, "translation": "Translated text for timed cue 2"}}
+  ]
+}}
+
+Hard output constraints:
+- there are exactly {cue_count} translations;
+- every cue_id from 1 to {cue_count} appears once;
+- no translation is empty, placeholder text, source text, punctuation-only, or explanatory commentary.
+"""
+
 REFINE_SEMANTIC_UNITS_PROMPT = """You are a professional subtitle translator specializing in {target_language}. Refine rough translations for semantic subtitle units.
 
 **Context:**
@@ -182,6 +236,27 @@ Hard output constraints:
 - no readonly anchor, boundary context, or non-output timed cue is output.
 
 Now provide the repaired timed cue translations:
+"""
+
+SOURCE_CORRECTION_REPAIR_PROMPT = """You are a senior subtitle repair translator specializing in {target_language}.
+
+Repair exactly one timed subtitle cue because a hard source correction was not preserved.
+
+**Source Correction To Enforce:**
+{correction}
+
+**Nearby Cues:**
+{nearby_cues}
+
+**Instructions:**
+1. Repair only cue {cue_id}.
+2. Preserve the one-cue timing segmentation.
+3. Preserve all non-erroneous meaning from the source cue, including discourse markers such as "so", "okay", fillers, dates, numbers, and tone.
+4. Use the corrected source phrase and include one of the target aliases when natural.
+5. Output valid JSON only. No markdown fences, no explanations.
+
+Required JSON shape:
+{{"cue_id": {cue_id}, "translation": "Repaired translation for cue {cue_id}"}}
 """
 
 FIX_MISSING_TRANSLATIONS_PROMPT = """You are a professional translator specializing in {target_language}. Your task is to fix missing translations in a subtitle chunk.

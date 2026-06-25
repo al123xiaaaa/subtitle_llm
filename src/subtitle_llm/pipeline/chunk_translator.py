@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from subtitle_llm.domain import SubtitleEntry
@@ -13,8 +14,17 @@ from subtitle_llm.pipeline.prompts import (
     REFINE_SEMANTIC_UNITS_PROMPT,
     REPAIR_SEMANTIC_TIMED_CUES_PROMPT,
     RE_TRANSLATE_PROMPT,
+    SOURCE_CORRECTION_REPAIR_PROMPT,
+    TRANSLATE_SEMANTIC_TIMED_CUES_PROMPT,
     TRANSLATE_SEMANTIC_UNITS_PROMPT,
     TRANSLATE_CHUNK_PROMPT,
+)
+from subtitle_llm.pipeline.semantic_units import (
+    SemanticUnit,
+    apply_semantic_translation,
+    format_semantic_timed_cues_json,
+    semantic_entries,
+    semantic_unit_source_entries,
 )
 from subtitle_llm.pipeline.text import (
     extract_translation_block,
@@ -23,10 +33,13 @@ from subtitle_llm.pipeline.text import (
     format_chunk,
     format_semantic_units_json,
     format_translation_reference,
+    extract_json_payload,
     parse_indexed_translation_for_entries,
     process_semantic_json_translation,
+    process_timed_cue_json_translation,
     process_translation,
 )
+from subtitle_llm.pipeline.source_corrections import SourceCorrectionFlag
 from subtitle_llm.progress_contract import (
     chunk_stage_label,
 )
@@ -158,6 +171,66 @@ class ChunkTranslator:
             translation=refined_translation.text,
             usage=usage,
             final_trace_id=refined_translation.trace_id,
+        )
+
+    def translate_semantic_timed_cues(
+        self,
+        units: list[SemanticUnit],
+        context: str,
+        target_language: str,
+        boundary_context: str,
+        chunk_index: int | None = None,
+        stage: str = "semantic-cue-rough",
+    ) -> ChunkTranslationResult:
+        usage = CompletionUsage()
+        cue_entries = semantic_unit_source_entries(units)
+        unit_text = format_semantic_timed_cues_json(units)
+        prompt = TRANSLATE_SEMANTIC_TIMED_CUES_PROMPT.format(
+            target_language=target_language,
+            context=context,
+            boundary_context=boundary_context,
+            unit_text=unit_text,
+            semantic_unit_count=len(units),
+            cue_count=len(cue_entries),
+        )
+        operation = self.operations.create_completion(prompt, stage=stage, chunk=cue_entries, chunk_index=chunk_index)
+        result = operation.completion
+        duration_ms = operation.duration_ms
+        usage.add(result.usage)
+        processed_translation = self._process_semantic_timed_response(
+            result.content,
+            units,
+            cue_entries,
+            target_language=target_language,
+            stage=stage,
+            prompt=prompt,
+            usage=result.usage,
+            duration_ms=duration_ms,
+            chunk_index=chunk_index,
+        )
+        trace_id = self.operations.record_trace(
+            stage=stage,
+            prompt=prompt,
+            response=result.content,
+            usage=result.usage,
+            duration_ms=duration_ms,
+            chunk=cue_entries,
+            chunk_index=chunk_index,
+            processed_translation=processed_translation,
+        )
+        self.operations.emit_chunk_progress(
+            stage,
+            "running",
+            f"{chunk_stage_label(stage)}响应已解析",
+            cue_entries,
+            chunk_index,
+            trace_id=trace_id,
+        )
+        return ChunkTranslationResult(
+            chunk=cue_entries,
+            translation=processed_translation,
+            usage=usage,
+            final_trace_id=trace_id,
         )
 
     def translate_semantic_units(
@@ -577,6 +650,79 @@ class ChunkTranslator:
         )
         return TracedTranslationText(processed_translation, trace_id)
 
+    def repair_source_correction_traced(
+        self,
+        entry: SubtitleEntry,
+        flag: SourceCorrectionFlag,
+        nearby_entries: list[SubtitleEntry],
+        target_language: str,
+        usage: CompletionUsage,
+        chunk_index: int | None = None,
+        stage: str = "source-correction-repair",
+    ) -> TracedTranslationText:
+        prompt = SOURCE_CORRECTION_REPAIR_PROMPT.format(
+            target_language=target_language,
+            cue_id=entry.index,
+            correction=flag.to_prompt_text(),
+            nearby_cues=format_source_correction_nearby_cues(nearby_entries),
+        )
+        operation = self.operations.create_completion(prompt, stage=stage, chunk=[entry], chunk_index=chunk_index)
+        result = operation.completion
+        duration_ms = operation.duration_ms
+        usage.add(result.usage)
+        try:
+            payload = extract_json_payload(result.content)
+            data = json.loads(payload)
+            if not isinstance(data, dict):
+                raise ValueError("source correction repair JSON must be an object")
+            cue_id = int(data.get("cue_id", entry.index))
+            if cue_id not in {entry.index, 1}:
+                raise ValueError(f"source correction repair cue_id mismatch: expected={entry.index}, actual={cue_id}")
+            translation = str(data.get("translation", "")).strip()
+            if not translation:
+                raise ValueError("source correction repair translation is empty")
+        except Exception as exc:
+            self.operations.record_trace(
+                stage=stage,
+                prompt=prompt,
+                response=result.content,
+                usage=result.usage,
+                duration_ms=duration_ms,
+                chunk=[entry],
+                chunk_index=chunk_index,
+                processed_translation="",
+                error=str(exc),
+            )
+            self.operations.emit_chunk_progress(
+                stage,
+                "failed",
+                f"{chunk_stage_label(stage)}解析失败：{exc}",
+                [entry],
+                chunk_index,
+            )
+            raise
+
+        processed_translation = f"[{entry.index}]\n{translation}"
+        trace_id = self.operations.record_trace(
+            stage=stage,
+            prompt=prompt,
+            response=result.content,
+            usage=result.usage,
+            duration_ms=duration_ms,
+            chunk=[entry],
+            chunk_index=chunk_index,
+            processed_translation=processed_translation,
+        )
+        self.operations.emit_chunk_progress(
+            stage,
+            "repairing",
+            f"{chunk_stage_label(stage)}响应已解析",
+            [entry],
+            chunk_index,
+            trace_id=trace_id,
+        )
+        return TracedTranslationText(translation, trace_id)
+
     def retranslate_alignment_drift(
         self,
         drift_chunk: list[SubtitleEntry],
@@ -668,5 +814,58 @@ class ChunkTranslator:
             )
             raise
 
+    def _process_semantic_timed_response(
+        self,
+        response: str,
+        units: list[SemanticUnit],
+        cue_entries: list[SubtitleEntry],
+        *,
+        target_language: str,
+        stage: str,
+        prompt: str,
+        usage: CompletionUsage,
+        duration_ms: int,
+        chunk_index: int | None,
+    ) -> str:
+        try:
+            return process_timed_cue_json_translation(response, cue_entries)
+        except Exception as timed_exc:
+            unit_entries = semantic_entries(units)
+            try:
+                process_semantic_json_translation(response, unit_entries)
+                for unit_entry, unit in zip(unit_entries, units, strict=True):
+                    apply_semantic_translation(
+                        unit,
+                        unit_entry.translated_text,
+                        target_language=target_language,
+                    )
+                return format_indexed_translations([entry.translated_text for entry in cue_entries])
+            except Exception as semantic_exc:
+                self.operations.record_trace(
+                    stage=stage,
+                    prompt=prompt,
+                    response=response,
+                    usage=usage,
+                    duration_ms=duration_ms,
+                    chunk=cue_entries,
+                    chunk_index=chunk_index,
+                    processed_translation="",
+                    error=f"timed cue parse failed: {timed_exc}; semantic fallback failed: {semantic_exc}",
+                )
+                raise timed_exc
+
 def join_stage(prefix: str, stage: str) -> str:
     return f"{prefix}-{stage}" if prefix else stage
+
+
+def format_source_correction_nearby_cues(entries: list[SubtitleEntry]) -> str:
+    if not entries:
+        return "(none)"
+    return "\n\n".join(
+        (
+            f"[{entry.index}]\n"
+            f"Source: {entry.original_text}\n"
+            f"Current translation: {entry.translated_text or '(empty)'}"
+        )
+        for entry in entries
+    )

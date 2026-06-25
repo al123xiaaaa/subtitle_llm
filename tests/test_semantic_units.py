@@ -51,6 +51,70 @@ class SemanticTranslationClient:
         )
 
 
+class CueAwareSemanticClient:
+    def __init__(self):
+        self.prompts: list[str] = []
+
+    def create_completion(self, config, messages):
+        prompt = messages[-1]["content"]
+        self.prompts.append(prompt)
+        if "Analyze the following subtitle content" in prompt:
+            return CompletionResult(
+                content="总结: demo summary\n\n短语术语:\n- Grill Me(追问我)",
+                usage=CompletionUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+
+        body = (
+            '{"translations": ['
+            '{"cue_id": 1, "translation": "几个月前，"}, '
+            '{"cue_id": 2, "translation": "我写了几句话"}, '
+            '{"cue_id": 3, "translation": "后来影响很大。"}'
+            "]}"
+        )
+        return CompletionResult(
+            content=body,
+            usage=CompletionUsage(prompt_tokens=2, completion_tokens=2, total_tokens=4),
+        )
+
+
+class SourceCorrectionSemanticClient:
+    def __init__(self):
+        self.prompts: list[str] = []
+
+    def create_completion(self, config, messages):
+        prompt = messages[-1]["content"]
+        self.prompts.append(prompt)
+        if "Analyze the following subtitle content" in prompt:
+            return CompletionResult(
+                content=(
+                    '{"summary": "讲述都铎伦敦的街道。", '
+                    '"terms": [{"source": "Cheapside", "target": "齐普赛街"}], '
+                    '"source_corrections": ['
+                    '{"cue_ids": [99], "observed": "cheap side", "corrected": "Cheapside", '
+                    '"type": "street", "enforcement": "hard", '
+                    '"target_aliases": ["齐普赛街", "Cheapside"], "confidence": "high", '
+                    '"evidence": "The source calls it the main market street of Tudor London."}'
+                    "]}"
+                ),
+                usage=CompletionUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+        if "Repair exactly one timed subtitle cue" in prompt:
+            return CompletionResult(
+                content='{"cue_id": 2, "translation": "所以，齐普赛街。都铎伦敦的主要市场大街。"}',
+                usage=CompletionUsage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+            )
+
+        return CompletionResult(
+            content=(
+                '{"translations": ['
+                '{"cue_id": 1, "translation": "我到达了都铎伦敦，"}, '
+                '{"cue_id": 2, "translation": "所以，这边便宜。都铎伦敦的主要市场大街。"}'
+                "]}"
+            ),
+            usage=CompletionUsage(prompt_tokens=2, completion_tokens=2, total_tokens=4),
+        )
+
+
 def make_config(review_mode: Literal["auto", "tui"] = "auto") -> AppConfig:
     model = ModelConfig(type=ModelProvider.CUSTOM, api_key_env="FAKE_KEY", model="fake", endpoint="https://fake.test")
     return AppConfig(
@@ -481,6 +545,38 @@ class TestSemanticUnits(unittest.TestCase):
         self.assertEqual(len(report.auto_layout_repairs), 1)
         self.assertEqual(report.auto_layout_repairs[0].removed_index, 2)
 
+    def test_semantic_layout_can_mark_auto_merge_issue_without_removing_cues(self):
+        entries = [
+            SubtitleEntry(1, "00:00:00,000", "00:00:01,000", "Hi", "好"),
+            SubtitleEntry(2, "00:00:01,000", "00:00:02,000", ".", "。"),
+        ]
+        unit = build_semantic_units(entries)[0]
+        planned = PlannedChunk(index=0, entries=semantic_entries([unit]), boundary_context="", boundary_risks=[])
+        report = TranslationReport(
+            input_file="input.srt",
+            output_file="output.srt",
+            checkpoint_file="checkpoint.json",
+            context_file="context.txt",
+            total_chunks=1,
+        )
+        run_ledger = RunLedger()
+
+        repaired_entries = TranslationService._repair_semantic_layout(
+            cast(Any, None),
+            planned,
+            entries,
+            [unit],
+            run_ledger,
+            report,
+            "Chinese",
+            allow_auto_merge=False,
+        )
+
+        self.assertEqual([entry.index for entry in repaired_entries], [1, 2])
+        self.assertTrue(all(entry.needs_retranslation for entry in repaired_entries))
+        self.assertEqual(run_ledger.removed_entry_indices, set())
+        self.assertEqual(report.auto_layout_repairs, [])
+
     def test_auto_layout_repair_persists_removed_indices_on_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
             input_path = Path(tmp) / "input.srt"
@@ -689,6 +785,75 @@ class TestSemanticUnits(unittest.TestCase):
                 "".join(entry.translated_text for entry in result.subtitle.entries),
                 "几个月前我写了几句话后来影响很大。我把这些句子打包成追问我技能。",
             )
+
+    def test_pipeline_can_translate_semantic_context_directly_to_timed_cues(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.srt"
+            output_path = Path(tmp) / "output.srt"
+            input_path.write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\nA few months ago,\n\n"
+                "2\n00:00:01,000 --> 00:00:02,000\nI wrote a few sentences\n\n"
+                "3\n00:00:02,000 --> 00:00:03,000\nthat mattered.\n\n",
+                encoding="utf-8",
+            )
+            client = CueAwareSemanticClient()
+            service = TranslationService(
+                make_config(),
+                translation_client=client,
+                summary_client=client,
+            )
+
+            result = service.translate(
+                TranslationRequest(
+                    input_file=str(input_path),
+                    output_file=str(output_path),
+                    target_language="Chinese",
+                )
+            )
+
+            self.assertTrue(result.report.semantic_translation_applied)
+            self.assertEqual(
+                [entry.translated_text for entry in result.subtitle.entries],
+                ["几个月前，", "我写了几句话", "后来影响很大。"],
+            )
+            translation_prompt = next(prompt for prompt in client.prompts if "Semantic units with timed cues" in prompt)
+            self.assertIn('"cue_id": 1', translation_prompt)
+            self.assertIn('"source_index": 1', translation_prompt)
+
+    def test_pipeline_repairs_unadopted_hard_source_correction_without_tui(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.srt"
+            output_path = Path(tmp) / "output.srt"
+            input_path.write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\nI arrived in Tudor London and\n\n"
+                "2\n00:00:01,000 --> 00:00:02,000\n"
+                "so cheap side.The main market street of Tudor London\n\n",
+                encoding="utf-8",
+            )
+            client = SourceCorrectionSemanticClient()
+            config = make_config()
+            config.pipeline.semantic_translation = "always"
+            service = TranslationService(
+                config,
+                translation_client=client,
+                summary_client=client,
+                review_port=NoopReviewPort(),
+            )
+
+            result = service.translate(
+                TranslationRequest(
+                    input_file=str(input_path),
+                    output_file=str(output_path),
+                    target_language="Chinese",
+                )
+            )
+
+            self.assertEqual(
+                [entry.translated_text for entry in result.subtitle.entries],
+                ["我到达了都铎伦敦，", "所以，齐普赛街。都铎伦敦的主要市场大街。"],
+            )
+            self.assertTrue(any("Repair exactly one timed subtitle cue" in prompt for prompt in client.prompts))
+            self.assertEqual(result.report.token_usage.total_tokens, 11)
 
     def test_tui_mode_still_translates_with_semantic_units(self):
         with tempfile.TemporaryDirectory() as tmp:

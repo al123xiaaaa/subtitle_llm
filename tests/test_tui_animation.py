@@ -78,6 +78,27 @@ class TestTuiAnimation(unittest.TestCase):
 
         asyncio.run(run_app())
 
+    def test_review_tui_does_not_default_to_cascade_for_local_consecutive_flags(self):
+        async def run_app() -> None:
+            with tempfile.NamedTemporaryFile(suffix=".json") as temp_file:
+                app = CustomHandlingApp(
+                    [
+                        SubtitleEntry(1, "00:00:00,000", "00:00:01,000", "First.", "第一句", False),
+                        SubtitleEntry(2, "00:00:01,000", "00:00:02,000", "Second.", "第二句？", True),
+                        SubtitleEntry(3, "00:00:02,000", "00:00:03,000", "Third.", "第三句？", True),
+                        SubtitleEntry(4, "00:00:03,000", "00:00:04,000", "Fourth.", "第四句？", True),
+                        SubtitleEntry(5, "00:00:04,000", "00:00:05,000", "Fifth.", "第五句", False),
+                    ],
+                    temp_file.name,
+                )
+                async with app.run_test():
+                    self.assertIsNone(app.cascade_start_index())
+                    self.assertEqual([entry.index for entry in app.selected_entries()], [2, 3, 4])
+                    progress_label = app.query_one("#progress_label", Static)
+                    self.assertIn("待处理 3", str(progress_label.render()))
+
+        asyncio.run(run_app())
+
     def test_review_tui_defaults_to_cascade_for_broad_missing_translation_failure(self):
         async def run_app() -> None:
             with tempfile.NamedTemporaryFile(suffix=".json") as temp_file:

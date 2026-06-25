@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 import threading
 import time
@@ -8,6 +9,12 @@ from pathlib import Path
 from subtitle_llm.llm.types import ChatClient, CompletionUsage
 from subtitle_llm.pipeline.llm_trace import LlmTraceRecorder
 from subtitle_llm.pipeline.prompts import GENERATE_SUMMARY_PROMPT
+from subtitle_llm.pipeline.source_corrections import (
+    SourceCorrection,
+    parse_source_corrections,
+    source_corrections_to_json,
+)
+from subtitle_llm.pipeline.text import extract_json_payload
 from subtitle_llm.settings import ModelConfig
 
 
@@ -68,17 +75,13 @@ class ContextService:
             duration_ms=elapsed_ms(started_at),
         )
 
-        try:
-            summary, terms = result.content.split("短语术语:")
-        except ValueError:
-            summary = result.content
-            terms = ""
-
-        summary = summary.replace("总结:", "").strip()
-        untranslatable_terms = [
-            term.strip().strip("-") for term in terms.strip().split("\n") if term.strip()
-        ]
-        context = f"Overall summary: {summary}\nShort Terms: {', '.join(untranslatable_terms)}"
+        summary, terms, corrections, source_corrections = parse_context_components(result.content)
+        context = (
+            f"Overall summary: {summary}\n"
+            f"Short Terms: {', '.join(terms) if terms else '(none)'}\n"
+            f"Source corrections JSON: {source_corrections_to_json(source_corrections)}\n"
+            f"Likely ASR corrections: {', '.join(corrections) if corrections else '(none)'}"
+        )
         if self.review_enabled:
             context = self.review_context_in_console(context)
         return context, result.usage
@@ -142,3 +145,107 @@ class ContextService:
 
 def elapsed_ms(started_at: float) -> int:
     return max(0, round((time.perf_counter() - started_at) * 1000))
+
+
+def parse_context_response(content: str) -> tuple[str, list[str], list[str]]:
+    summary, terms, corrections, _source_corrections = parse_context_components(content)
+    return summary, terms, corrections
+
+
+def parse_context_components(content: str) -> tuple[str, list[str], list[str], list[SourceCorrection]]:
+    json_components = parse_json_context_components(content)
+    if json_components is not None:
+        return json_components
+
+    summary_section, terms_section, corrections_section = split_context_sections(content)
+    summary = summary_section.replace("总结:", "").strip()
+    terms = parse_bullet_lines(terms_section)
+    corrections = [
+        item
+        for item in parse_bullet_lines(corrections_section)
+        if item.strip().lower() not in {"(none)", "none", "无", "无。"}
+    ]
+    source_corrections = parse_source_corrections(corrections)
+    return summary, terms, corrections, source_corrections
+
+
+def parse_json_context_components(content: str) -> tuple[str, list[str], list[str], list[SourceCorrection]] | None:
+    try:
+        payload = extract_json_payload(content)
+    except ValueError:
+        return None
+    try:
+        import json
+
+        data = json.loads(payload)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    summary = str(data.get("summary", data.get("总结", ""))).strip()
+    terms = parse_json_terms(data.get("terms", data.get("短语术语", [])))
+    raw_corrections = data.get("source_corrections", data.get("asr_corrections", data.get("疑似ASR修正", [])))
+    source_corrections = parse_source_corrections(raw_corrections)
+    corrections = format_source_correction_summaries(source_corrections) or parse_json_terms(raw_corrections)
+    return summary, terms, corrections, source_corrections
+
+
+def parse_json_terms(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    terms: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            source = str(item.get("source", item.get("term", ""))).strip()
+            target = str(item.get("target", item.get("translation", ""))).strip()
+            if source and target:
+                terms.append(f"{source}({target})")
+            elif source:
+                terms.append(source)
+            continue
+        text = str(item).strip()
+        if text:
+            terms.append(text)
+    return terms
+
+
+def format_source_correction_summaries(corrections: list[SourceCorrection]) -> list[str]:
+    summaries: list[str] = []
+    for correction in corrections:
+        alias = correction.target_aliases[0] if correction.target_aliases else ""
+        alias_text = f"({alias})" if alias else ""
+        confidence = f" [confidence: {correction.confidence}]" if correction.confidence else ""
+        summaries.append(f"{correction.observed} -> {correction.corrected}{alias_text}{confidence}")
+    return summaries
+
+
+def split_context_sections(content: str) -> tuple[str, str, str]:
+    terms_match = re.search(r"(?:短语术语|术语|Terms)\s*[:：]", content, re.IGNORECASE)
+    corrections_match = re.search(r"(?:疑似ASR修正|ASR修正|疑似修正|Likely ASR corrections)\s*[:：]", content, re.IGNORECASE)
+
+    if not terms_match:
+        return content, "", section_after(content, corrections_match)
+
+    summary = content[:terms_match.start()]
+    if corrections_match and corrections_match.start() > terms_match.end():
+        terms = content[terms_match.end():corrections_match.start()]
+        corrections = content[corrections_match.end():]
+    else:
+        terms = content[terms_match.end():]
+        corrections = ""
+    return summary, terms, corrections
+
+
+def section_after(content: str, match: re.Match[str] | None) -> str:
+    if not match:
+        return ""
+    return content[match.end():]
+
+
+def parse_bullet_lines(section: str) -> list[str]:
+    return [
+        line.strip().lstrip("-").strip()
+        for line in section.strip().splitlines()
+        if line.strip()
+    ]
