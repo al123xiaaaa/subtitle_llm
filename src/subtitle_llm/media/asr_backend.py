@@ -17,6 +17,12 @@ FunasrAsrBackend 通过 ``funasr.AutoModel`` 一次调用完成 VAD 分段 + 识
 - ``punc_model`` 恢复标点，解决长段无标点无法断句的问题；
 - 顶层词级 timestamp 提供原始音频时间轴，无需字数比例投影（方案 E）。
 代价是重新引入 PyTorch 依赖；详见 docs/adr/0003。
+
+**标签污染修复**：funasr 内部把含 SenseVoice 标签（``<|en|><|NEUTRAL|>`` 等）的
+``result["text"]`` 直接传给 ct-punc，``split_words`` 把标签与首词粘连，导致 ``punc_array``
+比 ``timestamp`` 短，``sentence_info`` 只覆盖音频前半段。``transcribe`` 在拿到 funasr
+结果后用清洗后的 ``words``（纯词，不含标签）重新跑 ct-punc 重建 ``sentence_info``
+（``_rebuild_sentence_info_if_possible``），确保覆盖全量音频。
 """
 
 from __future__ import annotations
@@ -156,6 +162,13 @@ def _build_cues_by_sentence_alignment(
         if last_idx < first_idx or first_idx <= last_end_idx:
             # 段顺序错乱（非单调/回退），放弃对齐避免错配。
             return []
+        # cam++ 在长停顿处偶尔会产出「只含标点、无实词」的语义段（如 ".", ","）。
+        # 这种段没有实质内容，不应单独成 cue；并入前段（扩展前段的 last_idx），
+        # 避免下游翻译因孤立标点 cue 困惑（模型把翻译留空或把思考写进译文）。
+        if segments and _range_is_punctuation_only(words, first_idx, last_idx):
+            segments[-1] = (segments[-1][0], last_idx)
+            last_end_idx = last_idx
+            continue
         last_end_idx = last_idx
         segments.append((first_idx, last_idx))
 
@@ -178,6 +191,31 @@ def _build_cues_by_sentence_alignment(
         cues.extend(tail_cues)
 
     return cues
+
+
+def _rebuild_sentence_info(
+    words: list,
+    timestamps: list,
+    punc_array: list,
+) -> list[dict]:
+    """用清洗后的 words+timestamp 重建 sentence_info，绕过 funasr 标签污染。
+
+    funasr 内部把含 SenseVoice 标签（``<|en|><|NEUTRAL|>`` 等）的 ``result["text"]``
+    直接传给 ct-punc，``split_words`` 把标签与首词粘连成一个 token，导致 ct-punc 的
+    ``punc_array`` 比 ``timestamp`` 短。``timestamp_sentence_en`` 在 punc 耗尽处停止
+    产出句段，``sentence_info`` 只覆盖音频前半段。
+
+    本函数用清洗后的纯词文本重新调用 ``timestamp_sentence_en``——``punc_array`` 与
+    ``timestamps`` 长度相等，重建的 ``sentence_info`` 覆盖全量音频。段内子时间戳元素
+    直接引用自传入的 ``timestamps``，因此与 ``_build_cues_by_sentence_alignment``
+    的 ``.index()`` 查找完全兼容。
+    """
+    from funasr.utils.timestamp_tools import timestamp_sentence_en
+
+    clean_words = [clean_sensevoice_text(str(w)).strip() for w in words]
+    clean_words = [w for w in clean_words if w]
+    clean_text = " ".join(clean_words)
+    return timestamp_sentence_en(punc_array, timestamps, clean_text)
 
 
 def _cue_from_word_range(
@@ -329,6 +367,19 @@ def _is_punctuation_only(token: str) -> bool:
     return bool(token) and all(ch in _PUNCTUATION_CHARS for ch in token)
 
 
+def _range_is_punctuation_only(words: list, start_idx: int, end_idx: int) -> bool:
+    """顶层词序列的一个连续区间是否全由标点组成（无实词）。
+
+    cam++ 在长停顿处偶尔会产出只含标点的语义段（ct-punc 插的 . , 等），这种段没有
+    实质内容，应并入相邻段而非单独成 cue。
+    """
+    for i in range(start_idx, end_idx + 1):
+        text = clean_sensevoice_text(str(words[i])).strip()
+        if text and not _is_punctuation_only(text):
+            return False
+    return True
+
+
 @dataclass
 class FunasrAsrBackend:
     """基于 FunASR Python SDK 的 ASR 后端。
@@ -378,6 +429,12 @@ class FunasrAsrBackend:
         words = res.get("words", [])
         timestamps = res.get("timestamp", [])
         sentence_info = res.get("sentence_info", [])
+
+        # 治本：funasr 内部把含 SenseVoice 标签的 text 传给 ct-punc，标签与首词粘连导致
+        # punc_array 比 timestamp 短，sentence_info 覆盖不全。用清洗后的 words 重建。
+        sentence_info = self._rebuild_sentence_info_if_possible(
+            model, words, timestamps, sentence_info
+        )
 
         # 主路径：用 sentence_info 的语义边界对齐顶层词级时间轴——语义段完整、时间无漂移。
         aligned_cues = _build_cues_by_sentence_alignment(words, timestamps, sentence_info)
@@ -429,6 +486,80 @@ class FunasrAsrBackend:
                 cues.append(AsrCue(start_ms=0, end_ms=0, text=text))
 
         return cues
+
+    def _rebuild_sentence_info_if_possible(
+        self,
+        model: object,
+        words: list,
+        timestamps: list,
+        original_sentence_info: list,
+    ) -> list:
+        """用清洗后的 words 重建 sentence_info，绕过 funasr 标签污染。
+
+        funasr 内部把含 SenseVoice 标签的 ``result["text"]`` 传给 ct-punc，标签与首词粘连
+        导致 ``punc_array`` 比 ``timestamp`` 短，``sentence_info`` 覆盖不全。本方法用
+        清洗后的纯词文本重新跑 ct-punc，拿到长度匹配的 ``punc_array`` 后重建 sentence_info。
+
+        任何环节失败（无 punc_model、长度不匹配、ct-punc 报错）时静默回退到原始
+        ``sentence_info``，保证不比现状更差。
+        """
+        # 守卫一：无词级时间戳，无法重建。
+        if not isinstance(words, list) or not isinstance(timestamps, list):
+            return original_sentence_info
+        if not words or len(words) != len(timestamps):
+            return original_sentence_info
+
+        # 守卫二：配置未启用 ct-punc（punc_model 为 None），无法重新分词。
+        punc_model = getattr(model, "punc_model", None)
+        if punc_model is None:
+            return original_sentence_info
+
+        # 用清洗后的纯词文本重新跑 ct-punc，拿到与 timestamp 等长的 punc_array。
+        clean_words = [clean_sensevoice_text(str(w)).strip() for w in words]
+        clean_words = [w for w in clean_words if w]
+        clean_text = " ".join(clean_words)
+        if not clean_text:
+            return original_sentence_info
+
+        try:
+            punc_kwargs = getattr(model, "punc_kwargs", {})
+            punc_res = cast(
+                Any, model
+            ).inference(clean_text, model=punc_model, kwargs=punc_kwargs)
+            punc_array = punc_res[0]["punc_array"]
+        except (IndexError, KeyError, TypeError, RuntimeError) as exc:
+            logger.warning("ct-punc 重建失败，回退原始 sentence_info: %s", exc)
+            return original_sentence_info
+
+        # ct-punc 在多段输入时返回 torch.Tensor（cat 拼接），单段时返回 list。
+        # 统一转成 list，供 timestamp_sentence_en 按 index 访问。
+        if hasattr(punc_array, "tolist"):
+            punc_array = punc_array.tolist()
+        if not isinstance(punc_array, list) or not punc_array:
+            logger.warning("ct-punc 返回空 punc_array，回退原始 sentence_info")
+            return original_sentence_info
+
+        # 守卫三：重建后 punc_array 仍与 timestamp 长度不等（理论上清洗后不应发生），
+        # 说明对齐仍有问题，不强行重建。
+        if len(punc_array) != len(timestamps):
+            logger.warning(
+                "重建 punc_array 长度(%s) != timestamp 长度(%s)，回退原始 sentence_info",
+                len(punc_array),
+                len(timestamps),
+            )
+            return original_sentence_info
+
+        rebuilt = _rebuild_sentence_info(words, timestamps, punc_array)
+        if not rebuilt:
+            return original_sentence_info
+
+        original_count = len(original_sentence_info) if isinstance(original_sentence_info, list) else 0
+        logger.info(
+            "重建 sentence_info 绕过标签污染: %s 段（原 %s 段）",
+            len(rebuilt),
+            original_count,
+        )
+        return rebuilt
 
     def _get_or_load_model(self, auto_model_cls) -> object:
         """懒加载并缓存 AutoModel 实例（模型加载耗时，避免每次转写都重建）。"""

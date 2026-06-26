@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from subtitle_llm.domain import SubtitleEntry
 
@@ -147,12 +147,17 @@ def chunk_list(
     *,
     max_output_tokens: int | None = None,
     encoder: tiktoken.Encoding | None = None,
+    output_text_resolver: "Callable[[SubtitleEntry], list[str]] | None" = None,
 ) -> list[list[SubtitleEntry]]:
     """按条目数与（可选的）输出 token 预算切分字幕。
 
     - ``chunk_size``：每个块的条目数上限（始终生效）。
     - ``max_output_tokens``：每块的输出 token 预算。命中即切，避免翻译输出超过
       ``max_tokens`` 被截断。需与 ``encoder`` 同时提供；不传则只按条目数切（向后兼容）。
+    - ``output_text_resolver``：把一条 entry 解析为其实际输出的源文本列表。语义模式下，
+      一个语义单元条目对应多条底层 cue，LLM 要为每条 cue 各输出一条翻译，因此估算输出
+      token 必须按底层 cue 文本而非单元合并文本，否则会严重低估（1.2-1.6 倍）导致大 chunk
+      通过预算检查却仍被截断。不传时用 entry 自身的 original_text（向后兼容）。
 
     两条约束取严格者。块内仍优先落在句末标点（在两约束都未超的窗口内）；
     若 token 预算先到则按预算切（截断防护优先于断句美观）。
@@ -163,6 +168,11 @@ def chunk_list(
     sentence_endings = {".", "!", "?"}
     budget_active = max_output_tokens is not None and encoder is not None
 
+    def resolve_output_texts(entry: SubtitleEntry) -> list[str]:
+        if output_text_resolver is not None:
+            return output_text_resolver(entry)
+        return [entry.original_text]
+
     while i < n:
         end = min(i + chunk_size, n)
         split = end
@@ -172,7 +182,9 @@ def chunk_list(
             assert max_output_tokens is not None and encoder is not None
             budget_end = i
             for j in range(i, end):
-                candidate_texts = [entries[k].original_text for k in range(i, j + 1)]
+                candidate_texts: list[str] = []
+                for k in range(i, j + 1):
+                    candidate_texts.extend(resolve_output_texts(entries[k]))
                 if estimate_chunk_output_tokens(candidate_texts, encoder) > max_output_tokens:
                     break
                 budget_end = j + 1

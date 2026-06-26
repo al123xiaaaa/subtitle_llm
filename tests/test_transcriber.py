@@ -342,6 +342,59 @@ class TestFunasrAsrBackend(unittest.TestCase):
         self.assertEqual(cues[0].end_ms, 1240)
 
     @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_sentence_alignment_merges_punctuation_only_segment(self, mock_load):
+        """cam++ 产出只含标点的语义段时（如 ".", ","），并入前段而非单独成 cue。
+
+        复现真实场景：说话人停顿后 ct-punc 插了标点，cam++ 把标点单独切成一段，
+        导致下游翻译因孤立标点 cue 困惑（翻译留空或把思考写进译文）。
+        """
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{
+            "sentence_info": [
+                {
+                    "start": 1000, "end": 3000,
+                    "text": "release that",
+                    "timestamp": [[1000, 1060], [2000, 2060]],
+                },
+                {
+                    # 只含标点的段：子时间戳对应顶层 "." 和 ","
+                    "start": 2080, "end": 2180,
+                    "text": ".,",
+                    "timestamp": [[2080, 2140], [2160, 2180]],
+                },
+                {
+                    "start": 2200, "end": 4000,
+                    "text": "there would be pushback",
+                    "timestamp": [[2200, 2260], [2400, 2460], [2600, 2660], [2800, 2860]],
+                },
+            ],
+            "words": ["release", "that", ".", ",", "there", "would", "be", "pushback"],
+            "timestamp": [
+                [1000, 1060], [2000, 2060],
+                [2080, 2140], [2160, 2180],  # "." 和 ","
+                [2200, 2260], [2400, 2460], [2600, 2660], [2800, 2860],
+            ],
+        }]
+        mock_load.return_value = mock_model
+
+        cues = self._make_backend().transcribe("/tmp/a.wav", "English")
+
+        # 标点段并入前段，不单独成 cue：两条而非三条。
+        self.assertEqual(len(cues), 2)
+        # 没有任何 cue 是孤立标点。
+        PUNCT = set(".,!?;:，。！？；：、")
+        for cue in cues:
+            self.assertFalse(
+                cue.text and all(ch in PUNCT for ch in cue.text),
+                f"不应有孤立标点 cue: {cue.text!r}",
+            )
+        # 前段并入标点后，标点作为句尾收尾（release that.,）。
+        self.assertEqual(cues[0].text, "release that.,")
+        # 前段 end 扩展到标点段末尾（2180）。
+        self.assertEqual(cues[0].end_ms, 2180)
+        self.assertEqual(cues[1].text, "there would be pushback")
+
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
     def test_word_timestamp_rebuild_preserves_decimal_numbers(self, mock_load):
         """词级重建不能把 5.6 里的小数点当句号切开。"""
         mock_model = MagicMock()
@@ -459,6 +512,139 @@ class TestFunasrAsrBackend(unittest.TestCase):
         self._make_backend().transcribe("/tmp/a.wav", "English")
         call_kwargs = mock_model.generate.call_args.kwargs
         self.assertEqual(call_kwargs["language"], "en")
+
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_rebuild_sentence_info_covers_full_audio(self, mock_load):
+        """标签污染修复：清洗后的 words 重建 sentence_info，覆盖全量音频。
+
+        复现根因：funasr 把含 <|en|> 标签的 text 传给 ct-punc，导致原始 sentence_info
+        只覆盖前半段（此处模拟只到 4000ms），尾部词（4000-8000ms）丢失语义分段。
+        重建后 punc_array 与 timestamp 等长，sentence_info 覆盖全量音频。
+        """
+        mock_model = MagicMock()
+        # generate 返回：干净的 words + 全量 timestamp + 只覆盖前半段的原始 sentence_info
+        mock_model.generate.return_value = [{
+            "words": ["hello", "world", ".", "this", "is", "great", ".", "bye", "now", "."],
+            "timestamp": [
+                [1000, 1060], [1120, 1180], [1180, 1240],          # hello world .
+                [2000, 2060], [2120, 2180], [2240, 2300], [2300, 2360],  # this is great .
+                [4000, 4060], [4120, 4180], [4180, 4240],          # bye now .
+            ],
+            # 原始 sentence_info 只覆盖前 4000ms（标签污染导致中断）
+            "sentence_info": [
+                {"start": 1000, "end": 1240, "text": "hello world.",
+                 "timestamp": [[1000, 1060], [1120, 1180], [1180, 1240]]},
+                {"start": 2000, "end": 2360, "text": "this is great.",
+                 "timestamp": [[2000, 2060], [2120, 2180], [2240, 2300], [2300, 2360]]},
+            ],
+        }]
+        # mock ct-punc：返回与 timestamp 等长的 punc_array（10 个元素）
+        # punc_id: 1=无标点, 2=逗号, 3=句号, 4=问号（funasr 英文映射）
+        punc_array = [1, 1, 3, 1, 1, 1, 3, 1, 1, 3]  # 句号在第 3/7/10 位置
+        mock_model.punc_model = MagicMock()
+        mock_model.punc_kwargs = {}
+        mock_model.inference.return_value = [{"text": "...", "punc_array": punc_array}]
+        mock_load.return_value = mock_model
+
+        cues = self._make_backend().transcribe("/tmp/a.wav", "English")
+
+        # 重建后应覆盖全量音频：尾部 "bye now."（4000-4240ms）必须出现在 cue 里。
+        # 原始 sentence_info 只到 2360ms，若未重建则尾部走标点断句、cue 会以句号结尾且更碎。
+        tail_cue = cues[-1]
+        self.assertIn("bye", tail_cue.text,
+                      "重建后尾部词应出现在 cue 里，而非丢失语义分段")
+        self.assertGreaterEqual(tail_cue.end_ms, 4000,
+                                "重建后末尾 cue 应覆盖到尾部词，而非停在原始 sentence_info 的中断处")
+        # ct-punc 被调用过（用清洗后的文本重建）
+        mock_model.inference.assert_called()
+
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_rebuild_handles_tensor_punc_array(self, mock_load):
+        """ct-punc 返回 torch.Tensor（多段 cat 拼接）时，自动 .tolist() 转换。
+
+        复现真实长音频路径：ct-punc 在多个 mini_sentence 时用 torch.cat 拼接 punc_array，
+        返回的是 Tensor 而非 list。若不转换，isinstance(punc_array, list) 会失败导致重建被跳过。
+        """
+        # 构造一个带 .tolist() 的假 Tensor（避免测试依赖 torch）。
+        class FakeTensor:
+            def __init__(self, values):
+                self._values = values
+            def tolist(self):
+                return self._values
+
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{
+            "words": ["hello", "world", ".", "bye", "now", "."],
+            "timestamp": [
+                [1000, 1060], [1120, 1180], [1180, 1240],
+                [4000, 4060], [4120, 4180], [4180, 4240],
+            ],
+            # 原始 sentence_info 只覆盖前半段
+            "sentence_info": [
+                {"start": 1000, "end": 1240, "text": "hello world.",
+                 "timestamp": [[1000, 1060], [1120, 1180], [1180, 1240]]},
+            ],
+        }]
+        # ct-punc 返回 FakeTensor（模拟 torch.Tensor），tolist 后长度 == timestamp
+        punc_array = FakeTensor([1, 1, 3, 1, 1, 3])
+        mock_model.punc_model = MagicMock()
+        mock_model.punc_kwargs = {}
+        mock_model.inference.return_value = [{"text": "...", "punc_array": punc_array}]
+        mock_load.return_value = mock_model
+
+        cues = self._make_backend().transcribe("/tmp/a.wav", "English")
+
+        # Tensor 被正确转换，重建生效，尾部词出现在 cue 里。
+        tail_cue = cues[-1]
+        self.assertIn("bye", tail_cue.text)
+        self.assertGreaterEqual(tail_cue.end_ms, 4000)
+
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_rebuild_falls_back_when_punc_model_missing(self, mock_load):
+        """punc_model 为 None 时，重建回退到原始 sentence_info 逻辑。"""
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{
+            "words": ["hello", "world"],
+            "timestamp": [[1000, 1060], [1120, 1180]],
+            "sentence_info": [
+                {"start": 1000, "end": 1180, "text": "hello world",
+                 "timestamp": [[1000, 1060], [1120, 1180]]},
+            ],
+        }]
+        mock_model.punc_model = None  # 无 ct-punc，无法重建
+        mock_load.return_value = mock_model
+
+        cues = self._make_backend().transcribe("/tmp/a.wav", "English")
+
+        # 回退到原始 sentence_info 对齐路径，仍产出 cue。
+        self.assertEqual(len(cues), 1)
+        self.assertEqual(cues[0].text, "hello world")
+        # ct-punc 未被调用。
+        mock_model.inference.assert_not_called()
+
+    @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
+    def test_rebuild_falls_back_when_punc_array_length_mismatch(self, mock_load):
+        """重建后 punc_array 长度仍不匹配 timestamp 时，回退到原始 sentence_info。"""
+        mock_model = MagicMock()
+        mock_model.generate.return_value = [{
+            "words": ["hello", "world", "."],
+            "timestamp": [[1000, 1060], [1120, 1180], [1180, 1240]],
+            "sentence_info": [
+                {"start": 1000, "end": 1240, "text": "hello world.",
+                 "timestamp": [[1000, 1060], [1120, 1180], [1180, 1240]]},
+            ],
+        }]
+        # punc_array 长度不匹配（3 vs timestamp 的 3，但故意给 2 触发不匹配）
+        mock_model.punc_model = MagicMock()
+        mock_model.punc_kwargs = {}
+        mock_model.inference.return_value = [{"text": "...", "punc_array": [1, 3]}]
+        mock_load.return_value = mock_model
+
+        cues = self._make_backend().transcribe("/tmp/a.wav", "English")
+
+        # 回退到原始 sentence_info，仍产出 1 条 cue。
+        self.assertEqual(len(cues), 1)
+        self.assertEqual(cues[0].text, "hello world.")
 
 
 if __name__ == "__main__":

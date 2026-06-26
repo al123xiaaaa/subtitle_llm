@@ -147,6 +147,43 @@ class TestChunkPlannerTokenBudget(unittest.TestCase):
             tokens = estimate_output_tokens([e.original_text for e in chunk.entries], encoder)
             self.assertLessEqual(tokens, budget)
 
+    def test_resolver_splits_semantic_units_by_cue_level_tokens(self):
+        """语义模式：resolver 按 cue 级文本估算，把会超预算的大单元块切小。
+
+        复现真实 bug：语义单元条目的 original_text 是合并源文，单元级估算低估；
+        不传 resolver 时一个大块（多 cue 单元）通过预算却仍被截断。
+        """
+        encoder = build_token_encoder("fake-model")
+        # 构造「单元级文本短、cue 级文本多」的条目：每条 original_text 短，
+        # 但 resolver 展开后是 6 条 cue，token 估算 6 倍。
+        entries = [make_entry(i + 1, f"unit {i+1} source") for i in range(8)]
+        # resolver：每条展开成 6 条 cue 文本
+        def resolve_six_cues(entry):
+            return [f"cue {entry.index}-{j} some translatable source text" for j in range(6)]
+
+        # 不传 resolver：单元级估算，8 条全放进一块。
+        no_resolver = ChunkPlanner(
+            chunk_size=8, context_window_size=0, ignore_subtitle_length=0,
+            max_output_tokens=200, encoder=encoder,
+        )
+        self.assertEqual(len(no_resolver.plan(entries)), 1)
+
+        # 传 resolver：cue 级估算（8×6=48 条 cue），远超预算 200 → 切成多块。
+        with_resolver = ChunkPlanner(
+            chunk_size=8, context_window_size=0, ignore_subtitle_length=0,
+            max_output_tokens=200, encoder=encoder,
+            output_text_resolver=resolve_six_cues,
+        )
+        planned = with_resolver.plan(entries)
+        self.assertGreater(len(planned), 1)
+        # 每块按 cue 级估算都在预算内。
+        for chunk in planned:
+            cue_texts = []
+            for e in chunk.entries:
+                cue_texts.extend(resolve_six_cues(e))
+            tokens = estimate_output_tokens(cue_texts, encoder)
+            self.assertLessEqual(tokens, 200)
+
 
 class TestEstimateOutputTokens(unittest.TestCase):
     def test_empty_returns_zero(self):

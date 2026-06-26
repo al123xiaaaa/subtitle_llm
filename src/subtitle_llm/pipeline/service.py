@@ -371,12 +371,26 @@ class TranslationService:
             report.semantic_multi_cue_units = len([unit for unit in semantic_units_list if len(unit.entries) > 1])
             progress_contract.semantic_units_skipped()
 
+        # 语义模式下，translation_entries 是单元级条目，但 LLM 按底层 cue 数输出。
+        # token 预算必须按底层 cue 文本估算，否则会低估（1.2-1.6 倍）导致大 chunk
+        # 通过预算检查却仍被截断。
+        output_text_resolver = None
+        if use_semantic_translation:
+            def resolve_cue_texts(entry: SubtitleEntry) -> list[str]:
+                unit = semantic_unit_by_index.get(entry.index)
+                if unit:
+                    return [e.original_text for e in unit.entries]
+                return [entry.original_text]
+
+            output_text_resolver = resolve_cue_texts
+
         planner = ChunkPlanner(
             chunk_size=self.config.pipeline.chunk_size,
             context_window_size=self.config.pipeline.context_window_size,
             ignore_subtitle_length=self.config.pipeline.ignore_subtitle_length,
             max_output_tokens=self._chunk_output_token_budget(),
             encoder=build_token_encoder(self.config.translation_model.model),
+            output_text_resolver=output_text_resolver,
         )
         planned_chunks = planner.plan(translation_entries, resumed_indices=planner_resumed_indices)
         report.total_chunks = len(planned_chunks)

@@ -521,12 +521,19 @@ def _print_report(report) -> None:
         typer.echo(f"语义布局自动修复：{len(report.auto_layout_repairs)} 处")
     typer.echo(f"Chunk：成功 {successful_chunks} / {report.total_chunks}，失败 {len(report.failed_chunks)}")
     typer.echo(f"疑似跨 Chunk 断句边界：{report.boundary_risk_count}")
+    usage = report.token_usage
     typer.echo(
         "Token："
-        f"{report.token_usage.total_tokens} "
-        f"(prompt={report.token_usage.prompt_tokens}, "
-        f"completion={report.token_usage.completion_tokens})"
+        f"{usage.total_tokens} "
+        f"(prompt={usage.prompt_tokens}, "
+        f"completion={usage.completion_tokens})"
     )
+    if usage.prompt_cache_hit_tokens or usage.prompt_cache_miss_tokens:
+        typer.echo(
+            f"Prompt 缓存：命中 {usage.prompt_cache_hit_tokens} "
+            f"/ {usage.prompt_cache_hit_tokens + usage.prompt_cache_miss_tokens} "
+            f"({usage.cache_hit_rate()}%)"
+        )
     if report.failed_chunks:
         typer.echo("失败 chunk：")
         for failed in report.failed_chunks:

@@ -7,12 +7,22 @@ class TokenUsage(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    # prompt 缓存命中情况（DeepSeek 等厂商支持）。命中部分计费更低。
+    prompt_cache_hit_tokens: int = 0
+    prompt_cache_miss_tokens: int = 0
 
     def add_usage(self, usage) -> None:
         data = usage.to_dict() if hasattr(usage, "to_dict") else usage
         self.prompt_tokens += int(data.get("prompt_tokens", 0))
         self.completion_tokens += int(data.get("completion_tokens", 0))
         self.total_tokens += int(data.get("total_tokens", 0))
+        self.prompt_cache_hit_tokens += int(data.get("prompt_cache_hit_tokens", 0))
+        self.prompt_cache_miss_tokens += int(data.get("prompt_cache_miss_tokens", 0))
+
+    def cache_hit_rate(self) -> int:
+        """prompt 缓存命中率（百分比），缓存字段为 0 时返回 0。"""
+        total = self.prompt_cache_hit_tokens + self.prompt_cache_miss_tokens
+        return 100 * self.prompt_cache_hit_tokens // total if total else 0
 
 
 class FailedChunk(BaseModel):

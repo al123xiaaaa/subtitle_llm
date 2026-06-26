@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from subtitle_llm.domain import SubtitleEntry
 from subtitle_llm.pipeline.text import build_boundary_context, chunk_list
@@ -27,12 +27,14 @@ class ChunkPlanner:
         *,
         max_output_tokens: int | None = None,
         encoder: tiktoken.Encoding | None = None,
+        output_text_resolver: Callable[[SubtitleEntry], list[str]] | None = None,
     ):
         self.chunk_size = chunk_size
         self.context_window_size = context_window_size
         self.ignore_subtitle_length = ignore_subtitle_length
         self.max_output_tokens = max_output_tokens
         self.encoder = encoder
+        self.output_text_resolver = output_text_resolver
 
     def plan(self, all_entries: list[SubtitleEntry], resumed_indices: set[int] | None = None) -> list[PlannedChunk]:
         resumed_indices = resumed_indices or set()
@@ -41,6 +43,7 @@ class ChunkPlanner:
             self.chunk_size,
             max_output_tokens=self.max_output_tokens,
             encoder=self.encoder,
+            output_text_resolver=self.output_text_resolver,
         )
         planned: list[PlannedChunk] = []
 

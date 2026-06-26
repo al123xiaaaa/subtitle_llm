@@ -6,6 +6,7 @@ textual
 tiktoken
 requests
 google-generativeai
+json-repair>=0.30.0
 yt-dlp
 funasr
 pydub
