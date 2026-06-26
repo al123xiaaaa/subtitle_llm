@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 
 from subtitle_llm.domain import SubtitleEntry
@@ -45,6 +46,12 @@ from subtitle_llm.progress_contract import (
 )
 from subtitle_llm.progress_events import ProgressEmitter
 from subtitle_llm.settings import ModelConfig
+
+logger = logging.getLogger(__name__)
+
+# 翻译响应解析失败时的重试次数。LLM 偶尔吐出残缺/语法错的 JSON（提前停止、把思考写进
+# 译文等），json-repair 能救回一部分；救不回的在这里重新生成，通常第二次就能给出合法 JSON。
+TRANSLATION_PARSE_RETRIES = 2
 
 
 @dataclass
@@ -193,21 +200,46 @@ class ChunkTranslator:
             semantic_unit_count=len(units),
             cue_count=len(cue_entries),
         )
-        operation = self.operations.create_completion(prompt, stage=stage, chunk=cue_entries, chunk_index=chunk_index)
-        result = operation.completion
-        duration_ms = operation.duration_ms
-        usage.add(result.usage)
-        processed_translation = self._process_semantic_timed_response(
-            result.content,
-            units,
-            cue_entries,
-            target_language=target_language,
-            stage=stage,
-            prompt=prompt,
-            usage=result.usage,
-            duration_ms=duration_ms,
-            chunk_index=chunk_index,
-        )
+
+        result = None
+        processed_translation = ""
+        last_error: Exception | None = None
+        for attempt in range(TRANSLATION_PARSE_RETRIES + 1):
+            operation = self.operations.create_completion(prompt, stage=stage, chunk=cue_entries, chunk_index=chunk_index)
+            result = operation.completion
+            duration_ms = operation.duration_ms
+            usage.add(result.usage)
+            try:
+                processed_translation = self._process_semantic_timed_response(
+                    result.content,
+                    units,
+                    cue_entries,
+                    target_language=target_language,
+                    stage=stage,
+                    prompt=prompt,
+                    usage=result.usage,
+                    duration_ms=duration_ms,
+                    chunk_index=chunk_index,
+                )
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt < TRANSLATION_PARSE_RETRIES:
+                    logger.warning(
+                        "语义 cue 翻译响应解析失败，重试: chunk=%s attempt=%s/%s error=%s",
+                        chunk_index, attempt + 1, TRANSLATION_PARSE_RETRIES, exc,
+                    )
+                else:
+                    logger.warning(
+                        "语义 cue 翻译响应解析失败（已用尽重试）: chunk=%s error=%s",
+                        chunk_index, exc,
+                    )
+
+        if last_error is not None or result is None:
+            assert last_error is not None
+            raise last_error
+
         trace_id = self.operations.record_trace(
             stage=stage,
             prompt=prompt,

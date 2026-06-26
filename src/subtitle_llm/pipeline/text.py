@@ -11,6 +11,27 @@ if TYPE_CHECKING:
 
 STRONG_SENTENCE_ENDINGS = {".", "!", "?", "。", "！", "？", "…"}
 TRAILING_CLOSERS = set("\"'”’)]}）】》」』〉")
+
+
+def parse_translation_json(content: str) -> Any:
+    """解析翻译响应里的 JSON，标准解析失败时用 json-repair 兜底挽救。
+
+    LLM 偶尔会吐出语法有瑕疵的 JSON：未闭合的括号、被截断的数组、把思考过程混进
+    字段值等。标准 ``json.loads`` 一遇到这些就整体失败、整片回退原文。这里在标准
+    解析失败后，用 ``json_repair`` 尝试修复再解析，把「数据其实都在、只是壳坏了」
+    的响应救回来；救不回来的仍抛出原异常，交由上层重试或回退。
+    """
+    payload = extract_json_payload(content)
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError as strict_error:
+        try:
+            from json_repair import repair_json
+
+            repaired = repair_json(payload, return_objects=False)
+            return json.loads(repaired)
+        except Exception:
+            raise strict_error
 LEADING_OPENERS = set("\"'“‘([{（【《「『〈")
 CONTINUATION_WORDS = {
     "and",
@@ -341,8 +362,7 @@ def format_indexed_translations(translations: list[str]) -> str:
 
 
 def process_semantic_json_translation(content: str, chunk: list[SubtitleEntry]) -> str:
-    payload = extract_json_payload(content)
-    data = json.loads(payload)
+    data = parse_translation_json(content)
     rows = data.get("translations") if isinstance(data, dict) else data
     if not isinstance(rows, list):
         raise ValueError("semantic translation JSON must contain a translations list")
@@ -374,8 +394,7 @@ def process_semantic_json_translation(content: str, chunk: list[SubtitleEntry]) 
 
 
 def process_timed_cue_json_translation(content: str, entries: list[SubtitleEntry]) -> str:
-    payload = extract_json_payload(content)
-    data = json.loads(payload)
+    data = parse_translation_json(content)
     rows = data.get("translations") if isinstance(data, dict) else data
     if not isinstance(rows, list):
         raise ValueError("timed cue translation JSON must contain a translations list")
