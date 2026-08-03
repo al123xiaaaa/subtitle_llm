@@ -3,8 +3,13 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+import pysubs2
+
+from subtitle_llm.io.subtitles import load_srt_with_encoding_detection
 
 
 class MuxError(RuntimeError):
@@ -20,6 +25,21 @@ class MuxResult:
     output_file: str
     command: list[str]
 
+
+@dataclass(frozen=True)
+class AssSubtitleStyle:
+    play_res_x: int = 1280
+    play_res_y: int = 720
+    font_name: str = "Arial"
+    font_size: float = 34.0
+    outline: float = 2.2
+    shadow: float = 0.8
+    margin_h: int = 56
+    margin_v: int = 38
+
+
+ASS_STYLE_NAME = "SubtitleLLM"
+DEFAULT_ASS_STYLE = AssSubtitleStyle()
 
 FILE_LANGUAGE_CODES = {
     "chinese": "zh",
@@ -70,16 +90,22 @@ def mux_subtitle_track(
     subtitle_path = _existing_file(subtitle_file, "字幕文件")
     resolved_output = resolve_output_path(video_path, subtitle_path, target_language, output_file)
     resolved_output.parent.mkdir(parents=True, exist_ok=True)
+    resolved_ffmpeg = _resolve_ffmpeg(ffmpeg)
 
-    command = build_mux_command(
-        video_file=video_path,
-        subtitle_file=subtitle_path,
-        output_file=resolved_output,
-        target_language=target_language,
-        track_title=track_title,
-        ffmpeg=_resolve_ffmpeg(ffmpeg),
-    )
-    completed = subprocess.run(command, capture_output=True, text=True)
+    with tempfile.TemporaryDirectory(prefix="subtitle-llm-ass-") as temp_dir:
+        mux_subtitle_path = prepare_ass_subtitle_file(
+            subtitle_path,
+            Path(temp_dir) / f"{subtitle_path.stem}.ass",
+        )
+        command = build_mux_command(
+            video_file=video_path,
+            subtitle_file=mux_subtitle_path,
+            output_file=resolved_output,
+            target_language=target_language,
+            track_title=track_title,
+            ffmpeg=resolved_ffmpeg,
+        )
+        completed = subprocess.run(command, capture_output=True, text=True)
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()
         message = f"生成 MKV 失败：{detail}" if detail else "生成 MKV 失败"
@@ -117,7 +143,7 @@ def build_mux_command(
         "-c",
         "copy",
         "-c:s",
-        "srt",
+        "ass",
         "-metadata:s:s:0",
         f"language={language_code}",
         "-metadata:s:s:0",
@@ -126,6 +152,53 @@ def build_mux_command(
         "default",
         str(output_file),
     ]
+
+
+def prepare_ass_subtitle_file(
+    subtitle_file: str | Path,
+    output_file: str | Path,
+    style: AssSubtitleStyle = DEFAULT_ASS_STYLE,
+) -> Path:
+    subtitle_path = Path(subtitle_file)
+    suffix = subtitle_path.suffix.lower()
+    if suffix in {".ass", ".ssa"}:
+        return subtitle_path
+    if suffix != ".srt":
+        raise MuxError(f"仅支持将 .srt/.ass 字幕封装为 MKV：{subtitle_path}")
+
+    subtitles = load_srt_with_encoding_detection(subtitle_path)
+    apply_ass_style(subtitles, style)
+
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    subtitles.save(str(output_path), encoding="utf-8", format_="ass")
+    return output_path
+
+
+def apply_ass_style(subtitles: pysubs2.SSAFile, style: AssSubtitleStyle = DEFAULT_ASS_STYLE) -> None:
+    subtitles.info["ScriptType"] = "v4.00+"
+    subtitles.info["PlayResX"] = str(style.play_res_x)
+    subtitles.info["PlayResY"] = str(style.play_res_y)
+    subtitles.info["WrapStyle"] = "0"
+    subtitles.info["ScaledBorderAndShadow"] = "yes"
+    subtitles.styles = {
+        ASS_STYLE_NAME: pysubs2.SSAStyle(
+            fontname=style.font_name,
+            fontsize=style.font_size,
+            primarycolor=pysubs2.Color(255, 255, 255, 0),
+            outlinecolor=pysubs2.Color(0, 0, 0, 0),
+            backcolor=pysubs2.Color(0, 0, 0, 80),
+            borderstyle=1,
+            outline=style.outline,
+            shadow=style.shadow,
+            alignment=pysubs2.Alignment.BOTTOM_CENTER,
+            marginl=style.margin_h,
+            marginr=style.margin_h,
+            marginv=style.margin_v,
+        )
+    }
+    for event in subtitles:
+        event.style = ASS_STYLE_NAME
 
 
 def resolve_output_path(

@@ -114,7 +114,7 @@ def translate(
     ] = False,
     embed_video: Annotated[
         bool,
-        typer.Option("--embed-video/--no-embed-video", help="Generate an MKV with the translated SRT as a soft subtitle track."),
+        typer.Option("--embed-video/--no-embed-video", help="Generate an MKV with the translated subtitle as a styled ASS soft subtitle track."),
     ] = False,
     video_file: Annotated[
         Path | None,
@@ -221,7 +221,7 @@ def translate(
 @app.command()
 def mux(
     video: Annotated[Path, typer.Argument(help="Video file path.")],
-    subtitle: Annotated[Path, typer.Argument(help="Translated .srt file path.")],
+    subtitle: Annotated[Path, typer.Argument(help="Translated .srt/.ass file path.")],
     output: Annotated[
         Path | None,
         typer.Option("--output", "-o", help="Output MKV path. Defaults to the subtitle output directory."),
@@ -229,7 +229,7 @@ def mux(
     target_language: Annotated[str, typer.Option("--target-language", "-t", help="Subtitle track language.")] = "Chinese",
     ffmpeg: Annotated[str, typer.Option("--ffmpeg", help="FFmpeg executable path.")] = "ffmpeg",
 ) -> None:
-    """Mux translated SRT as the default soft subtitle track in an MKV."""
+    """Mux translated subtitles as the default styled ASS soft subtitle track in an MKV."""
     log_path = configure_run_logging("mux")
     progress = ProgressEmitter("mux")
     progress.emit(
