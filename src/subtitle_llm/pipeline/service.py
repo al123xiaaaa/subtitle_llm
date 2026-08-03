@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import concurrent.futures
 import logging
 import os
 from dataclasses import dataclass, field, replace
@@ -15,8 +14,14 @@ from subtitle_llm.llm.types import CompletionUsage
 from subtitle_llm.pipeline.checkpoint import file_fingerprint, sidecar_path
 from subtitle_llm.pipeline.chunk_translator import ChunkTranslationResult, ChunkTranslator
 from subtitle_llm.pipeline.chunks import ChunkPlanner, PlannedChunk
+from subtitle_llm.pipeline.chunk_processing import ChunkProcessingCoordinator
 from subtitle_llm.pipeline.context import ContextService
 from subtitle_llm.pipeline.llm_trace import LlmTraceRecorder
+from subtitle_llm.pipeline.lifecycle import (
+    TranslationTaskLifecycle,
+    TranslationTaskLifecycleEvent,
+)
+from subtitle_llm.pipeline.lifecycle.projectors import TaskLifecycleProjector
 from subtitle_llm.pipeline.normalization import (
     NormalizationOptions,
     normalize_subtitle,
@@ -147,6 +152,8 @@ class TranslationService:
 
         progress = progress or ProgressEmitter("translate")
         progress_contract = ProgressContract(progress)
+        task_lifecycle = TranslationTaskLifecycle().apply(TranslationTaskLifecycleEvent.PREPARE_INPUT_STARTED)
+        task_projector: TaskLifecycleProjector | None = None
         progress_contract.task_prepared()
         logger.info(
             "翻译任务开始: input=%s target_language=%s source_language=%s resume=%s review_mode=%s refine_translation=%s force_asr=%s",
@@ -249,6 +256,7 @@ class TranslationService:
             )
 
         normalized_input_fingerprint = file_fingerprint(task_input_file)
+        task_lifecycle = task_lifecycle.apply(TranslationTaskLifecycleEvent.PREPARE_INPUT_COMPLETED)
         output_file_for_record = self._absolute_path(output_file)
         should_restore = False
         if task_record is None and request.resume:
@@ -284,10 +292,12 @@ class TranslationService:
                 llm_trace_dir=str(trace_recorder.trace_dir),
                 source_video_file=resolved_input.video_file,
                 source_url=request.input_file if self._is_url(request.input_file) else None,
+                status=task_lifecycle.state,
             )
         report.task_id = task_record.task_id
         report.task_db_file = str(self.task_store.db_path)
-        self.task_store.update_status(task_record.task_id, "running")
+        task_projector = TaskLifecycleProjector(self.task_store, task_record.task_id, report, progress_contract)
+        task_projector.project(task_lifecycle.state)
 
         task_state_restore = RunLedger.restore_task_state(
             resume=should_restore,
@@ -333,7 +343,8 @@ class TranslationService:
             )
             run_ledger.save_task_state(self.task_store, task_record.task_id, subtitle, report, [])
         except Exception as exc:
-            self.task_store.update_status(task_record.task_id, "failed", error_summary=str(exc))
+            task_lifecycle = task_lifecycle.apply(TranslationTaskLifecycleEvent.FAILED)
+            task_projector.project(task_lifecycle.state, error_summary=str(exc))
             raise
 
         review_mode = request.review_mode or self.config.pipeline.review_mode
@@ -415,6 +426,8 @@ class TranslationService:
             report.short_entries,
             report.boundary_risk_count,
         )
+        task_lifecycle = task_lifecycle.apply(TranslationTaskLifecycleEvent.PREPARE_TRANSLATION_COMPLETED)
+        task_projector.project(task_lifecycle.state)
 
         translator = ChunkTranslator(
             self.translation_client,
@@ -430,9 +443,13 @@ class TranslationService:
         translated_entries: list[SubtitleEntry] = [
             entry for entry in subtitle.entries if entry.index in resumed_indices
         ]
+        chunk_processor = ChunkProcessingCoordinator(
+            threads=self.config.pipeline.threads,
+            semantic_output_granularity=self.config.pipeline.semantic_output_granularity,
+        )
         try:
             if use_semantic_translation:
-                self._run_semantic_chunks(
+                chunk_processor.run_semantic_chunks(
                     planned_chunks,
                     semantic_unit_by_index,
                     translator,
@@ -447,9 +464,14 @@ class TranslationService:
                     task_record.task_id,
                     report,
                     refine_translation,
+                    translate_planned_semantic_chunk=self._translate_planned_semantic_chunk,
+                    semantic_units_for_planned=self._semantic_units_for_planned,
+                    accept_semantic_timed_chunk=self._accept_semantic_timed_chunk,
+                    accept_semantic_chunk=self._accept_semantic_chunk,
+                    handle_semantic_chunk_failure=self._handle_semantic_chunk_failure,
                 )
             else:
-                self._run_chunks(
+                chunk_processor.run_chunks(
                     planned_chunks,
                     translator,
                     quality_gate,
@@ -463,9 +485,12 @@ class TranslationService:
                     task_record.task_id,
                     report,
                     refine_translation,
+                    accept_chunk=self._accept_chunk,
+                    handle_chunk_failure=self._handle_chunk_failure,
                 )
 
-            progress_contract.finalizing_subtitle()
+            task_lifecycle = task_lifecycle.apply(TranslationTaskLifecycleEvent.PROCESS_CHUNKS_COMPLETED)
+            task_projector.project(task_lifecycle.state, emit_progress=True)
             run_ledger.finalize_subtitle(subtitle, translated_entries, report)
             output_subtitle, source_display_corrections = subtitle_with_source_display_corrections(
                 subtitle,
@@ -476,9 +501,18 @@ class TranslationService:
             progress_contract.writing_srt(output_file)
             SubtitleIO.write_srt(output_subtitle, output_file, output_format=output_format)
             progress_contract.srt_written(output_file)
+            completion_event = (
+                TranslationTaskLifecycleEvent.FINALIZE_OUTPUT_COMPLETED_WITH_WARNINGS
+                if translation_completed_with_warnings(report, subtitle)
+                else TranslationTaskLifecycleEvent.FINALIZE_OUTPUT_COMPLETED
+            )
+            task_lifecycle = task_lifecycle.apply(completion_event)
+            task_projector.project(
+                task_lifecycle.state,
+                total_chunks=report.total_chunks,
+                emit_progress=emit_complete,
+            )
             run_ledger.save_task_state(self.task_store, task_record.task_id, subtitle, report, translated_entries)
-            if emit_complete:
-                progress_contract.complete(total_chunks=report.total_chunks)
             logger.info(
                 "翻译任务完成: output=%s failed_chunks=%s total_tokens=%s",
                 output_file,
@@ -487,7 +521,8 @@ class TranslationService:
             )
             return TranslationResult(subtitle=subtitle, report=report)
         except Exception as exc:
-            self.task_store.update_status(task_record.task_id, "failed", error_summary=str(exc))
+            task_lifecycle = task_lifecycle.apply(TranslationTaskLifecycleEvent.FAILED)
+            task_projector.project(task_lifecycle.state, error_summary=str(exc))
             raise
         finally:
             stop_review = getattr(review_port, "stop", None)
@@ -530,211 +565,6 @@ class TranslationService:
         if path.is_absolute():
             return str(path)
         return str((Path(os.getcwd()) / path).resolve())
-
-    def _run_chunks(
-        self,
-        planned_chunks: list[PlannedChunk],
-        translator: ChunkTranslator,
-        quality_gate: QualityGate,
-        review_port: ReviewPort,
-        context: str,
-        target_language: str,
-        subtitle: Subtitle,
-        translated_entries: list[SubtitleEntry],
-        run_ledger: RunLedger,
-        task_store: TranslationTaskStore,
-        task_id: str,
-        report: TranslationReport,
-        refine_translation: bool,
-    ) -> None:
-        done_futures: set[concurrent.futures.Future] = set()
-        for planned in planned_chunks:
-            translator_progress_contract(translator).chunk_queued(
-                planned.entries,
-                chunk_index=planned.index,
-                total_chunks=report.total_chunks,
-            )
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.config.pipeline.threads) as executor:
-            future_to_chunk = {
-                executor.submit(
-                    translator.translate_and_refine,
-                    planned.entries,
-                    context,
-                    target_language,
-                    planned.boundary_context,
-                    planned.index,
-                    refine_translation=refine_translation,
-                ): planned
-                for planned in planned_chunks
-            }
-            all_futures = set(future_to_chunk.keys())
-
-            while len(done_futures) < len(all_futures):
-                newly_done, _ = concurrent.futures.wait(
-                    all_futures - done_futures,
-                    return_when=concurrent.futures.FIRST_COMPLETED,
-                )
-                for future in newly_done:
-                    done_futures.add(future)
-                    planned = future_to_chunk[future]
-                    try:
-                        result = future.result()
-                        self._accept_chunk(
-                            planned,
-                            result,
-                            translator,
-                            quality_gate,
-                            review_port,
-                            context,
-                            target_language,
-                            translated_entries,
-                            run_ledger,
-                            report,
-                            refine_translation,
-                        )
-                    except Exception as exc:
-                        logger.exception(
-                            "chunk处理失败: chunk=%s entries=%s",
-                            planned.index + 1,
-                            [entry.index for entry in planned.entries],
-                        )
-                        self._handle_chunk_failure(planned, translated_entries, report, exc, translator.progress)
-                    finally:
-                        report.completed_chunks += 1
-                        report.processed_entries = run_ledger.processed_entry_count(translated_entries)
-                        run_ledger.save_task_state(task_store, task_id, subtitle, report, translated_entries)
-                        task_store.save_chunk_state(
-                            task_id,
-                            chunk_index=planned.index,
-                            entry_indices=[entry.index for entry in planned.entries],
-                            status="failed" if report.failed_chunks and any(
-                                failed.chunk_index == planned.index for failed in report.failed_chunks
-                            ) else "done",
-                        )
-                        translator_progress_contract(translator).task_state_saved(
-                            planned.entries,
-                            chunk_index=planned.index,
-                            total_chunks=report.total_chunks,
-                            warning=bool(planned.entries and any(entry.needs_retranslation for entry in planned.entries)),
-                        )
-
-    def _run_semantic_chunks(
-        self,
-        planned_chunks: list[PlannedChunk],
-        semantic_unit_by_index: dict[int, SemanticUnit],
-        translator: ChunkTranslator,
-        quality_gate: QualityGate,
-        review_port: ReviewPort,
-        context: str,
-        target_language: str,
-        subtitle: Subtitle,
-        translated_entries: list[SubtitleEntry],
-        run_ledger: RunLedger,
-        task_store: TranslationTaskStore,
-        task_id: str,
-        report: TranslationReport,
-        refine_translation: bool,
-    ) -> None:
-        done_futures: set[concurrent.futures.Future] = set()
-        for planned in planned_chunks:
-            translator_progress_contract(translator).chunk_queued(
-                planned.entries,
-                chunk_index=planned.index,
-                total_chunks=report.total_chunks,
-                semantic=True,
-            )
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.config.pipeline.threads) as executor:
-            future_to_chunk = {
-                executor.submit(
-                    self._translate_planned_semantic_chunk,
-                    translator,
-                    planned,
-                    semantic_unit_by_index,
-                    context,
-                    target_language,
-                    refine_translation,
-                ): planned
-                for planned in planned_chunks
-            }
-            all_futures = set(future_to_chunk.keys())
-
-            while len(done_futures) < len(all_futures):
-                newly_done, _ = concurrent.futures.wait(
-                    all_futures - done_futures,
-                    return_when=concurrent.futures.FIRST_COMPLETED,
-                )
-                for future in newly_done:
-                    done_futures.add(future)
-                    planned = future_to_chunk[future]
-                    try:
-                        result = future.result()
-                        semantic_units = self._semantic_units_for_planned(planned, semantic_unit_by_index)
-                        if self.config.pipeline.semantic_output_granularity == "cue":
-                            self._accept_semantic_timed_chunk(
-                                planned,
-                                result,
-                                semantic_units,
-                                translator,
-                                quality_gate,
-                                review_port,
-                                context,
-                                target_language,
-                                translated_entries,
-                                run_ledger,
-                                report,
-                                refine_translation,
-                            )
-                        else:
-                            self._accept_semantic_chunk(
-                                planned,
-                                result,
-                                semantic_unit_by_index,
-                                translator,
-                                quality_gate,
-                                review_port,
-                                context,
-                                target_language,
-                                translated_entries,
-                                run_ledger,
-                                report,
-                                refine_translation,
-                            )
-                    except Exception as exc:
-                        logger.exception(
-                            "语义chunk处理失败: chunk=%s units=%s",
-                            planned.index + 1,
-                            [entry.index for entry in planned.entries],
-                        )
-                        self._handle_semantic_chunk_failure(
-                            planned,
-                            semantic_unit_by_index,
-                            translated_entries,
-                            report,
-                            exc,
-                            translator.progress,
-                        )
-                    finally:
-                        report.completed_chunks += 1
-                        report.processed_entries = run_ledger.processed_entry_count(translated_entries)
-                        run_ledger.save_task_state(task_store, task_id, subtitle, report, translated_entries)
-                        task_store.save_chunk_state(
-                            task_id,
-                            chunk_index=planned.index,
-                            entry_indices=[entry.index for entry in planned.entries],
-                            status="failed" if report.failed_chunks and any(
-                                failed.chunk_index == planned.index for failed in report.failed_chunks
-                            ) else "done",
-                        )
-                        translator_progress_contract(translator).task_state_saved(
-                            planned.entries,
-                            chunk_index=planned.index,
-                            total_chunks=report.total_chunks,
-                            semantic=True,
-                            warning=bool(
-                                planned.entries and any(entry.needs_retranslation for entry in planned.entries)
-                            ),
-                        )
 
     def _translate_planned_semantic_chunk(
         self,
@@ -2312,6 +2142,10 @@ class TranslationService:
 
 def translator_progress_contract(translator: ChunkTranslator) -> ProgressContract:
     return ProgressContract(translator.progress or ProgressEmitter("translate"))
+
+
+def translation_completed_with_warnings(report: TranslationReport, subtitle: Subtitle) -> bool:
+    return bool(report.failed_chunks or any(entry.needs_retranslation for entry in subtitle.entries))
 
 
 def snapshot_entry_translations(entries: list[SubtitleEntry]) -> EntryTranslationSnapshot:

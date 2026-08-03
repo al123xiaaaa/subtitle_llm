@@ -1,3 +1,4 @@
+import contextlib
 import sqlite3
 import sys
 import tempfile
@@ -10,6 +11,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from subtitle_llm.domain import Subtitle, SubtitleEntry
+from subtitle_llm.pipeline.lifecycle import TranslationChunkState, TranslationTaskState
 from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.pipeline.task_store import SCHEMA_VERSION, TranslationTaskStore
 from subtitle_llm.settings import AppConfig, ModelConfig, ModelProvider, PipelineConfig
@@ -31,7 +33,7 @@ class TestTranslationTaskStore(unittest.TestCase):
 
             TranslationTaskStore(db_path)
 
-            with sqlite3.connect(db_path) as connection:
+            with contextlib.closing(sqlite3.connect(db_path)) as connection:
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
                 tables = {
                     row[0]
@@ -76,7 +78,7 @@ class TestTranslationTaskStore(unittest.TestCase):
                 record.task_id,
                 chunk_index=0,
                 entry_indices=[1, 2],
-                status="done",
+                status=TranslationChunkState.ACCEPTED,
                 diagnosis={"has_issues": False},
                 last_trace_id="000001",
             )
@@ -86,12 +88,38 @@ class TestTranslationTaskStore(unittest.TestCase):
             self.assertNotIn("2", state["entries"])
             self.assertEqual(state["report"]["removed_entry_indices"], [2])
 
-            with sqlite3.connect(store.db_path) as connection:
+            with contextlib.closing(sqlite3.connect(store.db_path)) as connection:
                 chunk = connection.execute(
                     "SELECT status, last_trace_id FROM translation_chunks WHERE task_id = ?",
                     (record.task_id,),
                 ).fetchone()
-            self.assertEqual(chunk, ("done", "000001"))
+            self.assertEqual(chunk, ("accepted", "000001"))
+
+    def test_resume_state_does_not_overwrite_lifecycle_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TranslationTaskStore(Path(tmp) / "tasks.sqlite3")
+            record = store.create_task(
+                input_display="input.srt",
+                working_directory=tmp,
+                source_subtitle_path=str(Path(tmp) / "input.srt"),
+                normalized_input_fingerprint="fingerprint",
+                target_language="Chinese",
+                source_language="en",
+                output_format="source-first",
+                output_file=str(Path(tmp) / "output.srt"),
+                config=make_config(),
+            )
+            store.update_status(record.task_id, TranslationTaskState.PROCESSING_CHUNKS)
+            report = TranslationReport(
+                input_file=str(Path(tmp) / "input.srt"),
+                output_file=str(Path(tmp) / "output.srt"),
+                context_file=str(Path(tmp) / "output_context.txt"),
+                stage="完成",
+            )
+
+            store.save_resume_state(record.task_id, Subtitle([]), report)
+
+            self.assertEqual(store.get_task(record.task_id).status, "processing_chunks")
 
     def test_finds_resume_record_and_soft_deletes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -107,7 +135,7 @@ class TestTranslationTaskStore(unittest.TestCase):
                 output_file=str(Path(tmp) / "output.srt"),
                 config=make_config(),
             )
-            store.update_status(record.task_id, "failed", error_summary="boom")
+            store.update_status(record.task_id, TranslationTaskState.FAILED, error_summary="boom")
 
             found = store.find_resume_task(
                 normalized_input_fingerprint="fingerprint",

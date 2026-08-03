@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import sqlite3
 import sys
 import os
 import tempfile
@@ -240,6 +241,17 @@ class TestNewPipeline(unittest.TestCase):
             self.assertTrue(any("summary-context" in path.name for path in trace_json_files))
             self.assertTrue(any("chunk-001-rough-ok" in path.name for path in trace_json_files))
             self.assertFalse(any("chunk-001-refine-ok" in path.name for path in trace_json_files))
+            with contextlib.closing(sqlite3.connect(result.report.task_db_file or "")) as connection:
+                task_status = connection.execute(
+                    "SELECT status FROM translation_tasks WHERE task_id = ?",
+                    (result.report.task_id,),
+                ).fetchone()[0]
+                chunk_status = connection.execute(
+                    "SELECT status FROM translation_chunks WHERE task_id = ? AND chunk_index = 0",
+                    (result.report.task_id,),
+                ).fetchone()[0]
+            self.assertEqual(task_status, "completed")
+            self.assertEqual(chunk_status, "accepted")
 
     def test_refine_translation_can_be_enabled_per_request(self):
         with tempfile.TemporaryDirectory() as tmp:

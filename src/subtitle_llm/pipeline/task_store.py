@@ -5,16 +5,25 @@ import os
 import sqlite3
 import sys
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from subtitle_llm.domain import Subtitle, SubtitleEntry
+from subtitle_llm.pipeline.lifecycle.states import (
+    RESUMABLE_TASK_STATES,
+    TranslationChunkState,
+    TranslationTaskState,
+    coerce_chunk_state,
+    coerce_task_state,
+)
 from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.settings import AppConfig
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class TranslationTaskStoreError(RuntimeError):
@@ -102,13 +111,21 @@ class TranslationTaskStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._migrate()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.db_path, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute("PRAGMA busy_timeout = 5000")
-        return connection
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def _migrate(self) -> None:
         with self._connect() as connection:
@@ -117,16 +134,28 @@ class TranslationTaskStore:
                 raise TranslationTaskStoreError(
                     f"任务记录数据库版本过新：{version} > {SCHEMA_VERSION}"
                 )
-            if version == 0:
-                self._create_schema(connection)
+            if version != SCHEMA_VERSION:
+                self._rebuild_schema(connection)
                 connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
-    def _create_schema(self, connection: sqlite3.Connection) -> None:
+    def _rebuild_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
             """
+            DROP TABLE IF EXISTS translation_chunks;
+            DROP TABLE IF EXISTS translation_cues;
+            DROP TABLE IF EXISTS translation_tasks;
+            """
+        )
+        self._create_schema(connection)
+
+    def _create_schema(self, connection: sqlite3.Connection) -> None:
+        task_status_values = ", ".join(f"'{state.value}'" for state in TranslationTaskState)
+        chunk_status_values = ", ".join(f"'{state.value}'" for state in TranslationChunkState)
+        connection.executescript(
+            f"""
             CREATE TABLE translation_tasks (
                 task_id TEXT PRIMARY KEY,
-                status TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ({task_status_values})),
                 input_display TEXT NOT NULL,
                 working_directory TEXT NOT NULL,
                 source_url TEXT,
@@ -176,7 +205,7 @@ class TranslationTaskStore:
             CREATE TABLE translation_chunks (
                 task_id TEXT NOT NULL,
                 chunk_index INTEGER NOT NULL,
-                status TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ({chunk_status_values})),
                 entry_start INTEGER,
                 entry_end INTEGER,
                 entry_count INTEGER NOT NULL DEFAULT 0,
@@ -207,8 +236,10 @@ class TranslationTaskStore:
         source_video_file: str | None = None,
         source_url: str | None = None,
         task_id: str | None = None,
+        status: TranslationTaskState | str = TranslationTaskState.CREATED,
     ) -> TranslationTaskRecord:
         task_id = task_id or str(uuid.uuid4())
+        task_status = coerce_task_state(status)
         timestamp = now_iso()
         with self._connect() as connection:
             connection.execute(
@@ -232,10 +263,11 @@ class TranslationTaskStore:
                     created_at,
                     updated_at
                 )
-                VALUES (?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task_id,
+                    task_status.value,
                     input_display,
                     working_directory,
                     source_url,
@@ -277,24 +309,39 @@ class TranslationTaskStore:
         output_format: str,
         output_file: str,
     ) -> TranslationTaskRecord | None:
+        resumable_statuses = sorted(state.value for state in RESUMABLE_TASK_STATES)
+        status_placeholders = ", ".join("?" for _ in resumable_statuses)
         with self._connect() as connection:
             row = connection.execute(
-                """
+                f"""
                 SELECT * FROM translation_tasks
                 WHERE deleted_at IS NULL
                   AND normalized_input_fingerprint = ?
                   AND target_language = ?
                   AND output_format = ?
                   AND output_file = ?
-                  AND status IN ('created', 'running', 'waiting_review', 'failed')
+                  AND status IN ({status_placeholders})
                 ORDER BY updated_at DESC
                 LIMIT 1
                 """,
-                (normalized_input_fingerprint, target_language, output_format, output_file),
+                (
+                    normalized_input_fingerprint,
+                    target_language,
+                    output_format,
+                    output_file,
+                    *resumable_statuses,
+                ),
             ).fetchone()
         return row_to_record(row) if row else None
 
-    def update_status(self, task_id: str, status: str, *, error_summary: str | None = None) -> None:
+    def update_status(
+        self,
+        task_id: str,
+        status: TranslationTaskState | str,
+        *,
+        error_summary: str | None = None,
+    ) -> None:
+        task_status = coerce_task_state(status)
         timestamp = now_iso()
         with self._connect() as connection:
             connection.execute(
@@ -305,7 +352,7 @@ class TranslationTaskStore:
                     updated_at = ?
                 WHERE task_id = ?
                 """,
-                (status, error_summary, timestamp, task_id),
+                (task_status.value, error_summary, timestamp, task_id),
             )
 
     def soft_delete(self, task_id: str) -> None:
@@ -354,8 +401,7 @@ class TranslationTaskStore:
             connection.execute(
                 """
                 UPDATE translation_tasks
-                SET status = ?,
-                    context_file = ?,
+                SET context_file = ?,
                     llm_trace_dir = ?,
                     source_video_file = ?,
                     embedded_video_file = ?,
@@ -364,7 +410,6 @@ class TranslationTaskStore:
                 WHERE task_id = ?
                 """,
                 (
-                    task_status_for_report(report),
                     report.context_file,
                     report.llm_trace_dir,
                     report.source_video_file,
@@ -427,10 +472,11 @@ class TranslationTaskStore:
         *,
         chunk_index: int,
         entry_indices: list[int],
-        status: str,
+        status: TranslationChunkState | str,
         diagnosis: dict[str, Any] | None = None,
         last_trace_id: str | None = None,
     ) -> None:
+        chunk_status = coerce_chunk_state(status)
         timestamp = now_iso()
         with self._connect() as connection:
             connection.execute(
@@ -459,7 +505,7 @@ class TranslationTaskStore:
                 (
                     task_id,
                     chunk_index,
-                    status,
+                    chunk_status.value,
                     min(entry_indices) if entry_indices else None,
                     max(entry_indices) if entry_indices else None,
                     len(entry_indices),
@@ -536,14 +582,6 @@ def config_snapshot(config: AppConfig) -> str:
 
 def config_from_snapshot(snapshot: str) -> AppConfig:
     return AppConfig.model_validate(json.loads(snapshot))
-
-
-def task_status_for_report(report: TranslationReport) -> str:
-    if report.stage == "完成":
-        return "completed"
-    if report.failed_chunks:
-        return "failed"
-    return "running"
 
 
 def subtitle_from_resume_entries(entries: dict[str, Any]) -> Subtitle:
