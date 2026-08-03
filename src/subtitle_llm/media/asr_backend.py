@@ -98,6 +98,41 @@ def clean_sensevoice_text(text: str) -> str:
     return _SENSEVOICE_TAG_PATTERN.sub("", text).replace("▁", "").strip()
 
 
+def _synthesize_words_from_chars(text: str, timestamps: list) -> list[str]:
+    """把连续文本按字符级 timestamp 对齐合成 words。
+
+    Qwen3-ASR 只返回 ``text``（自带标点）和字符级 ``timestamp``：时间戳只覆盖
+    非标点字符（标点无声学表现，forced aligner 不对齐）。这里把标点并入前一个
+    token（如 "面。"），使 words 与 timestamps 等长；句末标点随 token 结尾，
+    ``_is_sentence_boundary_token`` 的 ``token[-1:]`` 判断正好能识别断句。
+    段首孤立标点顺延并入后一个 token。对不齐（token 数 ≠ 时间戳数）时返回
+    空列表，由调用方走其它回退路径。
+    """
+    tokens: list[str] = []
+    pending_prefix = ""
+    for ch in str(text):
+        if ch.isspace():
+            continue
+        if ch in _PUNCTUATION_CHARS:
+            if tokens:
+                tokens[-1] += ch
+            else:
+                pending_prefix += ch
+            continue
+        tokens.append(pending_prefix + ch)
+        pending_prefix = ""
+    if pending_prefix and tokens:
+        tokens[-1] += pending_prefix
+    if len(tokens) != len(timestamps):
+        logger.warning(
+            "字符数与时间戳数不一致（%s vs %s），无法合成 words",
+            len(tokens),
+            len(timestamps),
+        )
+        return []
+    return tokens
+
+
 def _build_cues_by_sentence_alignment(
     words: object,
     timestamps: object,
@@ -327,6 +362,10 @@ def _format_word_tokens(tokens: list[str]) -> str:
     return text
 
 
+# CJK 表意字符（中/日/韩汉字）：字与字之间拼接不加空格
+_CJK_CHAR_PATTERN = re.compile(r"[぀-ヿ㐀-䶿一-鿿豈-﫿]")
+
+
 def _joins_previous_token(
     token: str,
     *,
@@ -346,7 +385,52 @@ def _joins_previous_token(
         return True
     if token.startswith(("'", "’")):
         return True
-    return current_text[-1:] in _NO_SPACE_AFTER
+    if current_text[-1:] in _NO_SPACE_AFTER:
+        return True
+    # 相邻 CJK 字符直接相连（如词级/字级 token "我" + "们" → "我们"）
+    return bool(
+        current_text[-1:]
+        and token[:1]
+        and _CJK_CHAR_PATTERN.match(current_text[-1])
+        and _CJK_CHAR_PATTERN.match(token[0])
+    )
+
+
+def _patch_funasr_distribute_spk() -> None:
+    """给 funasr 的 ``distribute_spk`` 打防御性补丁，绕过 None 时间戳崩溃。
+
+    punc_array 与 timestamp 长度不一致时（funasr 会打 ``length mismatch between punc
+    and timestamp`` 警告），``timestamp_sentence`` 会产出 ``start``/``end`` 为 None 的
+    句子；``distribute_spk`` 对 None 直接做数值比较抛 ``TypeError``，整个转写前功尽弃。
+    说话人标签（spk）本项目并不使用，这里把 None 起止填成占位值仅保证流程走完——
+    后续 ``sentence_info`` 仍由 ``_rebuild_sentence_info_if_possible`` 用清洗后的
+    words 重建，占位时间戳不会进入最终产物。
+    """
+    try:
+        from funasr.auto import auto_model
+    except ImportError:  # pragma: no cover - funasr 未安装时静默跳过
+        return
+    original = getattr(auto_model, "distribute_spk", None)
+    if original is None or getattr(original, "_subtitle_llm_patched", False):
+        return
+
+    def _safe_distribute_spk(sentence_list, sd_time_list):
+        last_end = 0
+        for d in sentence_list:
+            if d.get("start") is None or d.get("end") is None:
+                logger.warning(
+                    "funasr 句子时间戳为 None，填充占位值绕过 distribute_spk: %s",
+                    str(d)[:120],
+                )
+                if d.get("start") is None:
+                    d["start"] = last_end
+                if d.get("end") is None:
+                    d["end"] = d["start"]
+            last_end = max(last_end, d["end"])
+        return original(sentence_list, sd_time_list)
+
+    _safe_distribute_spk._subtitle_llm_patched = True
+    auto_model.distribute_spk = _safe_distribute_spk
 
 
 def _is_sentence_boundary_token(
@@ -404,6 +488,7 @@ class FunasrAsrBackend:
         from funasr import AutoModel
         from funasr.utils.postprocess_utils import rich_transcription_postprocess
 
+        _patch_funasr_distribute_spk()
         emit_asr_progress(progress, "load_asr", "加载 ASR", "正在加载 FunASR 模型")
         model = cast(Any, self._get_or_load_model(AutoModel))
 
@@ -429,6 +514,11 @@ class FunasrAsrBackend:
         words = res.get("words", [])
         timestamps = res.get("timestamp", [])
         sentence_info = res.get("sentence_info", [])
+
+        # Qwen3-ASR 等模型不返回 words，只有 text（自带标点）+ 字符级 timestamp；
+        # 逐字合成 words，让后续「按标点断句」路径可用。
+        if not words and timestamps and res.get("text"):
+            words = _synthesize_words_from_chars(res["text"], timestamps)
 
         # 治本：funasr 内部把含 SenseVoice 标签的 text 传给 ct-punc，标签与首词粘连导致
         # punc_array 比 timestamp 短，sentence_info 覆盖不全。用清洗后的 words 重建。
@@ -582,6 +672,9 @@ class FunasrAsrBackend:
             kwargs["hub"] = cfg.hub
         if cfg.trust_remote_code:
             kwargs["trust_remote_code"] = True
+        # Qwen3-ASR 需要 forced_aligner 才能输出字符级时间戳
+        if cfg.forced_aligner:
+            kwargs["forced_aligner"] = cfg.forced_aligner
 
         logger.info(
             "加载 FunASR 模型: model=%s punc=%s spk=%s device=%s",

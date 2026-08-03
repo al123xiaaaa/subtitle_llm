@@ -28,15 +28,16 @@ pipeline:
   refine_translation: false
 
 # FunASR Python SDK 配置（见 docs/adr/0003-asr-backend-migrate-to-funasr-sdk.md）。
-# 通过 funasr.AutoModel 组合 SenseVoice + fsmn-vad + ct-punc + cam++，
-# 一次调用产出带时间戳、带标点、语言受约束的识别片段。
+# 通过 funasr.AutoModel 组合 paraformer-zh（识别）+ fsmn-vad（分段）+
+# ct-punc（标点恢复）+ cam++（说话人分离，触发 sentence_info 输出）。
 # 首次运行自动下载模型（约 1GB）。安装：pip install funasr（含 PyTorch）。
-# CPU 可跑（SenseVoice 17 倍实时），无需 GPU。
+# 实测中文识别精度：paraformer-zh 明显优于 SenseVoiceSmall（多语言小模型），
+# 且输出为连续中文文本（SenseVoice 词级 token 重组后字间带空格）。CPU 可跑。
 asr:
-  model_name: "FunAudioLLM/SenseVoiceSmall"
+  model_name: "paraformer-zh"
   punc_model: "ct-punc"
   spk_model: "cam++"
   max_single_segment_time: 8000
   device: "cpu"
-  hub: "hf"
-  trust_remote_code: true
+  hub: "ms"
+  trust_remote_code: false

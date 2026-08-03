@@ -88,14 +88,15 @@ class PipelineConfig(BaseModel):
 class ASRConfig(BaseModel):
     """FunASR Python SDK 配置。
 
-    通过 funasr.AutoModel 组合 SenseVoice + fsmn-vad + ct-punc + cam++，
-    一次调用产出带时间戳、带标点、语言受约束的识别片段。详见
+    通过 funasr.AutoModel 组合 paraformer-zh（识别）+ fsmn-vad（分段）+
+    ct-punc（标点恢复）+ cam++（说话人分离，触发 sentence_info 输出）。详见
     docs/adr/0003-asr-backend-migrate-to-funasr-sdk.md。
-    首次运行自动下载模型（约 1GB）。CPU 可跑（SenseVoice 17 倍实时）。
+    首次运行自动下载模型（约 1GB）。CPU 可跑。
+    中文场景 paraformer-zh 精度明显优于 SenseVoiceSmall，且输出连续中文文本。
     """
 
     # ASR 识别模型（ModelScope namespace 或 HuggingFace repo）
-    model_name: str = "FunAudioLLM/SenseVoiceSmall"
+    model_name: str = "paraformer-zh"
     # 标点恢复模型；None 表示用模型自带标点（SenseVoice/Qwen3-ASR 自带）
     punc_model: str | None = "ct-punc"
     # 说话人分离模型；cam++ 会触发 sentence_info（带时间戳分段）输出
@@ -104,10 +105,13 @@ class ASRConfig(BaseModel):
     max_single_segment_time: int = 8000
     # 推理设备：cpu 或 cuda
     device: str = "cpu"
-    # 模型 hub：modelscope（默认，国内快）或 hf（HuggingFace，海外）
-    hub: str = "hf"
+    # 模型 hub：modelscope/ms（国内快）或 hf（HuggingFace，海外）
+    hub: str = "ms"
     # 某些模型（Fun-ASR-Nano / Qwen3-ASR）需要 trust_remote_code
-    trust_remote_code: bool = True
+    trust_remote_code: bool = False
+    # 强制对齐模型；Qwen3-ASR 需要它才能输出字符级时间戳
+    # （如 "Qwen/Qwen3-ForcedAligner-0.6B"），其它模型留空
+    forced_aligner: str | None = None
 
 
 class AppConfig(BaseModel):

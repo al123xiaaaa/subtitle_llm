@@ -77,7 +77,7 @@ class TestASRConfig(unittest.TestCase):
 
     def test_default_uses_funasr_sdk(self):
         config = ASRConfig()
-        self.assertEqual(config.model_name, "FunAudioLLM/SenseVoiceSmall")
+        self.assertEqual(config.model_name, "paraformer-zh")
         self.assertEqual(config.punc_model, "ct-punc")
         self.assertEqual(config.spk_model, "cam++")
         self.assertEqual(config.max_single_segment_time, 8000)
