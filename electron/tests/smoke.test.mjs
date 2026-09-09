@@ -185,6 +185,21 @@ assert.match(deepseekConfig, /model: "deepseek-v4-flash"/);
 assert.match(deepseekConfig, /refine_translation: false/);
 assert.doesNotMatch(deepseekConfig, /sk-test-secret/);
 
+const cliproxyProvider = getProvider("cliproxy");
+assert.equal(cliproxyProvider.endpoint, "http://127.0.0.1:8317/v1");
+assert.equal(cliproxyProvider.envKey, "CLIPROXY_API_KEY");
+const cliproxyConfig = buildDesktopModelConfigContent({
+  mode: "service",
+  providerId: "cliproxy",
+  modelId: "kimi-k2.5",
+});
+assert.match(cliproxyConfig, /provider: "openai"/);
+assert.match(cliproxyConfig, /api_key_env: "CLIPROXY_API_KEY"/);
+assert.match(cliproxyConfig, /endpoint: "http:\/\/127\.0\.0\.1:8317\/v1"/);
+assert.match(cliproxyConfig, /model: "kimi-k2\.5"/);
+assert.match(cliproxyConfig, /temperature: 1\.0/);
+assert.match(cliproxyConfig, /top_p: 0\.95/);
+
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "subtitle-llm-settings-"));
 const settingsPath = path.join(tempDir, "settings.json");
 assert.equal(summarizeSettings(settingsPath, {}).hasAnyCredential, false);

@@ -49,6 +49,15 @@ export function buildModelFromSelection(selection: Partial<ModelSelection> = {})
   };
 }
 
+// CLIProxyAPI 上游的 Kimi 思考模型仅允许 temperature=1、top_p=0.95，
+// 这组值对所有已验证模型（claude / gemini / gpt）同样可用，故该服务固定使用。
+const PROVIDER_PARAM_DEFAULTS: Record<string, Record<string, Record<string, string>>> = {
+  cliproxy: {
+    summary: { temperature: "1.0", top_p: "0.95" },
+    translation: { temperature: "1.0", top_p: "0.95" },
+  },
+};
+
 export function buildDesktopModelConfigContent(selection: Partial<ModelSelection> = {}): string {
   if (selection.mode !== "service") {
     throw new Error("未启用服务商模型配置");
@@ -56,6 +65,7 @@ export function buildDesktopModelConfigContent(selection: Partial<ModelSelection
 
   const translationModel = buildModelFromSelection(selection);
   const summaryModel = translationModel;
+  const providerOverrides = PROVIDER_PARAM_DEFAULTS[selection.providerId || ""] || {};
 
   return [
     'config_version: "2"',
@@ -66,6 +76,7 @@ export function buildDesktopModelConfigContent(selection: Partial<ModelSelection
       top_p: "0.85",
       top_k: "12",
       retry_delay_seconds: "40",
+      ...providerOverrides.summary,
     }),
     "",
     renderModelSection("translation_model", translationModel, {
@@ -75,6 +86,7 @@ export function buildDesktopModelConfigContent(selection: Partial<ModelSelection
       rate_limit: "5",
       max_retries: "3",
       retry_delay_seconds: "10",
+      ...providerOverrides.translation,
     }),
     "",
     "pipeline:",

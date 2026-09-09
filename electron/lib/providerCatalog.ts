@@ -47,6 +47,51 @@ export const PROVIDERS: ProviderDefinition[] = [
     ],
   },
   {
+    id: "cliproxy",
+    name: "CLIProxyAPI（本地）",
+    envKey: "CLIPROXY_API_KEY",
+    configProvider: "openai",
+    endpoint: "http://127.0.0.1:8317/v1",
+    defaultModel: "kimi-k2.5",
+    models: [
+      {
+        id: "kimi-k2.5",
+        label: "Kimi K2.5",
+        description: "本地代理 · 快速推荐",
+      },
+      {
+        id: "kimi-k2.6",
+        label: "Kimi K2.6",
+        description: "本地代理 · 质量优先",
+      },
+      {
+        id: "kimi-k3",
+        label: "Kimi K3",
+        description: "本地代理",
+      },
+      {
+        id: "gpt-5.5",
+        label: "GPT-5.5",
+        description: "本地代理",
+      },
+      {
+        id: "claude-sonnet-4-6",
+        label: "Claude Sonnet 4.6",
+        description: "本地代理",
+      },
+      {
+        id: "gemini-3-flash",
+        label: "Gemini 3 Flash",
+        description: "本地代理",
+      },
+      {
+        id: "__custom__",
+        label: "自定义模型 ID",
+        description: "手动输入",
+      },
+    ],
+  },
+  {
     id: "openai",
     name: "OpenAI",
     envKey: "OPENAI_API_KEY",

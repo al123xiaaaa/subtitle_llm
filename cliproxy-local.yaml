@@ -1,0 +1,37 @@
+# CLIProxyAPI 本地代理翻译
+# 用法:
+#   export CLIPROXY_API_KEY="你的 CLIProxyAPI 密钥"
+#   python3 main.py translate --config cliproxy-local.yaml -i input.srt -t Chinese
+#
+# 端点为本机 OpenAI 兼容代理 http://127.0.0.1:8317/v1，
+# 模型 ID 以代理 /v1/models 返回为准，可换成 gpt-5.5 / claude-sonnet-4-6 等。
+
+pipeline:
+  threads: 4
+  chunk_size: 18
+  review_mode: "auto"
+  fallback_on_chunk_error: "abort"
+
+summary_model:
+  provider: "openai"
+  api_key_env: "CLIPROXY_API_KEY"
+  endpoint: "http://127.0.0.1:8317/v1"
+  model: "kimi-k2.5"
+  # Kimi 思考模型经代理仅允许 temperature=1、top_p=0.95，
+  # 这组值对其它模型（claude/gemini/gpt）同样可用
+  temperature: 1.0
+  top_p: 0.95
+  retry_delay_seconds: 10
+
+translation_model:
+  provider: "openai"
+  api_key_env: "CLIPROXY_API_KEY"
+  endpoint: "http://127.0.0.1:8317/v1"
+  model: "kimi-k2.5"
+  temperature: 1.0
+  top_p: 0.95
+  max_tokens: 4096
+  request_timeout_seconds: 120
+  rate_limit: 5
+  max_retries: 3
+  retry_delay_seconds: 10
