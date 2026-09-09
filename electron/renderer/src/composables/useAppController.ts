@@ -182,6 +182,7 @@ export function useAppController() {
   };
 
   const onboarding = {
+    dismissOnboarding: providerState.dismissOnboarding,
     onboardingApiKey: providerState.onboardingApiKey,
     onboardingKeyLabel: providerState.onboardingKeyLabel,
     openSettingsFromOnboarding: providerState.openSettingsFromOnboarding,

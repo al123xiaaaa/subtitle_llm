@@ -9,7 +9,7 @@ const props = defineProps<{
 }>();
 
 const { activeTab, setActiveTab, taskTabs } = props.shell;
-const { providers, runtimeInfo, statusPillClass } = props.providerState;
+const { appState, providers, runtimeInfo, statusPillClass } = props.providerState;
 </script>
 
 <template>
@@ -20,7 +20,11 @@ const { providers, runtimeInfo, statusPillClass } = props.providerState;
       </div>
       <div>
         <h1>Subtitle LLM</h1>
-        <p id="runtimeInfo">
+        <p
+          id="runtimeInfo"
+          :title="appState?.pythonExecutable || ''"
+        >
+          <span :class="['runtime-dot', { 'is-error': appState && !appState.hasMainPy }]" />
           {{ runtimeInfo }}
         </p>
       </div>

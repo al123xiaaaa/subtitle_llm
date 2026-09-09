@@ -28,10 +28,10 @@ export function useProviderSettings(api: Window["subtitleLLM"], options: Provide
     if (!appState.value) {
       return "加载中";
     }
-    return appState.value.hasMainPy ? appState.value.pythonExecutable : "未找到 main.py";
+    return appState.value.hasMainPy ? "Python 环境就绪" : "未找到 main.py";
   });
   const visibleOnboardingProviders = computed(() =>
-    providers.value.filter((provider) => ["deepseek", "gemini", "openai"].includes(provider.id)),
+    providers.value.filter((provider) => ["deepseek", "gemini", "openai", "cliproxy"].includes(provider.id)),
   );
   const selectedOnboardingProvider = computed(() => providerById(selectedOnboardingProviderId.value));
   const showOnboarding = computed(() => Boolean(appState.value && !appState.value.hasAnyCredential && !onboardingDismissed.value));
@@ -48,9 +48,7 @@ export function useProviderSettings(api: Window["subtitleLLM"], options: Provide
     }
     return { text: status.label, className: statusPillClass(status) };
   });
-  const configureProviderText = computed(() =>
-    selectedProvider.value ? `配置 ${selectedProvider.value.name} API Key` : "配置 API Key",
-  );
+  const configureProviderText = computed(() => (selectedProvider.value ? "去配置" : "配置 API Key"));
   const showConfigureProvider = computed(
     () => !options.getUseYamlConfig() && Boolean(selectedProvider.value) && !selectedProvider.value?.credential.available,
   );
@@ -176,6 +174,10 @@ export function useProviderSettings(api: Window["subtitleLLM"], options: Provide
     options.setActiveTab("settings");
   }
 
+  function dismissOnboarding(): void {
+    onboardingDismissed.value = true;
+  }
+
   function configureProvider(): void {
     options.setActiveTab("settings");
     void nextTick(() => {
@@ -190,6 +192,7 @@ export function useProviderSettings(api: Window["subtitleLLM"], options: Provide
     configureProvider,
     configureProviderText,
     customModelInput,
+    dismissOnboarding,
     ffmpegAvailable,
     modelSelection,
     onboardingApiKey,

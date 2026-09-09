@@ -10,6 +10,7 @@ const props = defineProps<{
 }>();
 
 const {
+  dismissOnboarding,
   onboardingApiKey,
   onboardingKeyLabel,
   openSettingsFromOnboarding,
@@ -20,6 +21,22 @@ const {
   visibleOnboardingProviders,
 } = props.onboarding;
 const { isBusy } = toRefs(props);
+
+function onBackdropClick(event: MouseEvent): void {
+  if (event.target === event.currentTarget) {
+    dismissOnboarding();
+  }
+}
+
+function providerCardHint(provider: { id: string; credential: { envKey: string } }): string {
+  if (provider.id === "deepseek") {
+    return "推荐";
+  }
+  if (provider.id === "cliproxy") {
+    return "本地代理";
+  }
+  return provider.credential.envKey;
+}
 </script>
 
 <template>
@@ -28,6 +45,8 @@ const { isBusy } = toRefs(props);
     :class="['onboarding', { 'is-hidden': !showOnboarding }]"
     aria-modal="true"
     role="dialog"
+    @click="onBackdropClick"
+    @keydown.esc="dismissOnboarding"
   >
     <section class="onboarding-panel">
       <p class="eyebrow">
@@ -49,7 +68,7 @@ const { isBusy } = toRefs(props);
           @click="selectOnboardingProvider(provider.id)"
         >
           <strong>{{ provider.name }}</strong>
-          <span>{{ provider.id === "deepseek" ? "推荐" : provider.credential.envKey }}</span>
+          <span>{{ providerCardHint(provider) }}</span>
         </button>
       </div>
       <label>
@@ -80,6 +99,15 @@ const { isBusy } = toRefs(props);
           @click="openSettingsFromOnboarding"
         >
           打开设置
+        </button>
+        <button
+          id="onboardingLater"
+          class="ghost-button"
+          type="button"
+          :disabled="isBusy"
+          @click="dismissOnboarding"
+        >
+          稍后再说
         </button>
       </div>
     </section>

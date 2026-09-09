@@ -93,6 +93,7 @@ p {
   padding: var(--space-6) var(--space-5);
   border-right: 1px solid var(--line);
   background: var(--surface);
+  overflow-y: auto;
 }
 
 .brand {
@@ -125,12 +126,27 @@ p {
 }
 
 #runtimeInfo {
+  display: flex;
   overflow: hidden;
+  align-items: center;
+  gap: 6px;
   font-size: var(--text-xs);
   color: var(--muted);
   margin-top: 2px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.runtime-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.runtime-dot.is-error {
+  background: var(--danger);
 }
 
 /* —— 任务 tabs —— */
@@ -487,11 +503,13 @@ select {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  min-height: var(--control-h);
-  padding: 0 var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-soft);
+  min-height: 28px;
+}
+
+.credential-action {
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
 }
 
 /* —— 复选行 —— */
@@ -634,6 +652,17 @@ select {
   border-color: var(--gray-400);
   background: var(--surface-sunken);
   color: var(--ink);
+}
+
+.ghost-button {
+  border: 1px solid transparent;
+  color: var(--muted);
+  background: transparent;
+}
+
+.ghost-button:hover {
+  color: var(--ink);
+  background: var(--surface-sunken);
 }
 
 .danger-button {
@@ -1303,6 +1332,12 @@ select {
   transition:
     border-color var(--dur) var(--ease),
     background var(--dur) var(--ease);
+}
+
+.provider-card strong {
+  font-size: var(--text-sm);
+  line-height: 1.3;
+  overflow-wrap: break-word;
 }
 
 .provider-card:hover {

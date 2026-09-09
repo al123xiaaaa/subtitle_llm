@@ -147,7 +147,7 @@ const { ffmpegAvailable } = props.providerState;
             >{{ providerCredentialStatus.text }}</span>
             <button
               id="configureProvider"
-              :class="['secondary-button', { 'is-hidden': !showConfigureProvider }]"
+              :class="['ghost-button', 'credential-action', { 'is-hidden': !showConfigureProvider }]"
               type="button"
               :disabled="isBusy"
               @click="configureProvider"
