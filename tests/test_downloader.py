@@ -175,6 +175,34 @@ class TestDownloader(unittest.TestCase):
         self.assertNotIn("ffmpeg_location", download_options)
         self.assertEqual(download_options["format"], "best[ext=mp4]/best")
 
+    def test_cached_subtitle_with_missing_video_triggers_video_only_download(self):
+        FakeYoutubeDL.info = {
+            "title": "Demo Video",
+            "subtitles": {"en": [{}]},
+            "automatic_captions": {},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp)
+            (output_path / "Demo Video.en.srt").write_text("subtitle", encoding="utf-8")
+
+            with (
+                patch("subtitle_llm.media.downloader.YoutubeDL", FakeYoutubeDL),
+                patch(
+                    "subtitle_llm.media.downloader._resolve_ffmpeg_location",
+                    return_value="/opt/homebrew/bin/ffmpeg",
+                ),
+            ):
+                result = downloader.download("https://example.test/video", tmp, "en")
+
+        self.assertEqual(len(FakeYoutubeDL.instances), 2)
+        download_options = FakeYoutubeDL.instances[1].options
+        self.assertEqual(FakeYoutubeDL.instances[1].downloaded_urls, ["https://example.test/video"])
+        self.assertNotIn("writesubtitles", download_options)
+        self.assertEqual(download_options["ffmpeg_location"], "/opt/homebrew/bin/ffmpeg")
+        video_path, subtitle_path = cast(tuple[str | None, str | None], result)
+        self.assertTrue(str(video_path).endswith("Demo Video.webm"))
+        self.assertTrue(str(subtitle_path).endswith("Demo Video.en.srt"))
+
 
 if __name__ == "__main__":
     unittest.main()

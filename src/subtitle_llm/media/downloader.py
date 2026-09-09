@@ -73,14 +73,43 @@ def download(
     audio_path = _find_file(output_path, title, ".wav")
 
     if subtitle_path and not force_asr:
+        if video_path:
+            emit_progress(
+                progress,
+                "reuse_subtitle",
+                "复用字幕",
+                f"复用已下载字幕：{subtitle_path}",
+                status="done",
+            )
+            logger.info("复用已下载字幕: title=%s video=%s subtitle=%s", title, video_path, subtitle_path)
+            return video_path, subtitle_path
+        # 字幕已缓存但视频缺失（上次下载中断所致），仅补下载视频，
+        # 否则后续 MKV 封装会因找不到视频被跳过
         emit_progress(
             progress,
-            "reuse_subtitle",
-            "复用字幕",
-            f"复用已下载字幕：{subtitle_path}",
+            "download_video",
+            "补下视频",
+            "字幕已存在，正在补下载缺失的视频",
+        )
+        logger.info("字幕已存在但视频缺失，补下载视频: title=%s subtitle=%s", title, subtitle_path)
+        ffmpeg_location = _resolve_ffmpeg_location()
+        ydl_opts: dict[str, Any] = {
+            "format": "bestvideo+bestaudio/best" if ffmpeg_location else "best[ext=mp4]/best",
+            "outtmpl": outtmpl,
+        }
+        if ffmpeg_location:
+            ydl_opts["ffmpeg_location"] = ffmpeg_location
+        with YoutubeDL(cast(Any, ydl_opts)) as ydl:
+            ydl.download([url])
+        video_path = _find_file(output_path, title, ".mp4", ".mkv", ".webm")
+        emit_progress(
+            progress,
+            "download_video",
+            "补下视频",
+            "视频下载完成",
             status="done",
         )
-        logger.info("复用已下载字幕: title=%s video=%s subtitle=%s", title, video_path, subtitle_path)
+        logger.info("视频补下载完成: title=%s video=%s", title, video_path)
         return video_path, subtitle_path
     if audio_path:
         emit_progress(
