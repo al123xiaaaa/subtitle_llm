@@ -136,7 +136,15 @@ export function createDesktopRuntime({
       detectFfmpeg,
     });
     const args = buildPythonArgs(runRequest);
-    const childEnv = withUserDataEnv(buildEnv(env, runRequest.envOverrides));
+    // yt-dlp 合并音视频流需要 ffmpeg；Finder 启动时 PATH 不含 Homebrew，
+    // 把桌面端探测到的 ffmpeg 路径显式传给 Python 下载器（见 downloader.py）
+    const ffmpegStatus = detectFfmpeg();
+    const childEnv = withUserDataEnv(
+      buildEnv(env, {
+        ...runRequest.envOverrides,
+        ...(ffmpegStatus.available ? { SUBTITLE_LLM_FFMPEG: ffmpegStatus.executable } : {}),
+      }),
+    );
     const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const child = spawnFn(pythonExecutable, args, {
       cwd: projectRoot,

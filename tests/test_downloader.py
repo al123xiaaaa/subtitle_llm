@@ -138,6 +138,43 @@ class TestDownloader(unittest.TestCase):
         self.assertIsNone(subtitle_path)
         self.assertTrue(str(audio_path).endswith("Demo Video.wav"))
 
+    def test_subtitle_download_passes_ffmpeg_location_when_available(self):
+        FakeYoutubeDL.info = {
+            "title": "Demo Video",
+            "subtitles": {"en": [{}]},
+            "automatic_captions": {},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch("subtitle_llm.media.downloader.YoutubeDL", FakeYoutubeDL),
+                patch(
+                    "subtitle_llm.media.downloader._resolve_ffmpeg_location",
+                    return_value="/opt/homebrew/bin/ffmpeg",
+                ),
+            ):
+                downloader.download("https://example.test/video", tmp, "en")
+
+        download_options = FakeYoutubeDL.instances[1].options
+        self.assertEqual(download_options["ffmpeg_location"], "/opt/homebrew/bin/ffmpeg")
+        self.assertEqual(download_options["format"], "bestvideo+bestaudio/best")
+
+    def test_subtitle_download_falls_back_to_single_file_format_without_ffmpeg(self):
+        FakeYoutubeDL.info = {
+            "title": "Demo Video",
+            "subtitles": {"en": [{}]},
+            "automatic_captions": {},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch("subtitle_llm.media.downloader.YoutubeDL", FakeYoutubeDL),
+                patch("subtitle_llm.media.downloader._resolve_ffmpeg_location", return_value=None),
+            ):
+                downloader.download("https://example.test/video", tmp, "en")
+
+        download_options = FakeYoutubeDL.instances[1].options
+        self.assertNotIn("ffmpeg_location", download_options)
+        self.assertEqual(download_options["format"], "best[ext=mp4]/best")
+
 
 if __name__ == "__main__":
     unittest.main()

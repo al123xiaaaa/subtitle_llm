@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any, cast
 
@@ -11,6 +12,27 @@ from yt_dlp import YoutubeDL
 from subtitle_llm.progress_events import ProgressEmitter
 
 logger = logging.getLogger(__name__)
+
+# 与桌面端 electron/lib/ffmpegStatus.ts 的常见安装位置保持一致
+_COMMON_FFMPEG_PATHS = ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg")
+
+
+def _resolve_ffmpeg_location() -> str | None:
+    """解析 yt-dlp 可用的 ffmpeg 路径。
+
+    桌面端从 Finder 启动时 PATH 不含 Homebrew，yt-dlp 默认按 PATH 查找会失败；
+    依次尝试环境变量、PATH、常见安装位置。找不到时返回 None，调用方降级处理。
+    """
+    for candidate in (os.getenv("SUBTITLE_LLM_FFMPEG"), os.getenv("FFMPEG_BINARY")):
+        if candidate and Path(candidate).exists():
+            return candidate
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    for candidate in _COMMON_FFMPEG_PATHS:
+        if Path(candidate).exists():
+            return candidate
+    return None
 
 
 def download(
@@ -79,8 +101,11 @@ def download(
             f"正在下载视频和{'人工' if has_manual else '自动'}字幕",
         )
         logger.info("开始下载视频和字幕: title=%s lang=%s manual_subtitle=%s", title, lang_code, has_manual)
-        ydl_opts = {
-            "format": "bestvideo+bestaudio/best",
+        ffmpeg_location = _resolve_ffmpeg_location()
+        # 无 ffmpeg 时无法合并分离的音视频流，降级为单文件渐进流格式
+        video_format = "bestvideo+bestaudio/best" if ffmpeg_location else "best[ext=mp4]/best"
+        ydl_opts: dict[str, Any] = {
+            "format": video_format,
             "outtmpl": outtmpl,
             "writesubtitles": True,
             "writeautomaticsub": not has_manual,
@@ -88,6 +113,10 @@ def download(
             "subtitlesformat": "srt",
             "postprocessors": [{"key": "FFmpegSubtitlesConvertor", "format": "srt"}],
         }
+        if ffmpeg_location:
+            ydl_opts["ffmpeg_location"] = ffmpeg_location
+        else:
+            logger.warning("未找到 ffmpeg，视频降级为单文件格式下载：%s", video_format)
         with YoutubeDL(cast(Any, ydl_opts)) as ydl:
             ydl.download([url])
         result = (
@@ -111,12 +140,17 @@ def download(
         "已选择 ASR，正在下载视频并提取音频" if force_asr else "未找到字幕，正在下载视频并提取音频",
     )
     logger.info("开始下载视频并提取音频: title=%s force_asr=%s", title, force_asr)
+    ffmpeg_location = _resolve_ffmpeg_location()
     ydl_opts = {
-        "format": "bestvideo+bestaudio/best",
+        "format": "bestvideo+bestaudio/best" if ffmpeg_location else "best[ext=mp4]/best",
         "outtmpl": outtmpl,
         "keepvideo": True,
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}],
     }
+    if ffmpeg_location:
+        ydl_opts["ffmpeg_location"] = ffmpeg_location
+    else:
+        logger.warning("未找到 ffmpeg，音频提取可能失败；视频降级为单文件格式下载")
     with YoutubeDL(cast(Any, ydl_opts)) as ydl:
         ydl.download([url])
 
