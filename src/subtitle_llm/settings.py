@@ -112,8 +112,9 @@ class ASRConfig(BaseModel):
     # 强制对齐模型；Qwen3-ASR 需要它才能输出字符级时间戳
     # （如 "Qwen/Qwen3-ForcedAligner-0.6B"），其它模型留空
     forced_aligner: str | None = None
-    # 语言参数风格：code = en/zh（paraformer 系），name = 英文/中文（Fun-ASR 系）
-    language_style: Literal["code", "name"] = "name"
+    # 语言参数风格：code = en/zh（paraformer 系），name = 英文/中文（Fun-ASR 系），
+    # iso = BCP-47 代码（transcribe.cpp / whisper 系）
+    language_style: Literal["code", "name", "iso"] = "name"
     # 传给 model.generate 的额外参数（不同模型的签名差异在此吸收）
     generate_kwargs: dict[str, Any] = Field(
         default_factory=lambda: {"itn": True, "batch_size": 1}
@@ -121,6 +122,11 @@ class ASRConfig(BaseModel):
     # 模型不返回时间戳时（Fun-ASR-Nano / Qwen3-ASR）：先用独立 fsmn-vad 切段，
     # 再逐段识别，段时间戳即字幕时间轴
     segment_via_vad: bool = True
+    # ASR 后端：funasr = FunASR Python SDK；transcribe-cpp = ggml CLI（whisper 系）
+    backend: Literal["funasr", "transcribe-cpp"] = "funasr"
+    # transcribe-cpp 后端的 GGUF 模型来源（HF repo + 文件名）
+    gguf_repo: str | None = None
+    gguf_file: str | None = None
 
 
 class AppConfig(BaseModel):

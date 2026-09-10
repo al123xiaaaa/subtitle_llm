@@ -161,6 +161,15 @@ def normalize_asr_language(language: str | None) -> str | None:
     return raw_language
 
 
+def create_asr_backend(config: ASRConfig) -> AsrBackend:
+    """按配置选择 ASR 后端：funasr（Python SDK）或 transcribe-cpp（ggml CLI）。"""
+    if config.backend == "transcribe-cpp":
+        from subtitle_llm.media.asr_backend_transcribe_cpp import TranscribeCppBackend
+
+        return TranscribeCppBackend(config=config)
+    return FunasrAsrBackend(config=config)
+
+
 def transcribe(
     audio_path: str | Path,
     language: str | None,
@@ -168,12 +177,13 @@ def transcribe(
     config: ASRConfig | None = None,
     progress: ProgressEmitter | None = None,
 ) -> str:
-    """使用 FunASR Python SDK 将音频转写为 SRT 字幕文件。
+    """将音频转写为 SRT 字幕文件。
 
-    策略：ASR 后端产出带时间戳的识别片段，按时间戳组装时间轴字幕。
+    策略：ASR 后端（FunASR SDK 或 transcribe.cpp）产出带时间戳的识别片段，
+    按时间戳组装时间轴字幕。
     """
     config = config or ASRConfig()
-    backend = FunasrAsrBackend(config=config)
+    backend = create_asr_backend(config)
     return transcribe_with_backend(audio_path, language, output_path, backend, progress=progress)
 
 

@@ -39,6 +39,10 @@ class AsrModelProfile:
     generate_kwargs: dict[str, Any] = field(default_factory=dict)
     # 模型不返回时间戳：先用独立 fsmn-vad 切段，再逐段识别
     segment_via_vad: bool = False
+    # funasr = FunASR Python SDK；transcribe-cpp = ggml CLI（whisper 系）
+    backend: str = "funasr"
+    gguf_repo: str | None = None
+    gguf_file: str | None = None
 
 
 # 契约缺失时的内置兜底，与 desktop-contract.json 的 asrModels 保持一致。
@@ -81,6 +85,30 @@ _BUILTIN_PROFILES: tuple[AsrModelProfile, ...] = (
         generate_kwargs={"itn": True, "batch_size": 1},
         segment_via_vad=True,
     ),
+    AsrModelProfile(
+        id="whisper-turbo",
+        label="Whisper large-v3-turbo",
+        description="transcribe.cpp + Metal 加速，实测 59× 实时、英文精度最佳；100 语种（首次下载 845MB GGUF）",
+        backend="transcribe-cpp",
+        model_name="whisper-large-v3-turbo",
+        hub="",
+        language_style="iso",
+        generate_kwargs={},
+        gguf_repo="handy-computer/whisper-large-v3-turbo-gguf",
+        gguf_file="whisper-large-v3-turbo-Q8_0.gguf",
+    ),
+    AsrModelProfile(
+        id="whisper-large-v3",
+        label="Whisper large-v3",
+        description="transcribe.cpp + Metal 加速，LibriSpeech WER 1.82%；100 语种（首次下载 1.55GB GGUF）",
+        backend="transcribe-cpp",
+        model_name="whisper-large-v3",
+        hub="",
+        language_style="iso",
+        generate_kwargs={},
+        gguf_repo="handy-computer/whisper-large-v3-gguf",
+        gguf_file="whisper-large-v3-Q8_0.gguf",
+    ),
 )
 
 _BUILTIN_DEFAULT_ID = "fun-asr-nano"
@@ -96,6 +124,9 @@ _PROFILE_FIELDS = (
     "language_style",
     "generate_kwargs",
     "segment_via_vad",
+    "backend",
+    "gguf_repo",
+    "gguf_file",
 )
 
 

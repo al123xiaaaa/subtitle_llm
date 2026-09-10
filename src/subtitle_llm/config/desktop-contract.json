@@ -42,10 +42,49 @@
       "itn": true,
       "batch_size": 1
     },
-    "segment_via_vad": true
+    "segment_via_vad": true,
+    "backend": "funasr",
+    "gguf_repo": null,
+    "gguf_file": null
   },
   "defaultAsrModel": "fun-asr-nano",
   "asrModels": [
+    {
+      "id": "whisper-turbo",
+      "label": "Whisper large-v3-turbo",
+      "description": "transcribe.cpp + Metal 加速，实测 59× 实时、英文精度最佳；100 语种（首次下载 845MB GGUF）",
+      "backend": "transcribe-cpp",
+      "model_name": "whisper-large-v3-turbo",
+      "hub": "",
+      "trust_remote_code": false,
+      "punc_model": null,
+      "spk_model": null,
+      "forced_aligner": null,
+      "max_single_segment_time": 30000,
+      "language_style": "iso",
+      "generate_kwargs": {},
+      "segment_via_vad": false,
+      "gguf_repo": "handy-computer/whisper-large-v3-turbo-gguf",
+      "gguf_file": "whisper-large-v3-turbo-Q8_0.gguf"
+    },
+    {
+      "id": "whisper-large-v3",
+      "label": "Whisper large-v3",
+      "description": "transcribe.cpp + Metal 加速，LibriSpeech WER 1.82%；100 语种（首次下载 1.55GB GGUF）",
+      "backend": "transcribe-cpp",
+      "model_name": "whisper-large-v3",
+      "hub": "",
+      "trust_remote_code": false,
+      "punc_model": null,
+      "spk_model": null,
+      "forced_aligner": null,
+      "max_single_segment_time": 30000,
+      "language_style": "iso",
+      "generate_kwargs": {},
+      "segment_via_vad": false,
+      "gguf_repo": "handy-computer/whisper-large-v3-gguf",
+      "gguf_file": "whisper-large-v3-Q8_0.gguf"
+    },
     {
       "id": "fun-asr-nano",
       "label": "Fun-ASR-Nano",
@@ -62,7 +101,10 @@
         "itn": true,
         "batch_size": 1
       },
-      "segment_via_vad": true
+      "segment_via_vad": true,
+      "backend": "funasr",
+      "gguf_repo": null,
+      "gguf_file": null
     },
     {
       "id": "paraformer-zh",
@@ -81,7 +123,10 @@
         "batch_size_s": 60,
         "output_timestamp": true
       },
-      "segment_via_vad": false
+      "segment_via_vad": false,
+      "backend": "funasr",
+      "gguf_repo": null,
+      "gguf_file": null
     },
     {
       "id": "qwen3-asr",
@@ -99,7 +144,10 @@
         "itn": true,
         "batch_size": 1
       },
-      "segment_via_vad": true
+      "segment_via_vad": true,
+      "backend": "funasr",
+      "gguf_repo": null,
+      "gguf_file": null
     }
   ],
   "ffmpegPaths": [

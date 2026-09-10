@@ -38,6 +38,9 @@ class ConfigContractParityTest(unittest.TestCase):
         self.assertEqual(asr.forced_aligner, contract_asr["forced_aligner"])
         self.assertEqual(asr.language_style, contract_asr["language_style"])
         self.assertEqual(asr.generate_kwargs, contract_asr["generate_kwargs"])
+        self.assertEqual(asr.backend, contract_asr["backend"])
+        self.assertEqual(asr.gguf_repo, contract_asr["gguf_repo"])
+        self.assertEqual(asr.gguf_file, contract_asr["gguf_file"])
 
     def test_ffmpeg_paths_come_from_contract(self) -> None:
         contract_paths = tuple(load_contract()["ffmpegPaths"])
