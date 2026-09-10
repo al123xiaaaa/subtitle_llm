@@ -1,12 +1,18 @@
+"""翻译片段并发协调器：只负责线程池、片段入队与生命周期骨架事件。
+
+片段从「译完」到「终态」的全部策略（诊断、修复、复核）在
+chunk_acceptance.ChunkAcceptance 里；这里不再持有任何编排决策。
+"""
+
 from __future__ import annotations
 
 import concurrent.futures
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 
-from subtitle_llm.domain import Subtitle, SubtitleEntry
-from subtitle_llm.pipeline.chunk_translator import ChunkTranslationResult, ChunkTranslator
+from subtitle_llm.domain import Subtitle
+from subtitle_llm.pipeline.chunk_acceptance import ChunkAcceptance, translator_progress_contract
+from subtitle_llm.pipeline.chunk_translator import ChunkTranslator
 from subtitle_llm.pipeline.chunks import PlannedChunk
 from subtitle_llm.pipeline.lifecycle import (
     TranslationChunkLifecycle,
@@ -14,106 +20,13 @@ from subtitle_llm.pipeline.lifecycle import (
     TranslationChunkState,
 )
 from subtitle_llm.pipeline.lifecycle.projectors import ChunkLifecycleProjector
-from subtitle_llm.pipeline.quality import QualityGate
 from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.pipeline.run_ledger import RunLedger
 from subtitle_llm.pipeline.semantic_units import SemanticUnit
 from subtitle_llm.pipeline.task_store import TranslationTaskStore
 from subtitle_llm.progress_contract import ProgressContract
-from subtitle_llm.progress_events import ProgressEmitter
-from subtitle_llm.review import ReviewPort
 
 logger = logging.getLogger(__name__)
-
-AcceptChunk = Callable[
-    [
-        PlannedChunk,
-        ChunkTranslationResult,
-        ChunkTranslator,
-        QualityGate,
-        ReviewPort,
-        str,
-        str,
-        list[SubtitleEntry],
-        RunLedger,
-        TranslationReport,
-        bool,
-    ],
-    None,
-]
-HandleChunkFailure = Callable[
-    [
-        PlannedChunk,
-        list[SubtitleEntry],
-        TranslationReport,
-        Exception,
-        ProgressEmitter | None,
-    ],
-    None,
-]
-TranslateSemanticChunk = Callable[
-    [
-        ChunkTranslator,
-        PlannedChunk,
-        dict[int, SemanticUnit],
-        str,
-        str,
-        bool,
-    ],
-    ChunkTranslationResult,
-]
-SemanticUnitsForPlanned = Callable[
-    [
-        PlannedChunk,
-        dict[int, SemanticUnit],
-    ],
-    list[SemanticUnit],
-]
-AcceptSemanticTimedChunk = Callable[
-    [
-        PlannedChunk,
-        ChunkTranslationResult,
-        list[SemanticUnit],
-        ChunkTranslator,
-        QualityGate,
-        ReviewPort,
-        str,
-        str,
-        list[SubtitleEntry],
-        RunLedger,
-        TranslationReport,
-        bool,
-    ],
-    None,
-]
-AcceptSemanticChunk = Callable[
-    [
-        PlannedChunk,
-        ChunkTranslationResult,
-        dict[int, SemanticUnit],
-        ChunkTranslator,
-        QualityGate,
-        ReviewPort,
-        str,
-        str,
-        list[SubtitleEntry],
-        RunLedger,
-        TranslationReport,
-        bool,
-    ],
-    None,
-]
-HandleSemanticChunkFailure = Callable[
-    [
-        PlannedChunk,
-        dict[int, SemanticUnit],
-        list[SubtitleEntry],
-        TranslationReport,
-        Exception,
-        ProgressEmitter | None,
-    ],
-    None,
-]
 
 
 @dataclass(frozen=True)
@@ -125,20 +38,13 @@ class ChunkProcessingCoordinator:
         self,
         planned_chunks: list[PlannedChunk],
         translator: ChunkTranslator,
-        quality_gate: QualityGate,
-        review_port: ReviewPort,
-        context: str,
-        target_language: str,
+        acceptance: ChunkAcceptance,
         subtitle: Subtitle,
-        translated_entries: list[SubtitleEntry],
+        translated_entries: list,
         run_ledger: RunLedger,
         task_store: TranslationTaskStore,
         task_id: str,
         report: TranslationReport,
-        refine_translation: bool,
-        *,
-        accept_chunk: AcceptChunk,
-        handle_chunk_failure: HandleChunkFailure,
     ) -> None:
         progress_contract = translator_progress_contract(translator)
         chunk_projector = ChunkLifecycleProjector(task_store, task_id, progress_contract)
@@ -147,7 +53,7 @@ class ChunkProcessingCoordinator:
             chunk_projector,
             total_chunks=report.total_chunks,
         )
-        done_futures: set[concurrent.futures.Future] = set()
+        acceptance.bind_lifecycle(chunk_lifecycles, chunk_projector)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.threads) as executor:
             future_to_chunk: dict[concurrent.futures.Future, PlannedChunk] = {}
@@ -163,16 +69,15 @@ class ChunkProcessingCoordinator:
                     executor.submit(
                         translator.translate_and_refine,
                         planned.entries,
-                        context,
-                        target_language,
+                        acceptance.context,
+                        acceptance.target_language,
                         planned.boundary_context,
                         planned.index,
-                        refine_translation=refine_translation,
+                        refine_translation=acceptance.refine_translation,
                     )
                 ] = planned
             self._consume_chunk_futures(
                 future_to_chunk,
-                done_futures,
                 chunk_lifecycles,
                 chunk_projector,
                 progress_contract,
@@ -182,26 +87,8 @@ class ChunkProcessingCoordinator:
                 task_store,
                 task_id,
                 report,
-                accept_result=lambda planned, result: accept_chunk(
-                    planned,
-                    result,
-                    translator,
-                    quality_gate,
-                    review_port,
-                    context,
-                    target_language,
-                    translated_entries,
-                    run_ledger,
-                    report,
-                    refine_translation,
-                ),
-                handle_failure=lambda planned, exc: handle_chunk_failure(
-                    planned,
-                    translated_entries,
-                    report,
-                    exc,
-                    translator.progress,
-                ),
+                accept_result=lambda planned, result: acceptance.accept(planned, result, translated_entries),
+                handle_failure=lambda planned, exc: acceptance.handle_failure(planned, exc, translated_entries),
             )
 
     def run_semantic_chunks(
@@ -209,23 +96,13 @@ class ChunkProcessingCoordinator:
         planned_chunks: list[PlannedChunk],
         semantic_unit_by_index: dict[int, SemanticUnit],
         translator: ChunkTranslator,
-        quality_gate: QualityGate,
-        review_port: ReviewPort,
-        context: str,
-        target_language: str,
+        acceptance: ChunkAcceptance,
         subtitle: Subtitle,
-        translated_entries: list[SubtitleEntry],
+        translated_entries: list,
         run_ledger: RunLedger,
         task_store: TranslationTaskStore,
         task_id: str,
         report: TranslationReport,
-        refine_translation: bool,
-        *,
-        translate_planned_semantic_chunk: TranslateSemanticChunk,
-        semantic_units_for_planned: SemanticUnitsForPlanned,
-        accept_semantic_timed_chunk: AcceptSemanticTimedChunk,
-        accept_semantic_chunk: AcceptSemanticChunk,
-        handle_semantic_chunk_failure: HandleSemanticChunkFailure,
     ) -> None:
         progress_contract = translator_progress_contract(translator)
         chunk_projector = ChunkLifecycleProjector(task_store, task_id, progress_contract)
@@ -235,7 +112,7 @@ class ChunkProcessingCoordinator:
             total_chunks=report.total_chunks,
             semantic=True,
         )
-        done_futures: set[concurrent.futures.Future] = set()
+        acceptance.bind_lifecycle(chunk_lifecycles, chunk_projector)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.threads) as executor:
             future_to_chunk: dict[concurrent.futures.Future, PlannedChunk] = {}
@@ -250,18 +127,13 @@ class ChunkProcessingCoordinator:
                 )
                 future_to_chunk[
                     executor.submit(
-                        translate_planned_semantic_chunk,
-                        translator,
+                        acceptance.translate_semantic,
                         planned,
                         semantic_unit_by_index,
-                        context,
-                        target_language,
-                        refine_translation,
                     )
                 ] = planned
             self._consume_chunk_futures(
                 future_to_chunk,
-                done_futures,
                 chunk_lifecycles,
                 chunk_projector,
                 progress_contract,
@@ -272,30 +144,17 @@ class ChunkProcessingCoordinator:
                 task_id,
                 report,
                 semantic=True,
-                accept_result=lambda planned, result: self._accept_semantic_result(
+                accept_result=lambda planned, result: acceptance.accept_semantic(
                     planned,
                     result,
                     semantic_unit_by_index,
-                    translator,
-                    quality_gate,
-                    review_port,
-                    context,
-                    target_language,
                     translated_entries,
-                    run_ledger,
-                    report,
-                    refine_translation,
-                    semantic_units_for_planned=semantic_units_for_planned,
-                    accept_semantic_timed_chunk=accept_semantic_timed_chunk,
-                    accept_semantic_chunk=accept_semantic_chunk,
                 ),
-                handle_failure=lambda planned, exc: handle_semantic_chunk_failure(
+                handle_failure=lambda planned, exc: acceptance.handle_semantic_failure(
                     planned,
                     semantic_unit_by_index,
-                    translated_entries,
-                    report,
                     exc,
-                    translator.progress,
+                    translated_entries,
                 ),
             )
 
@@ -323,21 +182,21 @@ class ChunkProcessingCoordinator:
     def _consume_chunk_futures(
         self,
         future_to_chunk: dict[concurrent.futures.Future, PlannedChunk],
-        done_futures: set[concurrent.futures.Future],
         chunk_lifecycles: dict[int, TranslationChunkLifecycle],
         chunk_projector: ChunkLifecycleProjector,
         progress_contract: ProgressContract,
         subtitle: Subtitle,
-        translated_entries: list[SubtitleEntry],
+        translated_entries: list,
         run_ledger: RunLedger,
         task_store: TranslationTaskStore,
         task_id: str,
         report: TranslationReport,
         *,
-        accept_result: Callable[[PlannedChunk, ChunkTranslationResult], None],
-        handle_failure: Callable[[PlannedChunk, Exception], None],
+        accept_result,
+        handle_failure,
         semantic: bool = False,
     ) -> None:
+        done_futures: set[concurrent.futures.Future] = set()
         all_futures = set(future_to_chunk.keys())
         while len(done_futures) < len(all_futures):
             newly_done, _ = concurrent.futures.wait(
@@ -388,7 +247,7 @@ class ChunkProcessingCoordinator:
         chunk_projector: ChunkLifecycleProjector,
         progress_contract: ProgressContract,
         subtitle: Subtitle,
-        translated_entries: list[SubtitleEntry],
+        translated_entries: list,
         run_ledger: RunLedger,
         task_store: TranslationTaskStore,
         task_id: str,
@@ -440,61 +299,6 @@ class ChunkProcessingCoordinator:
             emit_progress=False,
         )
         return lifecycle
-
-    def _accept_semantic_result(
-        self,
-        planned: PlannedChunk,
-        result: ChunkTranslationResult,
-        semantic_unit_by_index: dict[int, SemanticUnit],
-        translator: ChunkTranslator,
-        quality_gate: QualityGate,
-        review_port: ReviewPort,
-        context: str,
-        target_language: str,
-        translated_entries: list[SubtitleEntry],
-        run_ledger: RunLedger,
-        report: TranslationReport,
-        refine_translation: bool,
-        *,
-        semantic_units_for_planned: SemanticUnitsForPlanned,
-        accept_semantic_timed_chunk: AcceptSemanticTimedChunk,
-        accept_semantic_chunk: AcceptSemanticChunk,
-    ) -> None:
-        semantic_units = semantic_units_for_planned(planned, semantic_unit_by_index)
-        if self.semantic_output_granularity == "cue":
-            accept_semantic_timed_chunk(
-                planned,
-                result,
-                semantic_units,
-                translator,
-                quality_gate,
-                review_port,
-                context,
-                target_language,
-                translated_entries,
-                run_ledger,
-                report,
-                refine_translation,
-            )
-            return
-        accept_semantic_chunk(
-            planned,
-            result,
-            semantic_unit_by_index,
-            translator,
-            quality_gate,
-            review_port,
-            context,
-            target_language,
-            translated_entries,
-            run_ledger,
-            report,
-            refine_translation,
-        )
-
-
-def translator_progress_contract(translator: ChunkTranslator) -> ProgressContract:
-    return ProgressContract(translator.progress or ProgressEmitter("translate"))
 
 
 def terminal_chunk_state_for_planned(report: TranslationReport, planned: PlannedChunk) -> TranslationChunkState:

@@ -13,6 +13,7 @@ from subtitle_llm.domain import Subtitle, SubtitleEntry
 from subtitle_llm.llm.types import CompletionResult, CompletionUsage
 from subtitle_llm.pipeline import TranslationRequest, TranslationService
 from subtitle_llm.pipeline.checkpoint import file_fingerprint
+from subtitle_llm.pipeline.chunk_acceptance import ChunkAcceptance, repair_semantic_layout
 from subtitle_llm.pipeline.chunk_translator import ChunkTranslationResult, TracedTranslationText
 from subtitle_llm.pipeline.chunks import PlannedChunk
 from subtitle_llm.pipeline.quality import QualityGate
@@ -27,6 +28,7 @@ from subtitle_llm.pipeline.semantic_units import (
     split_translation,
 )
 from subtitle_llm.pipeline.text import parse_indexed_translation_for_entries
+from subtitle_llm.review import AutoReviewPort
 from subtitle_llm.review.ports import ReviewResult
 from subtitle_llm.settings import AppConfig, ModelConfig, ModelProvider, PipelineConfig
 
@@ -494,8 +496,7 @@ class TestSemanticUnits(unittest.TestCase):
         )
         run_ledger = RunLedger()
 
-        repaired_entries = TranslationService._repair_semantic_layout(
-            cast(Any, None),
+        repaired_entries = repair_semantic_layout(
             planned,
             source_entries,
             [unit],
@@ -526,8 +527,7 @@ class TestSemanticUnits(unittest.TestCase):
         )
         run_ledger = RunLedger()
 
-        repaired_entries = TranslationService._repair_semantic_layout(
-            cast(Any, None),
+        repaired_entries = repair_semantic_layout(
             planned,
             entries,
             [unit],
@@ -559,8 +559,7 @@ class TestSemanticUnits(unittest.TestCase):
         )
         run_ledger = RunLedger()
 
-        repaired_entries = TranslationService._repair_semantic_layout(
-            cast(Any, None),
+        repaired_entries = repair_semantic_layout(
             planned,
             entries,
             [unit],
@@ -668,8 +667,7 @@ class TestSemanticUnits(unittest.TestCase):
         )
         run_ledger = RunLedger()
 
-        repaired_entries = TranslationService._repair_semantic_layout(
-            cast(Any, None),
+        repaired_entries = repair_semantic_layout(
             planned,
             entries,
             [unit],
@@ -937,28 +935,28 @@ class TestSemanticUnits(unittest.TestCase):
             total_chunks=1,
         )
         translator = RecordingSemanticTranslator()
-        service = TranslationService(
-            make_config(),
-            translation_client=SemanticTranslationClient(),
-            summary_client=SemanticTranslationClient(),
+        acceptance = ChunkAcceptance(
+            config=make_config(),
+            translator=cast(Any, translator),
+            quality_gate=QualityGate(),
+            review_port=AutoReviewPort(),
+            context="",
+            target_language="Chinese",
+            report=report,
+            run_ledger=RunLedger(),
         )
         review_result = ReviewResult(
             chunk=entries,
             entries_to_retranslate=[entries[1]],
         )
 
-        outcome = service._apply_semantic_tui_review_result(
+        outcome = acceptance._apply_semantic_tui_review_result(
             planned,
             entries,
             units,
             {entry.index: unit for unit in units for entry in unit.entries},
             review_result,
             QualityGate().diagnose_chunk(entries, target_language="Chinese"),
-            cast(Any, translator),
-            context="",
-            target_language="Chinese",
-            report=report,
-            refine_translation=False,
         )
 
         self.assertTrue(outcome.retranslated)
@@ -984,10 +982,15 @@ class TestSemanticUnits(unittest.TestCase):
             total_chunks=1,
         )
         translator = RecordingSemanticTranslator()
-        service = TranslationService(
-            make_config(),
-            translation_client=SemanticTranslationClient(),
-            summary_client=SemanticTranslationClient(),
+        acceptance = ChunkAcceptance(
+            config=make_config(),
+            translator=cast(Any, translator),
+            quality_gate=QualityGate(),
+            review_port=AutoReviewPort(),
+            context="",
+            target_language="Chinese",
+            report=report,
+            run_ledger=RunLedger(),
         )
         review_result = ReviewResult(
             chunk=entries,
@@ -995,18 +998,13 @@ class TestSemanticUnits(unittest.TestCase):
             cascade_start_index=2,
         )
 
-        outcome = service._apply_semantic_tui_review_result(
+        outcome = acceptance._apply_semantic_tui_review_result(
             planned,
             entries,
             units,
             {entry.index: unit for unit in units for entry in unit.entries},
             review_result,
             QualityGate().diagnose_chunk(entries, target_language="Chinese"),
-            cast(Any, translator),
-            context="",
-            target_language="Chinese",
-            report=report,
-            refine_translation=False,
         )
 
         self.assertTrue(outcome.retranslated)
@@ -1030,10 +1028,15 @@ class TestSemanticUnits(unittest.TestCase):
             total_chunks=1,
         )
         translator = RecordingSemanticTranslator()
-        service = TranslationService(
-            make_config(),
-            translation_client=SemanticTranslationClient(),
-            summary_client=SemanticTranslationClient(),
+        acceptance = ChunkAcceptance(
+            config=make_config(),
+            translator=cast(Any, translator),
+            quality_gate=QualityGate(),
+            review_port=AutoReviewPort(),
+            context="",
+            target_language="Chinese",
+            report=report,
+            run_ledger=RunLedger(),
         )
         review_result = ReviewResult(
             chunk=entries,
@@ -1041,18 +1044,13 @@ class TestSemanticUnits(unittest.TestCase):
             cascade_start_index=1,
         )
 
-        outcome = service._apply_semantic_tui_review_result(
+        outcome = acceptance._apply_semantic_tui_review_result(
             planned,
             entries,
             units,
             {entry.index: unit for unit in units for entry in unit.entries},
             review_result,
             QualityGate().diagnose_chunk(entries, target_language="Chinese"),
-            cast(Any, translator),
-            context="",
-            target_language="Chinese",
-            report=report,
-            refine_translation=False,
         )
 
         self.assertTrue(outcome.retranslated)
@@ -1075,10 +1073,15 @@ class TestSemanticUnits(unittest.TestCase):
             total_chunks=1,
         )
         translator = FailLargeRepairSemanticTranslator()
-        service = TranslationService(
-            make_config(),
-            translation_client=SemanticTranslationClient(),
-            summary_client=SemanticTranslationClient(),
+        acceptance = ChunkAcceptance(
+            config=make_config(),
+            translator=cast(Any, translator),
+            quality_gate=QualityGate(),
+            review_port=AutoReviewPort(),
+            context="",
+            target_language="Chinese",
+            report=report,
+            run_ledger=RunLedger(),
         )
         review_result = ReviewResult(
             chunk=entries,
@@ -1086,18 +1089,13 @@ class TestSemanticUnits(unittest.TestCase):
             cascade_start_index=1,
         )
 
-        outcome = service._apply_semantic_tui_review_result(
+        outcome = acceptance._apply_semantic_tui_review_result(
             planned,
             entries,
             units,
             {entry.index: unit for unit in units for entry in unit.entries},
             review_result,
             QualityGate().diagnose_chunk(entries, target_language="Chinese"),
-            cast(Any, translator),
-            context="",
-            target_language="Chinese",
-            report=report,
-            refine_translation=False,
         )
 
         self.assertTrue(outcome.retranslated)
@@ -1125,10 +1123,15 @@ class TestSemanticUnits(unittest.TestCase):
             total_chunks=1,
         )
         translator = RecordingSemanticTranslator()
-        service = TranslationService(
-            make_config(),
-            translation_client=SemanticTranslationClient(),
-            summary_client=SemanticTranslationClient(),
+        acceptance = ChunkAcceptance(
+            config=make_config(),
+            translator=cast(Any, translator),
+            quality_gate=QualityGate(),
+            review_port=AutoReviewPort(),
+            context="",
+            target_language="Chinese",
+            report=report,
+            run_ledger=RunLedger(),
         )
         review_result = ReviewResult(
             chunk=entries,
@@ -1136,18 +1139,13 @@ class TestSemanticUnits(unittest.TestCase):
             alignment_drift_start_index=2,
         )
 
-        outcome = service._apply_semantic_tui_review_result(
+        outcome = acceptance._apply_semantic_tui_review_result(
             planned,
             entries,
             units,
             {entry.index: unit for unit in units for entry in unit.entries},
             review_result,
             QualityGate().diagnose_chunk(entries, target_language="Chinese"),
-            cast(Any, translator),
-            context="",
-            target_language="Chinese",
-            report=report,
-            refine_translation=False,
         )
 
         self.assertTrue(outcome.retranslated)
@@ -1174,10 +1172,15 @@ class TestSemanticUnits(unittest.TestCase):
             total_chunks=1,
         )
         translator = FailingRepairSemanticTranslator()
-        service = TranslationService(
-            make_config(),
-            translation_client=SemanticTranslationClient(),
-            summary_client=SemanticTranslationClient(),
+        acceptance = ChunkAcceptance(
+            config=make_config(),
+            translator=cast(Any, translator),
+            quality_gate=QualityGate(),
+            review_port=AutoReviewPort(),
+            context="",
+            target_language="Chinese",
+            report=report,
+            run_ledger=RunLedger(),
         )
         review_result = ReviewResult(
             chunk=entries,
@@ -1185,18 +1188,13 @@ class TestSemanticUnits(unittest.TestCase):
             cascade_start_index=2,
         )
 
-        outcome = service._apply_semantic_tui_review_result(
+        outcome = acceptance._apply_semantic_tui_review_result(
             planned,
             entries,
             units,
             {entry.index: unit for unit in units for entry in unit.entries},
             review_result,
             QualityGate().diagnose_chunk(entries, target_language="Chinese"),
-            cast(Any, translator),
-            context="",
-            target_language="Chinese",
-            report=report,
-            refine_translation=False,
         )
 
         self.assertFalse(outcome.retranslated)

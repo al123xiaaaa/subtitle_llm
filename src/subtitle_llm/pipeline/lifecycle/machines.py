@@ -94,6 +94,8 @@ CHUNK_TRANSITIONS: dict[tuple[TranslationChunkState, TranslationChunkLifecycleEv
     (TranslationChunkState.REVIEWING, TranslationChunkLifecycleEvent.REVIEW_ACCEPTED): (
         TranslationChunkState.ACCEPTED
     ),
+    # 复核结束后协调器统一应用终态事件（ACCEPTED / ACCEPTED_WITH_WARNINGS）。
+    (TranslationChunkState.REVIEWING, TranslationChunkLifecycleEvent.ACCEPTED): TranslationChunkState.ACCEPTED,
     (TranslationChunkState.REVIEWING, TranslationChunkLifecycleEvent.ACCEPTED_WITH_WARNINGS): (
         TranslationChunkState.ACCEPTED_WITH_WARNINGS
     ),
