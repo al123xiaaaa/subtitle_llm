@@ -126,8 +126,13 @@ export function buildEnv(
   baseEnv: NodeJS.ProcessEnv = {},
   overrides: Record<string, string | undefined> = {},
 ): NodeJS.ProcessEnv {
+  // Finder 启动时 PATH 不含 Homebrew，yt-dlp 会找不到 deno（YouTube JS 挑战
+  // 求解）等可选工具；把常见安装前缀补进 PATH 尾部，不影响已有查找顺序。
+  const basePath = cleanString(baseEnv.PATH);
+  const extraPaths = ["/opt/homebrew/bin", "/usr/local/bin"].filter((dir) => !basePath.split(":").includes(dir));
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
+    PATH: [...(basePath ? [basePath] : []), ...extraPaths].join(":"),
     PYTHONIOENCODING: "utf-8",
     PYTHONUNBUFFERED: "1",
   };
