@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { toRefs } from "vue";
+import { Download } from "@lucide/vue";
 import type { useAppController } from "../../composables/useAppController";
 import type { TaskTab } from "../../composables/controllerTypes";
 
@@ -28,22 +29,26 @@ const { submitDownload } = props.formActions;
       class="form-grid"
       @submit.prevent="submitDownload"
     >
+      <div class="panel-intro">
+        <Download />
+        <p>粘贴视频链接，自动下载字幕；没有字幕时下载视频和音频，可直接接着转写。</p>
+      </div>
       <div class="form-group">
         <div class="form-fields">
           <label class="span-2">
-            <span>视频 URL</span>
+            <span>视频链接</span>
             <input
               id="downloadUrl"
               v-model="downloadForm.url"
               name="url"
               type="url"
-              placeholder="https://..."
+              placeholder="https://www.youtube.com/watch?v=..."
               required
               :disabled="isBusy"
             >
           </label>
           <label>
-            <span>源语言</span>
+            <span>字幕语言</span>
             <input
               id="downloadSourceLanguage"
               v-model="downloadForm.sourceLanguage"
@@ -53,7 +58,7 @@ const { submitDownload } = props.formActions;
             >
           </label>
           <label>
-            <span>输出文件夹</span>
+            <span>保存到</span>
             <div class="inline-control">
               <input
                 id="downloadOutputDir"

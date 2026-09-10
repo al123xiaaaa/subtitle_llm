@@ -741,6 +741,28 @@ select {
   background: var(--accent-softter);
 }
 
+.panel-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
+  background: var(--accent-softter);
+}
+
+.panel-intro svg {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  color: var(--accent-strong);
+}
+
+.panel-intro p {
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
 .settings-intro svg {
   flex: 0 0 auto;
   width: 18px;

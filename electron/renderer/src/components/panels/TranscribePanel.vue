@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { toRefs } from "vue";
+import { AudioLines } from "@lucide/vue";
 import type { useAppController } from "../../composables/useAppController";
 import type { TaskTab } from "../../composables/controllerTypes";
 
@@ -28,15 +29,23 @@ const { submitTranscribe } = props.formActions;
       class="form-grid"
       @submit.prevent="submitTranscribe"
     >
+      <div class="panel-intro">
+        <AudioLines />
+        <p>把音频或视频文件转成带时间轴的字幕（SRT），转写完可以直接去翻译。</p>
+      </div>
       <div class="form-group">
+        <div class="form-group-title">
+          基础
+        </div>
         <div class="form-fields">
           <label class="span-2">
-            <span>音频文件</span>
+            <span>音频或视频文件</span>
             <input
               id="audioInput"
               v-model="transcribeForm.audio"
               name="audio"
               type="text"
+              placeholder="选择 .wav / .mp3 / .mp4 等文件"
               required
               :disabled="isBusy"
             >
@@ -51,6 +60,35 @@ const { submitTranscribe } = props.formActions;
               :disabled="isBusy"
             >
           </label>
+          <label>
+            <span>输出字幕</span>
+            <div class="inline-control">
+              <input
+                id="transcribeOutput"
+                v-model="transcribeForm.output"
+                name="output"
+                type="text"
+                required
+                :disabled="isBusy"
+              >
+              <button
+                id="chooseTranscribeOutput"
+                class="secondary-button"
+                type="button"
+                :disabled="isBusy"
+                @click="chooseTranscribeOutput"
+              >
+                选择
+              </button>
+            </div>
+          </label>
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="form-group-title">
+          识别引擎
+        </div>
+        <div class="form-fields">
           <label>
             <span>ASR 模型</span>
             <select
@@ -72,7 +110,7 @@ const { submitTranscribe } = props.formActions;
             </select>
           </label>
           <label>
-            <span>ASR 设备</span>
+            <span>运行设备</span>
             <select
               id="transcribeAsrDevice"
               v-model="transcribeForm.asrDevice"
@@ -92,37 +130,15 @@ const { submitTranscribe } = props.formActions;
               </option>
             </select>
           </label>
-          <label>
-            <span>输出 SRT</span>
-            <div class="inline-control">
-              <input
-                id="transcribeOutput"
-                v-model="transcribeForm.output"
-                name="output"
-                type="text"
-                required
-                :disabled="isBusy"
-              >
-              <button
-                id="chooseTranscribeOutput"
-                class="secondary-button"
-                type="button"
-                :disabled="isBusy"
-                @click="chooseTranscribeOutput"
-              >
-                选择
-              </button>
-            </div>
-          </label>
           <label class="span-2">
-            <span>配置文件</span>
+            <span>自定义配置</span>
             <div class="inline-control">
               <input
                 id="transcribeConfig"
                 v-model="transcribeForm.config"
                 name="config"
                 type="text"
-                placeholder="默认配置"
+                placeholder="留空使用默认配置"
                 :disabled="isBusy"
               >
               <button
