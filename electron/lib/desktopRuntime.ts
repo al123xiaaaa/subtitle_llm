@@ -101,7 +101,7 @@ export function createDesktopRuntime({
       hasMainPy: fs.existsSync(path.join(projectRoot, "main.py")),
       settingsPath: getSettingsPath(),
       ffmpeg: detectFfmpeg(),
-      asrModels: desktopContract.asrModels.map(({ id, label, description }) => ({ id, label, description })),
+      asrModels: desktopContract.asrModels.map(({ id, label, description, backend }) => ({ id, label, description, backend })),
       defaultAsrModel: desktopContract.defaultAsrModel,
       ...summarizeSettings(getSettingsPath(), env),
     };

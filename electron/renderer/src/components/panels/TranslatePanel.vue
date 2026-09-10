@@ -15,6 +15,7 @@ const props = defineProps<{
 
 const {
   asrModels,
+  isAsrDeviceAuto,
   chooseMuxSubtitle,
   chooseMuxVideo,
   chooseOutput,
@@ -262,10 +263,10 @@ const { ffmpegAvailable } = props.providerState;
             <select
               id="asrDevice"
               v-model="translateForm.asrDevice"
-              :disabled="isBusy"
+              :disabled="isBusy || isAsrDeviceAuto(translateForm.asrModel)"
             >
               <option value="">
-                默认（CPU）
+                {{ isAsrDeviceAuto(translateForm.asrModel) ? "自动（Metal GPU）" : "默认（CPU）" }}
               </option>
               <option value="cpu">
                 CPU

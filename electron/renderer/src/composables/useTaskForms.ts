@@ -53,6 +53,13 @@ export function useTaskForms(api: Window["subtitleLLM"], options: TaskFormsOptio
   const asrModels = computed(() => options.appState.value?.asrModels || []);
   const defaultAsrModel = computed(() => options.appState.value?.defaultAsrModel || "");
 
+  // transcribe.cpp 系（whisper 族）自动选最优后端（Mac 上 Metal），
+  // 设备下拉只对 funasr 系有意义。
+  function isAsrDeviceAuto(modelId: string): boolean {
+    const id = modelId || defaultAsrModel.value;
+    return asrModels.value.find((model) => model.id === id)?.backend === "transcribe-cpp";
+  }
+
   const mkvCapabilityText = computed(() => {
     if (!options.appState.value) {
       return "检测 FFmpeg 中";
@@ -187,6 +194,7 @@ export function useTaskForms(api: Window["subtitleLLM"], options: TaskFormsOptio
     chooseTranslateVideo,
     defaultAsrModel,
     downloadForm,
+    isAsrDeviceAuto,
     mkvCapabilityClass,
     mkvCapabilityText,
     muxForm,

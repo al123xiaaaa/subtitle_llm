@@ -14,7 +14,7 @@ const props = defineProps<{
 }>();
 
 const { activeTab, isBusy } = toRefs(props);
-const { asrModels, chooseTranscribeConfig, chooseTranscribeOutput, defaultAsrModel, transcribeForm } = props.forms;
+const { asrModels, chooseTranscribeConfig, chooseTranscribeOutput, defaultAsrModel, isAsrDeviceAuto, transcribeForm } = props.forms;
 const { submitTranscribe } = props.formActions;
 </script>
 
@@ -114,10 +114,10 @@ const { submitTranscribe } = props.formActions;
             <select
               id="transcribeAsrDevice"
               v-model="transcribeForm.asrDevice"
-              :disabled="isBusy"
+              :disabled="isBusy || isAsrDeviceAuto(transcribeForm.asrModel)"
             >
               <option value="">
-                默认（CPU）
+                {{ isAsrDeviceAuto(transcribeForm.asrModel) ? "自动（Metal GPU）" : "默认（CPU）" }}
               </option>
               <option value="cpu">
                 CPU

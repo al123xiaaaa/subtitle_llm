@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -69,6 +70,7 @@ class TestTranscribeCppBackendRun(unittest.TestCase):
         with (
             patch("subtitle_llm.media.asr_backend_transcribe_cpp._resolve_transcribe_cli", return_value="/bin/fake-cli"),
             patch("subtitle_llm.media.asr_backend_transcribe_cpp._resolve_gguf_model", return_value="/tmp/fake.gguf"),
+            patch("subtitle_llm.media.asr_backend_transcribe_cpp._ensure_16k_mono_wav", side_effect=lambda p: str(p)),
             patch("subprocess.run", return_value=fake_result) as run_mock,
         ):
             cues = backend.transcribe("/tmp/a.wav", "English")
@@ -88,6 +90,7 @@ class TestTranscribeCppBackendRun(unittest.TestCase):
         with (
             patch("subtitle_llm.media.asr_backend_transcribe_cpp._resolve_transcribe_cli", return_value="/bin/fake-cli"),
             patch("subtitle_llm.media.asr_backend_transcribe_cpp._resolve_gguf_model", return_value="/tmp/fake.gguf"),
+            patch("subtitle_llm.media.asr_backend_transcribe_cpp._ensure_16k_mono_wav", side_effect=lambda p: str(p)),
             patch("subprocess.run", return_value=fake_result),
         ):
             with self.assertRaises(RuntimeError):
@@ -96,3 +99,17 @@ class TestTranscribeCppBackendRun(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEnsure16kMonoWav(unittest.TestCase):
+    def test_already_16k_mono_passthrough(self):
+        import wave
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            path = tmp.name
+        with wave.open(path, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setframerate(16000)
+            wav.setsampwidth(2)
+            wav.writeframes(b"\x00" * 3200)
+        from subtitle_llm.media.asr_backend_transcribe_cpp import _ensure_16k_mono_wav
+        self.assertEqual(_ensure_16k_mono_wav(path), path)

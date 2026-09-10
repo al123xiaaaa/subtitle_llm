@@ -34,6 +34,7 @@ export interface AsrModelProfile {
   id: string;
   label: string;
   description: string;
+  backend: string;
   model_name: string;
   hub: string;
   trust_remote_code: boolean;

@@ -66,6 +66,8 @@ export interface AsrModelOption {
   id: string;
   label: string;
   description: string;
+  /** funasr 系才有设备选择；transcribe-cpp 自动选最优后端（Mac 上 Metal） */
+  backend?: string;
 }
 
 export type CommandName = "translate" | "download" | "transcribe" | "mux";

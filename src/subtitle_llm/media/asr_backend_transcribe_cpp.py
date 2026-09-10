@@ -16,11 +16,14 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import urllib.request
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 
 from subtitle_llm.media.asr_backend import AsrCue
+from subtitle_llm.media.downloader import _resolve_ffmpeg_location
 from subtitle_llm.progress_events import ProgressEmitter
 from subtitle_llm.settings import ASRConfig
 
@@ -49,6 +52,7 @@ class TranscribeCppBackend:
         cli = _resolve_transcribe_cli()
         model = _resolve_gguf_model(self.config, progress)
         lang = normalize_iso_language(language)
+        prepared_audio = _ensure_16k_mono_wav(audio_path)
 
         _emit(progress, "正在运行 transcribe-cli 识别")
         cmd = [
@@ -57,7 +61,7 @@ class TranscribeCppBackend:
             "-l", lang,
             "--timestamps", "segment",
             "-q",
-            str(audio_path),
+            str(prepared_audio),
         ]
         logger.info("transcribe-cli: %s", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -151,6 +155,37 @@ def _resolve_gguf_model(config: ASRConfig, progress: ProgressEmitter | None) -> 
         cached.unlink(missing_ok=True)
         raise TranscribeCppError(f"GGUF 模型下载失败：{url}：{exc}") from exc
     return str(cached)
+
+
+def _ensure_16k_mono_wav(audio_path: str | Path) -> str:
+    """transcribe.cpp v1 只接受 16kHz 单声道 WAV；yt-dlp 抽出的音频常是
+    44.1/48kHz，需要先重采样。已是目标格式的直接返回原路径。"""
+    path = str(audio_path)
+    try:
+        with wave.open(path, "rb") as wav:
+            if wav.getframerate() == 16000 and wav.getnchannels() == 1:
+                return path
+    except wave.Error:
+        pass  # 非 PCM wav（如 IEEE float），交给 ffmpeg 统一转
+
+    ffmpeg = _resolve_ffmpeg_location()
+    if not ffmpeg:
+        raise TranscribeCppError(
+            "音频不是 16kHz 单声道 WAV，需要 ffmpeg 重采样但未找到 ffmpeg。"
+            "请安装 ffmpeg 或设置 SUBTITLE_LLM_FFMPEG 环境变量。"
+        )
+    resampled = tempfile.NamedTemporaryFile(
+        prefix="subtitle-llm-16k-", suffix=".wav", delete=False
+    ).name
+    logger.info("重采样到 16kHz 单声道: %s -> %s", path, resampled)
+    result = subprocess.run(
+        [ffmpeg, "-y", "-i", path, "-ar", "16000", "-ac", "1", resampled],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise TranscribeCppError(f"ffmpeg 重采样失败：{result.stderr.strip()[:300]}")
+    return resampled
 
 
 def _emit(progress: ProgressEmitter | None, message: str, *, status: str = "running") -> None:
