@@ -660,5 +660,42 @@ class TestFunasrAsrBackend(unittest.TestCase):
         self.assertEqual(cues[0].text, "hello world.")
 
 
+class TestSegmentedTranscription(unittest.TestCase):
+    """segment_via_vad 路径：独立 VAD 切段 + 批量识别。"""
+
+    def test_segments_are_batched_and_mapped_by_key(self):
+        import numpy as np
+        import soundfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = Path(tmp) / "a.wav"
+            sample_rate = 16000
+            soundfile.write(str(wav), np.zeros(sample_rate * 2, dtype="float32"), sample_rate)
+
+            vad = MagicMock()
+            vad.generate.return_value = [{"value": [[0, 900], [1000, 1900]]}]
+            model = MagicMock()
+
+            def fake_generate(input, **_kwargs):
+                paths = input if isinstance(input, list) else [input]
+                return [{"key": Path(p).stem, "text": f"文本-{Path(p).stem}"} for p in paths]
+
+            model.generate.side_effect = fake_generate
+
+            backend = FunasrAsrBackend(config=resolve_asr_config(profile="fun-asr-nano"))
+            backend._model = model
+            backend._vad_model = vad
+            cues = backend.transcribe(wav, "English")
+
+            self.assertEqual(len(cues), 2)
+            self.assertEqual((cues[0].start_ms, cues[0].end_ms), (0, 900))
+            self.assertEqual((cues[1].start_ms, cues[1].end_ms), (1000, 1900))
+            # 批量：一次调用拿到全部段，按 key 回映射
+            call = model.generate.call_args
+            self.assertIsInstance(call.kwargs["input"], list)
+            self.assertEqual(len(call.kwargs["input"]), 2)
+            self.assertEqual(call.kwargs["batch_size"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -732,13 +732,36 @@ select {
   padding: var(--space-5);
 }
 
+.settings-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
+  background: var(--accent-softter);
+}
+
+.settings-intro svg {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  color: var(--accent-strong);
+}
+
+.settings-intro p {
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
 .settings-card {
   display: grid;
-  gap: var(--space-3);
-  border: 1px solid var(--line);
+  gap: var(--space-4);
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius);
-  background: var(--surface-soft);
-  padding: var(--space-4);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  padding: var(--space-4) var(--space-5);
 }
 
 .settings-card-heading {
@@ -748,9 +771,65 @@ select {
   align-items: flex-start;
 }
 
+.settings-provider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.provider-mark {
+  display: grid;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--accent-strong);
+  background: var(--accent-softter);
+  font-size: var(--text-md);
+  font-weight: var(--weight-bold);
+}
+
+.settings-card-heading h3 {
+  font-size: var(--text-md);
+}
+
 .settings-card-heading p {
+  margin-top: 1px;
+  color: var(--muted);
   font-size: var(--text-xs);
-  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+/* Key 输入行：输入框 + 保存按钮内联 */
+.settings-key-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.settings-key-row .primary-button {
+  min-height: var(--control-h);
+}
+
+/* 卡片底部：环境变量名（低调）+ 清除入口 */
+.settings-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.settings-card-foot .env-key {
+  color: var(--gray-400);
+  font-size: 11px;
+}
+
+.settings-card-foot .ghost-button {
+  min-height: 26px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
 }
 
 /* ===================== 进度面板 ===================== */

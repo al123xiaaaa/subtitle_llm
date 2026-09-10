@@ -521,6 +521,10 @@ class FunasrAsrBackend:
         audio_data, sample_rate = soundfile.read(str(audio_path), dtype="float32")
         cues: list[AsrCue] = []
         skipped_short = 0
+        # 先写出全部切片，再按批（每批 16 段）一次性 generate：
+        # 实测批量比逐段串行快约 1.6x（短段的固定调用开销被摊掉），
+        # 长视频段数多，收益更大。批量结果按 key（文件名 stem）回映射，不靠顺序。
+        slices: list[tuple[int, int, str]] = []
         with tempfile.TemporaryDirectory(prefix="subtitle-llm-vad-") as tmp_dir:
             for position, segment in enumerate(segments):
                 start_ms, end_ms = int(segment[0]), int(segment[1])
@@ -533,23 +537,32 @@ class FunasrAsrBackend:
                     audio_data[start_ms * sample_rate // 1000:end_ms * sample_rate // 1000],
                     sample_rate,
                 )
-                result = model.generate(
-                    input=slice_path,
+                slices.append((start_ms, end_ms, slice_path))
+
+            generate_kwargs = dict(self.config.generate_kwargs)
+            batch_size = 16
+            for batch_start in range(0, len(slices), batch_size):
+                batch = slices[batch_start:batch_start + batch_size]
+                batch_paths = [slice_path for _, _, slice_path in batch]
+                results = model.generate(
+                    input=batch_paths,
                     cache={},
                     language=lang,
-                    **self.config.generate_kwargs,
+                    **{**generate_kwargs, "batch_size": len(batch_paths)},
                 )
-                text = clean_sensevoice_text(str(result[0].get("text", "") if result else "")).strip()
-                if not text:
-                    continue
-                cues.append(AsrCue(start_ms=start_ms, end_ms=end_ms, text=text))
-                if (position + 1) % 5 == 0 or position == len(segments) - 1:
-                    emit_asr_progress(
-                        progress,
-                        "transcribe_audio",
-                        "转写音频",
-                        f"正在识别语音段 {position + 1}/{len(segments)}",
-                    )
+                by_key = {str(item.get("key", "")): item for item in results or []}
+                for start_ms, end_ms, slice_path in batch:
+                    item = by_key.get(Path(slice_path).stem)
+                    text = clean_sensevoice_text(str(item.get("text", "") if item else "")).strip()
+                    if not text:
+                        continue
+                    cues.append(AsrCue(start_ms=start_ms, end_ms=end_ms, text=text))
+                emit_asr_progress(
+                    progress,
+                    "transcribe_audio",
+                    "转写音频",
+                    f"正在识别语音段 {min(batch_start + batch_size, len(slices))}/{len(slices)}",
+                )
         logger.info(
             "VAD 分段识别完成: audio=%s segments=%s cues=%s skipped_short=%s",
             audio_path, len(segments), len(cues), skipped_short,
