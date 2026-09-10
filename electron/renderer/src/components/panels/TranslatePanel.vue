@@ -257,6 +257,27 @@ const { ffmpegAvailable } = props.providerState;
               </option>
             </select>
           </label>
+          <label v-if="translateForm.forceAsr">
+            <span>ASR 设备</span>
+            <select
+              id="asrDevice"
+              v-model="translateForm.asrDevice"
+              :disabled="isBusy"
+            >
+              <option value="">
+                默认（CPU）
+              </option>
+              <option value="cpu">
+                CPU
+              </option>
+              <option value="mps">
+                GPU（Apple MPS）
+              </option>
+              <option value="cuda">
+                GPU（CUDA）
+              </option>
+            </select>
+          </label>
         </div>
       </div>
 

@@ -145,16 +145,23 @@ def resolve_asr_config(
 ) -> ASRConfig:
     """把 profile 解析成 ASRConfig。
 
-    profile 提供整套默认值；base（通常来自 YAML）里被显式设置的字段优先，
-    未显式设置的字段由 profile 填充。device 参数是最高优先级的临时覆盖。
+    明确的优先级（高 → 低）：
+    1. device 参数（临时覆盖，如 CLI --asr-device）；
+    2. 指定了 profile（--asr-model）时，profile 整段胜出——
+       配置文件的 asr 段被忽略（除显式设置的 device），避免
+       default.yaml 的显式 model_name 把 profile 挤掉造成混合错配；
+    3. 未指定 profile：base（YAML）原样生效；base 也没有时用默认 profile。
     """
-    selected = get_asr_model(profile or default_asr_model_id())
-    values: dict[str, Any] = {name: getattr(selected, name) for name in _PROFILE_FIELDS}
-    if base is not None:
-        for name in base.model_fields_set:
-            # device 不属于 profile 数据（按机器选），但 base 显式设置的 device 要保留
-            if name in _PROFILE_FIELDS or name == "device":
-                values[name] = getattr(base, name)
+    if profile is not None:
+        selected = get_asr_model(profile)
+        values: dict[str, Any] = {name: getattr(selected, name) for name in _PROFILE_FIELDS}
+        if base is not None and "device" in base.model_fields_set:
+            values["device"] = base.device
+    elif base is not None:
+        values = {name: getattr(base, name) for name in (*_PROFILE_FIELDS, "device")}
+    else:
+        selected = get_asr_model(default_asr_model_id())
+        values = {name: getattr(selected, name) for name in _PROFILE_FIELDS}
     if device:
         values["device"] = device
     return ASRConfig(**values)

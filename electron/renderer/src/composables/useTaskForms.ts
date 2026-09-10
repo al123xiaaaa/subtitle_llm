@@ -23,6 +23,7 @@ export function useTaskForms(api: Window["subtitleLLM"], options: TaskFormsOptio
     refineTranslation: false,
     forceAsr: false,
     asrModel: "",
+    asrDevice: "",
     resume: false,
     embedMkv: false,
     video: "",
@@ -46,6 +47,7 @@ export function useTaskForms(api: Window["subtitleLLM"], options: TaskFormsOptio
     output: "",
     config: "",
     asrModel: "",
+    asrDevice: "",
   });
 
   const asrModels = computed(() => options.appState.value?.asrModels || []);

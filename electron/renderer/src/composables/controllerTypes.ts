@@ -23,6 +23,7 @@ export interface TranslateFormState {
   refineTranslation: boolean;
   forceAsr: boolean;
   asrModel: string;
+  asrDevice: string;
   resume: boolean;
   embedMkv: boolean;
   video: string;
@@ -46,4 +47,5 @@ export interface TranscribeFormState {
   output: string;
   config: string;
   asrModel: string;
+  asrDevice: string;
 }

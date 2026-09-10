@@ -102,6 +102,7 @@ export interface TranslateJobOptions {
   refineTranslation?: boolean;
   forceAsr?: boolean;
   asrModel?: string;
+  asrDevice?: string;
   resume?: boolean;
   embedVideo?: boolean;
   video?: string;
@@ -121,6 +122,7 @@ export interface TranscribeJobOptions {
   language?: string;
   config?: string;
   asrModel?: string;
+  asrDevice?: string;
 }
 
 export interface MuxJobOptions {

@@ -69,6 +69,7 @@ export function useAppController() {
         refineTranslation: taskForms.translateForm.refineTranslation,
         forceAsr: taskForms.translateForm.forceAsr,
         asrModel: taskForms.translateForm.asrModel,
+        asrDevice: taskForms.translateForm.asrDevice,
         resume: taskForms.translateForm.resume,
         embedVideo,
         video,
@@ -110,6 +111,7 @@ export function useAppController() {
         language: cleanString(taskForms.transcribeForm.language),
         config: cleanString(taskForms.transcribeForm.config),
         asrModel: taskForms.transcribeForm.asrModel,
+        asrDevice: taskForms.transcribeForm.asrDevice,
       },
     });
   }

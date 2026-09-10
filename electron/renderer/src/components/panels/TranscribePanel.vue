@@ -72,6 +72,27 @@ const { submitTranscribe } = props.formActions;
             </select>
           </label>
           <label>
+            <span>ASR 设备</span>
+            <select
+              id="transcribeAsrDevice"
+              v-model="transcribeForm.asrDevice"
+              :disabled="isBusy"
+            >
+              <option value="">
+                默认（CPU）
+              </option>
+              <option value="cpu">
+                CPU
+              </option>
+              <option value="mps">
+                GPU（Apple MPS）
+              </option>
+              <option value="cuda">
+                GPU（CUDA）
+              </option>
+            </select>
+          </label>
+          <label>
             <span>输出 SRT</span>
             <div class="inline-control">
               <input

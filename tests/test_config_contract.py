@@ -62,13 +62,27 @@ class ConfigContractParityTest(unittest.TestCase):
         self.assertEqual(config.punc_model, "ct-punc")
         self.assertEqual(config.language_style, "code")
 
-    def test_resolve_asr_config_explicit_base_fields_win(self) -> None:
+    def test_resolve_asr_config_profile_wins_over_yaml(self) -> None:
+        """--asr-model 是明确选择：profile 整段胜出，忽略 YAML 的 asr 字段。"""
+        base = ASRConfig(model_name="FunAudioLLM/Fun-ASR-Nano-2512", hub="hf")
+        config = resolve_asr_config(base, profile="paraformer-zh")
+        self.assertEqual(config.model_name, "paraformer-zh")
+        self.assertEqual(config.hub, "ms")
+        self.assertEqual(config.spk_model, "cam++")
+
+    def test_resolve_asr_config_keeps_explicit_device(self) -> None:
+        """device 按机器选择，不属于 profile；base 显式 device 与参数覆盖都保留。"""
         base = ASRConfig(device="cuda", max_single_segment_time=15000)
         config = resolve_asr_config(base, profile="fun-asr-nano")
         self.assertEqual(config.device, "cuda")
-        self.assertEqual(config.max_single_segment_time, 15000)
+        self.assertEqual(config.max_single_segment_time, 30000)
         self.assertEqual(config.model_name, "FunAudioLLM/Fun-ASR-Nano-2512")
-        self.assertEqual(config.trust_remote_code, True)
+        self.assertEqual(resolve_asr_config(base, device="mps").device, "mps")
+
+    def test_resolve_asr_config_without_profile_uses_base(self) -> None:
+        base = ASRConfig(model_name="paraformer-zh", hub="ms")
+        config = resolve_asr_config(base)
+        self.assertEqual(config.model_name, "paraformer-zh")
 
     def test_resolve_asr_config_unknown_profile_raises(self) -> None:
         with self.assertRaises(ValueError):

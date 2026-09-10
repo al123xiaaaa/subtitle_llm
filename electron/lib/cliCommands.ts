@@ -71,6 +71,7 @@ function buildTranslateArgs(options: TranslateJobOptions): string[] {
   }
 
   addOption(args, "--asr-model", options.asrModel);
+  addOption(args, "--asr-device", options.asrDevice);
 
   if (options.embedVideo) {
     args.push("--embed-video");
@@ -97,6 +98,7 @@ function buildTranscribeArgs(options: TranscribeJobOptions): string[] {
   addOption(args, "--language", options.language || "English");
   addOption(args, "--config", options.config);
   addOption(args, "--asr-model", options.asrModel);
+  addOption(args, "--asr-device", options.asrDevice);
   return args;
 }
 

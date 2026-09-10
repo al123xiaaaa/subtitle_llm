@@ -58,11 +58,15 @@ def _validate_translate_options(
         raise typer.Exit(2)
 
 
-def _load_service(config_path: Path | None, asr_model: str | None = None) -> TranslationService:
+def _load_service(
+    config_path: Path | None,
+    asr_model: str | None = None,
+    asr_device: str | None = None,
+) -> TranslationService:
     try:
         config = load_config(config_path)
-        if asr_model:
-            config.asr = resolve_asr_config(config.asr, profile=asr_model)
+        if asr_model or asr_device:
+            config.asr = resolve_asr_config(config.asr, profile=asr_model, device=asr_device)
         return TranslationService(config)
     except ConfigError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
@@ -120,7 +124,11 @@ def translate(
     ] = False,
     asr_model: Annotated[
         str | None,
-        typer.Option("--asr-model", help="ASR 模型 profile：fun-asr-nano / paraformer-zh / qwen3-asr。"),
+        typer.Option("--asr-model", help="ASR 模型 profile：fun-asr-nano / paraformer-zh / qwen3-asr（覆盖配置文件 asr 段）。"),
+    ] = None,
+    asr_device: Annotated[
+        str | None,
+        typer.Option("--asr-device", help="ASR 推理设备：cpu / mps / cuda。默认 cpu。"),
     ] = None,
     embed_video: Annotated[
         bool,
@@ -170,7 +178,7 @@ def translate(
         video_output,
     )
     try:
-        service = _load_service(config, asr_model=asr_model)
+        service = _load_service(config, asr_model=asr_model, asr_device=asr_device)
         result = service.translate(
             TranslationRequest(
                 input_file=input_file,
@@ -345,7 +353,11 @@ def transcribe(
     config: Annotated[Path | None, typer.Option("--config", "-c", help="Config YAML path.")] = None,
     asr_model: Annotated[
         str | None,
-        typer.Option("--asr-model", help="ASR 模型 profile：fun-asr-nano / paraformer-zh / qwen3-asr。"),
+        typer.Option("--asr-model", help="ASR 模型 profile：fun-asr-nano / paraformer-zh / qwen3-asr（覆盖配置文件 asr 段）。"),
+    ] = None,
+    asr_device: Annotated[
+        str | None,
+        typer.Option("--asr-device", help="ASR 推理设备：cpu / mps / cuda。默认 cpu。"),
     ] = None,
 ) -> None:
     """Transcribe audio to SRT with the configured ASR model."""
@@ -366,8 +378,8 @@ def transcribe(
     )
     try:
         app_config = load_config(config)
-        if asr_model:
-            app_config.asr = resolve_asr_config(app_config.asr, profile=asr_model)
+        if asr_model or asr_device:
+            app_config.asr = resolve_asr_config(app_config.asr, profile=asr_model, device=asr_device)
         transcribe_audio(audio, language, output, app_config.asr, progress=progress)
     except Exception:
         logger.exception("命令失败: transcribe")
