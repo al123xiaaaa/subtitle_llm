@@ -1,4 +1,7 @@
+import contextlib
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -9,6 +12,18 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from typer.testing import CliRunner
+
+
+@contextlib.contextmanager
+def isolated_filesystem():
+    """typer 0.27 移除了 CliRunner.isolated_filesystem，这里用临时目录替代。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        old_cwd = os.getcwd()
+        os.chdir(tmp)
+        try:
+            yield tmp
+        finally:
+            os.chdir(old_cwd)
 
 from subtitle_llm.media.muxer import MuxResult
 from subtitle_llm.cli.app import app
@@ -32,7 +47,7 @@ class TestNewCLI(unittest.TestCase):
         fake_service = Mock()
         fake_service.translate.return_value = fake_result
 
-        with runner.isolated_filesystem():
+        with isolated_filesystem():
             with patch("subtitle_llm.cli.app._load_service", return_value=fake_service):
                 result = runner.invoke(
                     app,
@@ -74,7 +89,7 @@ class TestNewCLI(unittest.TestCase):
         fake_service = Mock()
         fake_service.translate.return_value = Mock(report=report)
 
-        with runner.isolated_filesystem():
+        with isolated_filesystem():
             with patch("subtitle_llm.cli.app._load_service", return_value=fake_service):
                 result = runner.invoke(
                     app,
@@ -108,7 +123,7 @@ class TestNewCLI(unittest.TestCase):
         fake_service = Mock()
         fake_service.translate.return_value = Mock(report=report)
 
-        with runner.isolated_filesystem():
+        with isolated_filesystem():
             with patch("subtitle_llm.cli.app._load_service", return_value=fake_service):
                 result = runner.invoke(
                     app,
@@ -140,7 +155,7 @@ class TestNewCLI(unittest.TestCase):
         fake_service = Mock()
         fake_service.translate.return_value = Mock(report=report)
 
-        with runner.isolated_filesystem():
+        with isolated_filesystem():
             with patch("subtitle_llm.cli.app._load_service", return_value=fake_service):
                 result = runner.invoke(
                     app,
@@ -173,7 +188,7 @@ class TestNewCLI(unittest.TestCase):
         fake_service = Mock()
         fake_service.translate.return_value = Mock(report=report)
 
-        with runner.isolated_filesystem():
+        with isolated_filesystem():
             with patch("subtitle_llm.cli.app._load_service", return_value=fake_service):
                 result = runner.invoke(app, ["translate", "--task-id", "task-123", "--resume"])
 
@@ -187,7 +202,7 @@ class TestNewCLI(unittest.TestCase):
     def test_translate_command_rejects_task_id_with_new_input(self):
         runner = CliRunner()
 
-        with runner.isolated_filesystem():
+        with isolated_filesystem():
             result = runner.invoke(
                 app,
                 [
@@ -220,7 +235,7 @@ class TestNewCLI(unittest.TestCase):
         fake_service = Mock()
         fake_service.translate.return_value = Mock(report=report)
 
-        with runner.isolated_filesystem():
+        with isolated_filesystem():
             with patch("subtitle_llm.cli.app._load_service", return_value=fake_service):
                 with patch(
                     "subtitle_llm.cli.app.mux_subtitle_track",
@@ -265,7 +280,7 @@ class TestNewCLI(unittest.TestCase):
         fake_service = Mock()
         fake_service.translate.return_value = Mock(report=report)
 
-        with runner.isolated_filesystem():
+        with isolated_filesystem():
             with patch("subtitle_llm.cli.app._load_service", return_value=fake_service):
                 result = runner.invoke(
                     app,
@@ -288,7 +303,7 @@ class TestNewCLI(unittest.TestCase):
         fake_service = Mock()
         fake_service.translate.side_effect = RuntimeError("boom")
 
-        with runner.isolated_filesystem():
+        with isolated_filesystem():
             with patch("subtitle_llm.cli.app._load_service", return_value=fake_service):
                 result = runner.invoke(
                     app,
@@ -309,7 +324,7 @@ class TestNewCLI(unittest.TestCase):
 
     def test_mux_command_prints_output_video(self):
         runner = CliRunner()
-        with runner.isolated_filesystem():
+        with isolated_filesystem():
             with patch(
                 "subtitle_llm.cli.app.mux_subtitle_track",
                 return_value=MuxResult(output_file="output.mkv", command=["ffmpeg"]),

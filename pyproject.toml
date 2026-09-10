@@ -29,12 +29,15 @@ dependencies = [
 [project.scripts]
 subtitle-llm = "subtitle_llm.cli.app:app"
 
+[project.optional-dependencies]
+asr = ["funasr"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["subtitle_llm*"]
 
 [tool.setuptools.package-data]
-subtitle_llm = ["config/*.yaml", "review/*.css"]
+subtitle_llm = ["config/*.yaml", "config/*.json", "review/*.css"]
 
 [tool.ruff]
 line-length = 120
