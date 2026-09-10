@@ -172,6 +172,16 @@ export type JobEvent =
       text: string;
     }
   | {
+      type: "progress";
+      jobId: string;
+      event: CliProgressEvent;
+    }
+  | {
+      type: "result";
+      jobId: string;
+      event: CliResultEvent;
+    }
+  | {
       type: "error";
       jobId: string;
       message: string;

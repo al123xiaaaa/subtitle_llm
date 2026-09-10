@@ -15,6 +15,7 @@ import { prepareDesktopTaskIntent } from "./desktopTaskIntent.js";
 import { createFfmpegDetector } from "./ffmpegStatus.js";
 import { getProvider, modelsFromApiResponse } from "./providerCatalog.js";
 import { clearApiKey, resolveCredential, saveApiKey, savePreferences, summarizeSettings } from "./settingsStore.js";
+import { createStdoutProtocolParser } from "./stdoutProtocol.js";
 
 interface DesktopRuntimeOptions {
   app: Pick<App, "getPath">;
@@ -204,9 +205,26 @@ export function createDesktopRuntime({
       generatedConfigPath: runRequest.generatedConfigPath || "",
     });
 
+    // stdout 结构化协议（SUBTITLE_LLM_PROGRESS / SUBTITLE_LLM_RESULT）在主进程
+    // 按行缓冲解析成结构化事件；普通日志仍以 stdout 文本事件转发给运行日志区。
+    const stdoutParser = createStdoutProtocolParser();
+    const forwardStdoutEvents = (chunk: string) => {
+      for (const parsed of stdoutParser.push(chunk)) {
+        if (parsed.kind === "progress") {
+          sendJobEvent(sender, { type: "progress", jobId, event: parsed.event });
+        } else if (parsed.kind === "result") {
+          sendJobEvent(sender, { type: "result", jobId, event: parsed.event });
+        } else if (parsed.kind === "parse-error") {
+          sendJobEvent(sender, { type: "stderr", jobId, text: parsed.text });
+        } else {
+          sendJobEvent(sender, { type: "stdout", jobId, text: parsed.text });
+        }
+      }
+    };
+
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string) => sendJobEvent(sender, { type: "stdout", jobId, text: chunk }));
+    child.stdout?.on("data", forwardStdoutEvents);
     child.stderr?.on("data", (chunk: string) => sendJobEvent(sender, { type: "stderr", jobId, text: chunk }));
     child.on("error", (error) => {
       job.finished = true;
@@ -216,6 +234,18 @@ export function createDesktopRuntime({
     child.on("close", (code, signal) => {
       job.finished = true;
       activeJobs.delete(jobId);
+      // 进程结束时缓冲区里可能还有未以换行结尾的半行。
+      for (const parsed of stdoutParser.flush()) {
+        if (parsed.kind === "progress") {
+          sendJobEvent(sender, { type: "progress", jobId, event: parsed.event });
+        } else if (parsed.kind === "result") {
+          sendJobEvent(sender, { type: "result", jobId, event: parsed.event });
+        } else if (parsed.kind === "parse-error") {
+          sendJobEvent(sender, { type: "stderr", jobId, text: parsed.text });
+        } else {
+          sendJobEvent(sender, { type: "stdout", jobId, text: parsed.text });
+        }
+      }
       sendJobEvent(sender, { type: "finished", jobId, code, signal });
     });
 

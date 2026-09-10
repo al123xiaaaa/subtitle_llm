@@ -1,13 +1,10 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import type { Ref } from "vue";
-import type { CliProgressEvent, CliResultEvent, CommandName, DesktopJobRequest, JobEvent } from "../../../types";
+import type { CliResultEvent, CommandName, DesktopJobRequest, JobEvent } from "../../../types";
 import { formatProgressLogLine } from "../../../lib/progressModel";
 import { useJobProgress } from "./useJobProgress";
 import type { ResultTarget } from "./controllerTypes";
 import { cleanString } from "./controllerUtils";
-
-const RESULT_EVENT_PREFIX = "SUBTITLE_LLM_RESULT ";
-const PROGRESS_EVENT_PREFIX = "SUBTITLE_LLM_PROGRESS ";
 
 interface JobLifecycleOptions {
   configDrawerOpen: Ref<boolean>;
@@ -110,69 +107,11 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
     lastLlmTraceDir.value = cleaned;
   }
 
-  function parseStructuredEvent(line: string): boolean {
-    if (parseProgressEvent(line)) {
-      return true;
-    }
-    return parseResultEvent(line);
-  }
-
-  function parseProgressEvent(line: string): boolean {
-    if (!line.startsWith(PROGRESS_EVENT_PREFIX)) {
-      return false;
-    }
-
-    try {
-      const event = JSON.parse(line.slice(PROGRESS_EVENT_PREFIX.length)) as CliProgressEvent;
-      progress.recordProgress(event);
-      const formatted = formatProgressLogLine(event, { previousStage: lastLogStage });
-      if (formatted) {
-        appendLog(`${formatted.line}\n`);
-        lastLogStage = formatted.stage;
-      }
-      return true;
-    } catch (error) {
-      appendLog(`进度事件解析失败：${error instanceof Error ? error.message : String(error)}\n`, "stderr");
-      return true;
-    }
-  }
-
-  function parseResultEvent(line: string): boolean {
-    if (!line.startsWith(RESULT_EVENT_PREFIX)) {
-      return false;
-    }
-
-    try {
-      const event = JSON.parse(line.slice(RESULT_EVENT_PREFIX.length)) as CliResultEvent;
-      setSubtitlePath(event.output_file);
-      setSourceVideoPath(event.source_video_file);
-      setEmbeddedVideoPath(event.embedded_video_file);
-      setEmbeddedVideoPath(event.output_video_file);
-      setLlmTraceDir(event.llm_trace_dir);
-      return true;
-    } catch (error) {
-      appendLog(`结果事件解析失败：${error instanceof Error ? error.message : String(error)}\n`, "stderr");
-      return true;
-    }
-  }
-
-  function consumeStructuredStdout(text: string): string {
-    const trailingNewline = /\r?\n$/.test(text);
-    const visibleLines: string[] = [];
-    const lines = text.split(/\r?\n/);
-    lines.forEach((line, index) => {
-      if (index === lines.length - 1 && line === "" && trailingNewline) {
-        return;
-      }
-      if (parseStructuredEvent(line)) {
-        return;
-      }
-      visibleLines.push(line);
-    });
-    if (!visibleLines.length) {
-      return "";
-    }
-    return `${visibleLines.join("\n")}${trailingNewline ? "\n" : ""}`;
+  function applyResultEvent(event: CliResultEvent): void {
+    setSubtitlePath(event.output_file);
+    setSourceVideoPath(event.source_video_file);
+    setEmbeddedVideoPath(event.output_video_file || event.embedded_video_file);
+    setLlmTraceDir(event.llm_trace_dir);
   }
 
   async function startJob(request: DesktopJobRequest): Promise<void> {
@@ -256,12 +195,19 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
         appendLog(`模型配置: ${event.generatedConfigPath}\n`);
       }
     } else if (event.type === "stdout") {
-      const visibleText = consumeStructuredStdout(event.text);
-      if (visibleText) {
-        appendLog(visibleText);
-      }
+      appendLog(event.text);
     } else if (event.type === "stderr") {
       appendLog(event.text, "stderr");
+    } else if (event.type === "progress") {
+      // 结构化进度事件已由主进程 stdoutProtocol 解析完毕，这里只做归约与展示。
+      progress.recordProgress(event.event);
+      const formatted = formatProgressLogLine(event.event, { previousStage: lastLogStage });
+      if (formatted) {
+        appendLog(`${formatted.line}\n`);
+        lastLogStage = formatted.stage;
+      }
+    } else if (event.type === "result") {
+      applyResultEvent(event.event);
     } else if (event.type === "error") {
       setBusy(false);
       setStatus("失败");

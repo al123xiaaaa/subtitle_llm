@@ -21,6 +21,7 @@ import {
   startProgress,
 } from "../../dist/electron/lib/progressModel.js";
 import { getProvider, listProviders, modelsFromApiResponse, resolveModelId } from "../../dist/electron/lib/providerCatalog.js";
+import { createStdoutProtocolParser } from "../../dist/electron/lib/stdoutProtocol.js";
 import {
   clearApiKey,
   readSettings,
@@ -448,5 +449,37 @@ assert.throws(
   /Python 环境缺少依赖：pysubs2/,
 );
 assert.equal(missingDependencySpawnCalled, false);
+
+// stdout 协议解析器：结构化事件在主进程按行缓冲解析
+const protocolParser = createStdoutProtocolParser();
+const progressLine = `SUBTITLE_LLM_PROGRESS ${JSON.stringify({ command: "translate", stage: "startup", detail: "load_config", status: "done" })}`;
+const resultLine = `SUBTITLE_LLM_RESULT ${JSON.stringify({ command: "translate", output_file: "out.srt" })}`;
+
+// 完整行：日志、进度、结果各归其位，连续日志合并
+const batchEvents = protocolParser.push(`hello\n${progressLine}\nworld\n${resultLine}\n`);
+assert.deepEqual(
+  batchEvents.map((event) => event.kind),
+  ["log", "progress", "log", "result"],
+);
+assert.equal(batchEvents[0].kind === "log" ? batchEvents[0].text : "", "hello\n");
+assert.equal(batchEvents[1].kind === "progress" ? batchEvents[1].event.stage : "", "startup");
+assert.equal(batchEvents[3].kind === "result" ? batchEvents[3].event.output_file : "", "out.srt");
+
+// pipe 分片：半行 JSON 不能丢，跨 chunk 拼完整后再解析
+const fragmented = createStdoutProtocolParser();
+const halfLine = progressLine.slice(0, 40);
+assert.deepEqual(fragmented.push(`${halfLine}`), []);
+const restEvents = fragmented.push(`${progressLine.slice(40)}\n`);
+assert.equal(restEvents.length, 1);
+assert.equal(restEvents[0].kind === "progress" ? restEvents[0].event.detail : "", "load_config");
+
+// 非法 JSON：报 parse-error 而不是静默丢弃
+const invalidEvents = createStdoutProtocolParser().push("SUBTITLE_LLM_PROGRESS {not-json}\n");
+assert.equal(invalidEvents[0]?.kind, "parse-error");
+
+// flush：进程结束时无换行结尾的半行也要吐出
+const flushed = createStdoutProtocolParser();
+flushed.push("tail-without-newline");
+assert.deepEqual(flushed.flush(), [{ kind: "log", text: "tail-without-newline" }]);
 
 console.log("desktop smoke tests passed");
