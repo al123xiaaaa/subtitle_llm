@@ -167,6 +167,18 @@ export function useAppController() {
     }
   }
 
+  async function openTaskSourceVideo(record: TranslationTaskSummary): Promise<void> {
+    if (record.source_video_file) {
+      await api.openPath(record.source_video_file);
+    }
+  }
+
+  async function showTaskSourceVideo(record: TranslationTaskSummary): Promise<void> {
+    if (record.source_video_file) {
+      await api.showInFolder(record.source_video_file);
+    }
+  }
+
   async function toggleDeletedTaskRecords(): Promise<void> {
     showDeletedTaskRecords.value = !showDeletedTaskRecords.value;
     await refreshTaskRecords();
@@ -196,10 +208,12 @@ export function useAppController() {
   const records = {
     continueTaskRecord,
     openTaskOutput,
+    openTaskSourceVideo,
     refreshTaskRecords,
     restoreTaskRecord,
     showDeletedTaskRecords,
     showTaskOutput,
+    showTaskSourceVideo,
     softDeleteTaskRecord,
     taskRecords,
     taskRecordsStatus,

@@ -11,10 +11,12 @@ const props = defineProps<{
 const {
   continueTaskRecord,
   openTaskOutput,
+  openTaskSourceVideo,
   refreshTaskRecords,
   restoreTaskRecord,
   showDeletedTaskRecords,
   showTaskOutput,
+  showTaskSourceVideo,
   softDeleteTaskRecord,
   taskRecords,
   taskRecordsStatus,
@@ -82,6 +84,45 @@ function canContinue(status: string, deletedAt?: string | null): boolean {
             <span>{{ record.target_language }} · {{ record.status }} · {{ formatTime(record.updated_at) }}</span>
           </div>
           <p>{{ record.output_file }}</p>
+          <div class="task-record-files">
+            <span class="task-file-actions">
+              <span class="task-file-label">字幕</span>
+              <button
+                class="ghost-button"
+                type="button"
+                @click="openTaskOutput(record)"
+              >
+                打开
+              </button>
+              <button
+                class="ghost-button"
+                type="button"
+                @click="showTaskOutput(record)"
+              >
+                定位
+              </button>
+            </span>
+            <span
+              v-if="record.source_video_file"
+              class="task-file-actions"
+            >
+              <span class="task-file-label">源视频</span>
+              <button
+                class="ghost-button"
+                type="button"
+                @click="openTaskSourceVideo(record)"
+              >
+                打开
+              </button>
+              <button
+                class="ghost-button"
+                type="button"
+                @click="showTaskSourceVideo(record)"
+              >
+                定位
+              </button>
+            </span>
+          </div>
         </div>
         <div class="task-record-buttons">
           <button
@@ -92,20 +133,6 @@ function canContinue(status: string, deletedAt?: string | null): boolean {
             @click="continueTaskRecord(record)"
           >
             继续
-          </button>
-          <button
-            class="secondary-button"
-            type="button"
-            @click="openTaskOutput(record)"
-          >
-            打开
-          </button>
-          <button
-            class="secondary-button"
-            type="button"
-            @click="showTaskOutput(record)"
-          >
-            定位
           </button>
           <button
             v-if="record.deleted_at"

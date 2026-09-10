@@ -30,7 +30,10 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
   const hasSubtitleResult = computed(() => Boolean(lastSubtitlePath.value));
   const hasVideoResult = computed(() => Boolean(lastEmbeddedVideoPath.value));
   const hasTraceResult = computed(() => Boolean(lastLlmTraceDir.value));
-  const hasAnyResult = computed(() => hasSubtitleResult.value || hasVideoResult.value || hasTraceResult.value);
+  const hasSourceVideoResult = computed(() => Boolean(lastSourceVideoPath.value));
+  const hasAnyResult = computed(
+    () => hasSubtitleResult.value || hasVideoResult.value || hasTraceResult.value || hasSourceVideoResult.value,
+  );
   let lastLogStage = "";
   let unsubscribeJobEvents: (() => void) | null = null;
 
@@ -211,6 +214,9 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
     if (target === "trace") {
       return lastLlmTraceDir.value;
     }
+    if (target === "source") {
+      return lastSourceVideoPath.value;
+    }
     return lastSubtitlePath.value;
   }
 
@@ -286,6 +292,7 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
     chunkTooltip: progress.chunkTooltip,
     clearLog,
     hasAnyResult,
+    hasSourceVideoResult,
     hasSubtitleResult,
     hasTraceResult,
     hasVideoResult,

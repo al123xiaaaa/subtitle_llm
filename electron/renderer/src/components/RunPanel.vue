@@ -14,11 +14,13 @@ const {
   chunkTooltip,
   clearLog,
   hasAnyResult,
+  hasSourceVideoResult,
   hasSubtitleResult,
   hasTraceResult,
   hasVideoResult,
   lastEmbeddedVideoPath,
   lastLlmTraceDir,
+  lastSourceVideoPath,
   lastSubtitlePath,
   logBody,
   logText,
@@ -214,6 +216,33 @@ const {
             type="button"
             data-show-result="subtitle"
             @click="showResult('subtitle')"
+          >
+            定位
+          </button>
+        </div>
+      </div>
+      <div
+        id="sourceVideoResultRow"
+        :class="['result-file-row', { 'is-hidden': !hasSourceVideoResult }]"
+      >
+        <div>
+          <strong>下载的视频</strong>
+          <span id="sourceVideoResultPath">{{ lastSourceVideoPath }}</span>
+        </div>
+        <div class="result-actions">
+          <button
+            class="secondary-button"
+            type="button"
+            data-open-result="source"
+            @click="openResult('source')"
+          >
+            打开
+          </button>
+          <button
+            class="secondary-button"
+            type="button"
+            data-show-result="source"
+            @click="showResult('source')"
           >
             定位
           </button>
