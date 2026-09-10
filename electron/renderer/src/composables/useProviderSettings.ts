@@ -1,5 +1,5 @@
 import { computed, nextTick, reactive, ref } from "vue";
-import type { AppState, ModelSelection, ProviderSummary } from "../../../types";
+import type { AppState, ModelSelection, ProviderModel, ProviderSummary } from "../../../types";
 import type { TaskTab } from "./controllerTypes";
 import { cleanString, statusPillClass } from "./controllerUtils";
 
@@ -18,10 +18,11 @@ export function useProviderSettings(api: Window["subtitleLLM"], options: Provide
   const onboardingApiKey = ref("");
   const onboardingDismissed = ref(false);
   const apiKeyDrafts = reactive<Record<string, string>>({});
+  const dynamicModelsByProvider = reactive<Record<string, ProviderModel[]>>({});
 
   const providers = computed(() => appState.value?.providers || []);
   const selectedProvider = computed(() => providerById(selectedProviderId.value));
-  const providerModels = computed(() => selectedProvider.value?.models || []);
+  const providerModels = computed(() => modelsForProvider(selectedProvider.value));
   const showCustomModelInput = computed(() => selectedModelId.value === "__custom__");
   const ffmpegAvailable = computed(() => Boolean(appState.value?.ffmpeg?.available));
   const runtimeInfo = computed(() => {
@@ -57,12 +58,43 @@ export function useProviderSettings(api: Window["subtitleLLM"], options: Provide
     return providers.value.find((provider) => provider.id === providerId) || providers.value[0] || null;
   }
 
+  // 动态模型服务优先用拉取到的列表，静态目录仅作兜底；始终保留「自定义模型 ID」入口
+  function modelsForProvider(provider: ProviderSummary | null): ProviderModel[] {
+    if (!provider) {
+      return [];
+    }
+    if (provider.dynamicModels && dynamicModelsByProvider[provider.id]?.length) {
+      const customEntries = provider.models.filter((model) => model.id === "__custom__");
+      return [...dynamicModelsByProvider[provider.id], ...customEntries];
+    }
+    return provider.models || [];
+  }
+
+  async function loadDynamicModels(provider: ProviderSummary | null): Promise<void> {
+    if (!provider?.dynamicModels || dynamicModelsByProvider[provider.id]) {
+      return;
+    }
+    try {
+      const models = await api.fetchProviderModels(provider.id);
+      if (models.length) {
+        dynamicModelsByProvider[provider.id] = models;
+        syncModelSelection();
+      }
+    } catch {
+      // 拉取失败静默回退静态列表
+    }
+  }
+
   function selectedModelForProvider(provider: ProviderSummary): string {
+    const models = modelsForProvider(provider);
     const stored = appState.value?.preferences?.modelsByProvider?.[provider.id];
-    if (stored && provider.models.some((model) => model.id === stored)) {
+    if (stored && models.some((model) => model.id === stored)) {
       return stored;
     }
-    return provider.defaultModel;
+    if (models.some((model) => model.id === provider.defaultModel)) {
+      return provider.defaultModel;
+    }
+    return models[0]?.id || provider.defaultModel;
   }
 
   function selectedCustomModelForProvider(provider: ProviderSummary): string {
@@ -92,6 +124,7 @@ export function useProviderSettings(api: Window["subtitleLLM"], options: Provide
       selectedOnboardingProviderId.value = "deepseek";
     }
     syncModelSelection();
+    void loadDynamicModels(selectedProvider.value);
   }
 
   async function persistProviderPreference(): Promise<void> {
@@ -117,6 +150,7 @@ export function useProviderSettings(api: Window["subtitleLLM"], options: Provide
 
   async function onProviderChanged(): Promise<void> {
     syncModelSelection();
+    void loadDynamicModels(selectedProvider.value);
     await persistProviderPreference();
   }
 

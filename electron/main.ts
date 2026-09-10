@@ -47,6 +47,10 @@ ipcMain.handle("settings:save-preferences", async (_event, preferences: DesktopP
   return runtime.updatePreferences(preferences);
 });
 
+ipcMain.handle("providers:list-models", async (_event, providerId: string) => {
+  return runtime.listProviderModels(providerId);
+});
+
 ipcMain.handle("dialog:select-input", async () => {
   const result = await dialog.showOpenDialog(mainWindow!, {
     title: "选择字幕或转写 JSON",

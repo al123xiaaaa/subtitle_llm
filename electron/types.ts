@@ -21,6 +21,8 @@ export interface ProviderDefinition {
   endpoint: string;
   defaultModel: string;
   models: ProviderModel[];
+  /** 为 true 时模型列表通过 {endpoint}/models 动态拉取，静态 models 作为失败兜底 */
+  dynamicModels?: boolean;
 }
 
 export interface ProviderSummary extends ProviderDefinition {
@@ -279,5 +281,6 @@ export interface SubtitleLlmBridge {
   restoreTranslationTask: (taskId: string) => Promise<ShellResult>;
   openPath: (filePath: string) => Promise<ShellResult>;
   showInFolder: (filePath: string) => Promise<ShellResult>;
+  fetchProviderModels: (providerId: string) => Promise<ProviderModel[]>;
   onJobEvent: (callback: (event: JobEvent) => void) => () => void;
 }

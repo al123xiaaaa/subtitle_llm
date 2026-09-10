@@ -13,7 +13,8 @@ import type {
 import { buildEnv, buildPythonArgs } from "./cliCommands.js";
 import { prepareDesktopTaskIntent } from "./desktopTaskIntent.js";
 import { createFfmpegDetector } from "./ffmpegStatus.js";
-import { clearApiKey, saveApiKey, savePreferences, summarizeSettings } from "./settingsStore.js";
+import { getProvider, modelsFromApiResponse } from "./providerCatalog.js";
+import { clearApiKey, resolveCredential, saveApiKey, savePreferences, summarizeSettings } from "./settingsStore.js";
 
 interface DesktopRuntimeOptions {
   app: Pick<App, "getPath">;
@@ -115,6 +116,40 @@ export function createDesktopRuntime({
   function updatePreferences(preferences: DesktopPreferences): AppState {
     savePreferences(getSettingsPath(), preferences);
     return getAppState();
+  }
+
+  // 动态拉取服务的模型列表（如本地 CLIProxyAPI 的 /v1/models）。
+  // 拉取失败返回空数组，渲染端回退到静态兜底列表。
+  async function listProviderModels(providerId: string) {
+    const provider = getProvider(providerId);
+    if (!provider.dynamicModels || !provider.endpoint) {
+      return [];
+    }
+
+    let apiKey = cleanText(env[provider.envKey]);
+    try {
+      const resolved = resolveCredential(getSettingsPath(), provider, env);
+      apiKey = cleanText(resolved.envOverrides[provider.envKey]) || apiKey;
+    } catch {
+      // 未配置 Key 时仍尝试无鉴权拉取（本地服务可能不校验）
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch(`${provider.endpoint}/models`, {
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        return [];
+      }
+      return modelsFromApiResponse(await response.json());
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   function startJob(sender: Pick<WebContents, "isDestroyed" | "send">, request: DesktopJobRequest) {
@@ -357,6 +392,7 @@ export function createDesktopRuntime({
     cancelJob,
     clearProviderApiKey,
     getAppState,
+    listProviderModels,
     listTranslationTasks,
     resolveUserPath,
     restoreTranslationTask,

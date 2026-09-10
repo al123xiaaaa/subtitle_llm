@@ -6,6 +6,7 @@ const bridge: SubtitleLlmBridge = {
   saveApiKey: (providerId: string, apiKey: string) => ipcRenderer.invoke("settings:save-api-key", providerId, apiKey),
   clearApiKey: (providerId: string) => ipcRenderer.invoke("settings:clear-api-key", providerId),
   savePreferences: (preferences: DesktopPreferences) => ipcRenderer.invoke("settings:save-preferences", preferences),
+  fetchProviderModels: (providerId: string) => ipcRenderer.invoke("providers:list-models", providerId),
   selectInput: () => ipcRenderer.invoke("dialog:select-input"),
   selectAudio: () => ipcRenderer.invoke("dialog:select-audio"),
   selectVideo: () => ipcRenderer.invoke("dialog:select-video"),

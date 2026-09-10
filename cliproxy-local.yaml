@@ -16,7 +16,7 @@ summary_model:
   provider: "openai"
   api_key_env: "CLIPROXY_API_KEY"
   endpoint: "http://127.0.0.1:8317/v1"
-  model: "kimi-k2.5"
+  model: "kimi-k3"
   # Kimi 思考模型经代理仅允许 temperature=1、top_p=0.95，
   # 这组值对其它模型（claude/gemini/gpt）同样可用
   temperature: 1.0
@@ -27,7 +27,7 @@ translation_model:
   provider: "openai"
   api_key_env: "CLIPROXY_API_KEY"
   endpoint: "http://127.0.0.1:8317/v1"
-  model: "kimi-k2.5"
+  model: "kimi-k3"
   temperature: 1.0
   top_p: 0.95
   max_tokens: 4096

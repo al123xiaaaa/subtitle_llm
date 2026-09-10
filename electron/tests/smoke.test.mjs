@@ -20,7 +20,7 @@ import {
   STAGE_LABELS,
   startProgress,
 } from "../../dist/electron/lib/progressModel.js";
-import { getProvider, listProviders, resolveModelId } from "../../dist/electron/lib/providerCatalog.js";
+import { getProvider, listProviders, modelsFromApiResponse, resolveModelId } from "../../dist/electron/lib/providerCatalog.js";
 import {
   clearApiKey,
   readSettings,
@@ -199,6 +199,29 @@ assert.match(cliproxyConfig, /endpoint: "http:\/\/127\.0\.0\.1:8317\/v1"/);
 assert.match(cliproxyConfig, /model: "kimi-k2\.5"/);
 assert.match(cliproxyConfig, /temperature: 1\.0/);
 assert.match(cliproxyConfig, /top_p: 0\.95/);
+
+// 动态模型：API 响应解析过滤非对话模型并去重排序
+const dynamicModels = modelsFromApiResponse({
+  data: [
+    { id: "kimi-k3" },
+    { id: "gpt-6-astra" },
+    { id: "gpt-image-2" },
+    { id: "gemini-3.1-flash-image" },
+    { id: "kimi-k3" },
+    { id: "claude-sonnet-4-6" },
+    { id: "" },
+    "bad-entry",
+  ],
+});
+assert.deepEqual(
+  dynamicModels.map((model) => model.id),
+  ["claude-sonnet-4-6", "gpt-6-astra", "kimi-k3"],
+);
+assert.equal(modelsFromApiResponse(null).length, 0);
+assert.equal(modelsFromApiResponse({ data: "bad" }).length, 0);
+// 动态模型服务的 ID 不做静态校验，未知 ID 直接放行
+assert.equal(resolveModelId(getProvider("cliproxy"), "gpt-6-astra", ""), "gpt-6-astra");
+assert.throws(() => resolveModelId(getProvider("deepseek"), "gpt-6-astra", ""), /不支持模型/);
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "subtitle-llm-settings-"));
 const settingsPath = path.join(tempDir, "settings.json");

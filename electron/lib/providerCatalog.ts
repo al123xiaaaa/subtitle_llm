@@ -1,4 +1,4 @@
-import type { ModelSelection, ProviderDefinition } from "../types.js";
+import type { ModelSelection, ProviderDefinition, ProviderModel } from "../types.js";
 
 export const PROVIDERS: ProviderDefinition[] = [
   {
@@ -53,6 +53,8 @@ export const PROVIDERS: ProviderDefinition[] = [
     configProvider: "openai",
     endpoint: "http://127.0.0.1:8317/v1",
     defaultModel: "kimi-k2.5",
+    // 模型列表通过 /v1/models 动态拉取，下面仅作拉取失败时的兜底
+    dynamicModels: true,
     models: [
       {
         id: "kimi-k2.5",
@@ -141,10 +143,34 @@ export function resolveModelId(provider: ProviderDefinition, modelId?: string, c
   }
 
   const selected = modelId || provider.defaultModel;
+  // 动态模型服务（如 CLIProxyAPI）的列表在渲染端拉取，主进程不校验具体 ID
+  if (provider.dynamicModels) {
+    return selected;
+  }
   if (!provider.models.some((model) => model.id === selected)) {
     throw new Error(`${provider.name} 不支持模型：${selected}`);
   }
   return selected;
+}
+
+// 非对话类模型（绘图/语音/向量化等）不适合翻译，从动态列表过滤
+const NON_CHAT_MODEL_PATTERN = /image|tts|embedding|whisper|moderation|speech|dall/i;
+
+export function modelsFromApiResponse(payload: unknown): ProviderModel[] {
+  const data = (payload as { data?: unknown } | null)?.data;
+  if (!Array.isArray(data)) {
+    return [];
+  }
+  const ids = new Set<string>();
+  for (const entry of data) {
+    const id = cleanString((entry as { id?: unknown } | null)?.id);
+    if (id && !NON_CHAT_MODEL_PATTERN.test(id)) {
+      ids.add(id);
+    }
+  }
+  return Array.from(ids)
+    .toSorted((a, b) => a.localeCompare(b))
+    .map((id) => ({ id, label: id, description: "本地代理" }));
 }
 
 export function providerFromSelection(selection: ModelSelection): ProviderDefinition {
