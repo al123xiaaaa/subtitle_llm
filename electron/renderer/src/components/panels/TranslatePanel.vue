@@ -171,7 +171,7 @@ const { ffmpegAvailable } = props.providerState;
                 v-model="translateForm.output"
                 name="output"
                 type="text"
-                placeholder="默认写入 data/output"
+                placeholder="留空自动命名：data/output/<标题>.<语言>.srt"
                 :disabled="isBusy"
               >
               <button
@@ -191,10 +191,9 @@ const { ffmpegAvailable } = props.providerState;
               name="outputFormat"
               :disabled="isBusy"
             >
-              <option value="">使用配置默认值</option>
-              <option value="source-first">原文在前</option>
-              <option value="target-first">译文在前</option>
-              <option value="bilingual">双语</option>
+              <option value="">默认（双语 · 原文在前）</option>
+              <option value="source-first">双语 · 原文在前</option>
+              <option value="target-first">双语 · 译文在前</option>
               <option value="target-only">仅译文</option>
               <option value="source-only">仅原文</option>
             </select>
@@ -206,10 +205,25 @@ const { ffmpegAvailable } = props.providerState;
               v-model="translateForm.sourceLanguage"
               name="sourceLanguage"
               type="text"
+              list="sourceLanguageOptions"
+              placeholder="默认 en"
               :disabled="isBusy"
             >
+            <datalist id="sourceLanguageOptions">
+              <option value="en">英语</option>
+              <option value="zh">中文</option>
+              <option value="ja">日语</option>
+              <option value="ko">韩语</option>
+              <option value="yue">粤语</option>
+              <option value="fr">法语</option>
+              <option value="de">德语</option>
+              <option value="es">西班牙语</option>
+              <option value="it">意大利语</option>
+              <option value="pt">葡萄牙语</option>
+              <option value="ru">俄语</option>
+            </datalist>
           </label>
-          <label class="check-row">
+          <label class="check-row span-2">
             <input
               id="forceAsr"
               v-model="translateForm.forceAsr"
