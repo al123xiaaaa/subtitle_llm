@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from subtitle_llm.domain import SubtitleEntry
 from subtitle_llm.llm.types import ChatClient, CompletionUsage
-from subtitle_llm.pipeline.llm_operations import LlmOperationRunner
+from subtitle_llm.pipeline.llm_operations import LlmOperationResult, LlmOperationRunner
 from subtitle_llm.pipeline.llm_trace import LlmTraceRecorder
 from subtitle_llm.pipeline.prompts import (
     ALIGNMENT_DRIFT_RETRANSLATE_PROMPT,
@@ -69,6 +70,12 @@ class TracedTranslationText:
 
 
 class ChunkTranslator:
+    """一次 LLM 操作 = 模板 + 片段。
+
+    所有公开操作只负责拼 prompt 和声明「如何解析响应」，公共骨架
+    （调用 → usage 累计 → 解析 → trace → 进度）由 _execute_operation 一处承载。
+    """
+
     def __init__(
         self,
         client: ChatClient,
@@ -89,6 +96,121 @@ class ChunkTranslator:
             total_chunks=total_chunks,
             progress=progress,
         )
+
+    # ------------------------------------------------------------------
+    # 核心骨架：一次操作的调用、解析、trace 与进度
+    # ------------------------------------------------------------------
+
+    def _execute_operation(
+        self,
+        *,
+        stage: str,
+        prompt: str,
+        chunk: list[SubtitleEntry],
+        usage: CompletionUsage,
+        chunk_index: int | None = None,
+        process: Callable[[str], str] = lambda content: content,
+        progress_status: str = "running",
+        progress_message: str | None = None,
+        record_error: bool = False,
+        emit_failure_progress: bool = False,
+        trace_format: Callable[[str], str] | None = None,
+        emit_trace_id: bool = True,
+        emit_usage: bool = False,
+    ) -> TracedTranslationText:
+        operation = self.operations.create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
+        return self._complete_operation(
+            operation,
+            stage=stage,
+            prompt=prompt,
+            chunk=chunk,
+            usage=usage,
+            chunk_index=chunk_index,
+            process=process,
+            progress_status=progress_status,
+            progress_message=progress_message,
+            record_error=record_error,
+            emit_failure_progress=emit_failure_progress,
+            trace_format=trace_format,
+            emit_trace_id=emit_trace_id,
+            emit_usage=emit_usage,
+        )
+
+    def _complete_operation(
+        self,
+        operation: LlmOperationResult,
+        *,
+        stage: str,
+        prompt: str,
+        chunk: list[SubtitleEntry],
+        usage: CompletionUsage,
+        chunk_index: int | None = None,
+        process: Callable[[str], str] = lambda content: content,
+        progress_status: str = "running",
+        progress_message: str | None = None,
+        record_error: bool = False,
+        emit_failure_progress: bool = False,
+        trace_format: Callable[[str], str] | None = None,
+        emit_trace_id: bool = True,
+        emit_usage: bool = False,
+    ) -> TracedTranslationText:
+        result = operation.completion
+        duration_ms = operation.duration_ms
+        usage.add(result.usage)
+        try:
+            processed_translation = process(result.content)
+        except Exception as exc:
+            if record_error:
+                self.operations.record_trace(
+                    stage=stage,
+                    prompt=prompt,
+                    response=result.content,
+                    usage=result.usage,
+                    duration_ms=duration_ms,
+                    chunk=chunk,
+                    chunk_index=chunk_index,
+                    processed_translation="",
+                    error=str(exc),
+                )
+            if emit_failure_progress:
+                self.operations.emit_chunk_progress(
+                    stage,
+                    "failed",
+                    f"{chunk_stage_label(stage)}解析失败：{exc}",
+                    chunk,
+                    chunk_index,
+                )
+            raise
+
+        trace_id = self.operations.record_trace(
+            stage=stage,
+            prompt=prompt,
+            response=result.content,
+            usage=result.usage,
+            duration_ms=duration_ms,
+            chunk=chunk,
+            chunk_index=chunk_index,
+            processed_translation=trace_format(processed_translation) if trace_format else processed_translation,
+        )
+        emit_kwargs: dict = {}
+        if emit_trace_id:
+            emit_kwargs["trace_id"] = trace_id
+        if emit_usage:
+            emit_kwargs["usage"] = result.usage
+            emit_kwargs["duration_ms"] = duration_ms
+        self.operations.emit_chunk_progress(
+            stage,
+            progress_status,
+            progress_message or f"{chunk_stage_label(stage)}响应已解析",
+            chunk,
+            chunk_index,
+            **emit_kwargs,
+        )
+        return TracedTranslationText(processed_translation, trace_id)
+
+    # ------------------------------------------------------------------
+    # 组合流程：粗翻 + 可选润色
+    # ------------------------------------------------------------------
 
     def translate_and_refine(
         self,
@@ -180,6 +302,10 @@ class ChunkTranslator:
             final_trace_id=refined_translation.trace_id,
         )
 
+    # ------------------------------------------------------------------
+    # 各阶段操作：模板 + 解析器
+    # ------------------------------------------------------------------
+
     def translate_semantic_timed_cues(
         self,
         units: list[SemanticUnit],
@@ -201,25 +327,29 @@ class ChunkTranslator:
             cue_count=len(cue_entries),
         )
 
-        result = None
-        processed_translation = ""
+        traced: TracedTranslationText | None = None
         last_error: Exception | None = None
         for attempt in range(TRANSLATION_PARSE_RETRIES + 1):
             operation = self.operations.create_completion(prompt, stage=stage, chunk=cue_entries, chunk_index=chunk_index)
-            result = operation.completion
-            duration_ms = operation.duration_ms
-            usage.add(result.usage)
             try:
-                processed_translation = self._process_semantic_timed_response(
-                    result.content,
-                    units,
-                    cue_entries,
-                    target_language=target_language,
+                traced = self._complete_operation(
+                    operation,
                     stage=stage,
                     prompt=prompt,
-                    usage=result.usage,
-                    duration_ms=duration_ms,
+                    chunk=cue_entries,
                     chunk_index=chunk_index,
+                    usage=usage,
+                    process=lambda content, op=operation: self._process_semantic_timed_response(
+                        content,
+                        units,
+                        cue_entries,
+                        target_language=target_language,
+                        stage=stage,
+                        prompt=prompt,
+                        usage=op.completion.usage,
+                        duration_ms=op.duration_ms,
+                        chunk_index=chunk_index,
+                    ),
                 )
                 last_error = None
                 break
@@ -236,33 +366,15 @@ class ChunkTranslator:
                         chunk_index, exc,
                     )
 
-        if last_error is not None or result is None:
+        if last_error is not None or traced is None:
             assert last_error is not None
             raise last_error
 
-        trace_id = self.operations.record_trace(
-            stage=stage,
-            prompt=prompt,
-            response=result.content,
-            usage=result.usage,
-            duration_ms=duration_ms,
-            chunk=cue_entries,
-            chunk_index=chunk_index,
-            processed_translation=processed_translation,
-        )
-        self.operations.emit_chunk_progress(
-            stage,
-            "running",
-            f"{chunk_stage_label(stage)}响应已解析",
-            cue_entries,
-            chunk_index,
-            trace_id=trace_id,
-        )
         return ChunkTranslationResult(
             chunk=cue_entries,
-            translation=processed_translation,
+            translation=traced.text,
             usage=usage,
-            final_trace_id=trace_id,
+            final_trace_id=traced.trace_id,
         )
 
     def translate_semantic_units(
@@ -283,38 +395,15 @@ class ChunkTranslator:
             unit_text=unit_text,
             chunk_size=len(chunk),
         )
-        operation = self.operations.create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
-        result = operation.completion
-        duration_ms = operation.duration_ms
-        usage.add(result.usage)
-        processed_translation = self._process_semantic_json_response(
-            result.content,
-            chunk,
+        return self._execute_operation(
             stage=stage,
             prompt=prompt,
-            usage=result.usage,
-            duration_ms=duration_ms,
-            chunk_index=chunk_index,
-        )
-        trace_id = self.operations.record_trace(
-            stage=stage,
-            prompt=prompt,
-            response=result.content,
-            usage=result.usage,
-            duration_ms=duration_ms,
             chunk=chunk,
+            usage=usage,
             chunk_index=chunk_index,
-            processed_translation=processed_translation,
+            process=lambda content: process_semantic_json_translation(content, chunk),
+            record_error=True,
         )
-        self.operations.emit_chunk_progress(
-            stage,
-            "running",
-            f"{chunk_stage_label(stage)}响应已解析",
-            chunk,
-            chunk_index,
-            trace_id=trace_id,
-        )
-        return TracedTranslationText(processed_translation, trace_id)
 
     def refine_semantic_units(
         self,
@@ -336,38 +425,15 @@ class ChunkTranslator:
             rough_translation=rough_translation,
             chunk_size=len(chunk),
         )
-        operation = self.operations.create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
-        result = operation.completion
-        duration_ms = operation.duration_ms
-        usage.add(result.usage)
-        processed_translation = self._process_semantic_json_response(
-            result.content,
-            chunk,
+        return self._execute_operation(
             stage=stage,
             prompt=prompt,
-            usage=result.usage,
-            duration_ms=duration_ms,
-            chunk_index=chunk_index,
-        )
-        trace_id = self.operations.record_trace(
-            stage=stage,
-            prompt=prompt,
-            response=result.content,
-            usage=result.usage,
-            duration_ms=duration_ms,
             chunk=chunk,
+            usage=usage,
             chunk_index=chunk_index,
-            processed_translation=processed_translation,
+            process=lambda content: process_semantic_json_translation(content, chunk),
+            record_error=True,
         )
-        self.operations.emit_chunk_progress(
-            stage,
-            "running",
-            f"{chunk_stage_label(stage)}响应已解析",
-            chunk,
-            chunk_index,
-            trace_id=trace_id,
-        )
-        return TracedTranslationText(processed_translation, trace_id)
 
     def translate_chunk(
         self,
@@ -387,30 +453,14 @@ class ChunkTranslator:
             chunk_text=original_text,
             chunk_size=len(chunk),
         )
-        operation = self.operations.create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
-        result = operation.completion
-        duration_ms = operation.duration_ms
-        usage.add(result.usage)
-        processed_translation = process_translation(original_text, result.content, chunk)
-        trace_id = self.operations.record_trace(
+        return self._execute_operation(
             stage=stage,
             prompt=prompt,
-            response=result.content,
-            usage=result.usage,
-            duration_ms=duration_ms,
             chunk=chunk,
+            usage=usage,
             chunk_index=chunk_index,
-            processed_translation=processed_translation,
+            process=lambda content: process_translation(original_text, content, chunk),
         )
-        self.operations.emit_chunk_progress(
-            stage,
-            "running",
-            f"{chunk_stage_label(stage)}响应已解析",
-            chunk,
-            chunk_index,
-            trace_id=trace_id,
-        )
-        return TracedTranslationText(processed_translation, trace_id)
 
     def refine_translation(
         self,
@@ -432,30 +482,14 @@ class ChunkTranslator:
             rough_translation=rough_translation,
             chunk_size=len(chunk),
         )
-        operation = self.operations.create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
-        result = operation.completion
-        duration_ms = operation.duration_ms
-        usage.add(result.usage)
-        processed_translation = process_translation(original_text, result.content, chunk)
-        trace_id = self.operations.record_trace(
+        return self._execute_operation(
             stage=stage,
             prompt=prompt,
-            response=result.content,
-            usage=result.usage,
-            duration_ms=duration_ms,
             chunk=chunk,
+            usage=usage,
             chunk_index=chunk_index,
-            processed_translation=processed_translation,
+            process=lambda content: process_translation(original_text, content, chunk),
         )
-        self.operations.emit_chunk_progress(
-            stage,
-            "running",
-            f"{chunk_stage_label(stage)}响应已解析",
-            chunk,
-            chunk_index,
-            trace_id=trace_id,
-        )
-        return TracedTranslationText(processed_translation, trace_id)
 
     def repair_translation(
         self,
@@ -484,6 +518,50 @@ class ChunkTranslator:
             quality_report=quality_report,
             chunk_index=chunk_index,
             stage="repair",
+        )
+
+    def re_translate(
+        self,
+        chunk: list[SubtitleEntry],
+        translation: str,
+        target_language: str,
+        usage: CompletionUsage,
+        quality_report: str = "",
+    ) -> str:
+        return self._re_translate_traced(
+            chunk,
+            translation,
+            target_language,
+            usage,
+            quality_report=quality_report,
+        ).text
+
+    def _re_translate_traced(
+        self,
+        chunk: list[SubtitleEntry],
+        translation: str,
+        target_language: str,
+        usage: CompletionUsage,
+        quality_report: str = "",
+        chunk_index: int | None = None,
+        stage: str = "repair",
+    ) -> TracedTranslationText:
+        original_text = format_chunk(chunk)
+        prompt = RE_TRANSLATE_PROMPT.format(
+            target_language=target_language,
+            original_text=original_text,
+            translation=translation,
+            quality_report=quality_report or "No structured quality report was provided.",
+            chunk_size=len(chunk),
+        )
+        return self._execute_operation(
+            stage=stage,
+            prompt=prompt,
+            chunk=chunk,
+            usage=usage,
+            chunk_index=chunk_index,
+            process=lambda content: process_translation(original_text, extract_translation_block(content), chunk),
+            progress_status="repairing",
         )
 
     def fix_missing_translations(
@@ -528,89 +606,16 @@ class ChunkTranslator:
             missing_lines_formatted=missing_lines_formatted,
             example_format=example_format,
         )
-        operation = self.operations.create_completion(prompt, stage="missing-fix", chunk=chunk)
-        result = operation.completion
-        duration_ms = operation.duration_ms
-        usage.add(result.usage)
-        self.operations.record_trace(
+        return self._execute_operation(
             stage="missing-fix",
             prompt=prompt,
-            response=result.content,
-            usage=result.usage,
-            duration_ms=duration_ms,
             chunk=chunk,
-            processed_translation=result.content,
-        )
-        self.operations.emit_chunk_progress(
-            "missing-fix",
-            "repairing",
-            "缺失翻译修复响应已解析",
-            chunk,
-            None,
-            usage=result.usage,
-            duration_ms=duration_ms,
-        )
-        return result.content
-
-    def re_translate(
-        self,
-        chunk: list[SubtitleEntry],
-        translation: str,
-        target_language: str,
-        usage: CompletionUsage,
-        quality_report: str = "",
-    ) -> str:
-        return self._re_translate_traced(
-            chunk,
-            translation,
-            target_language,
-            usage,
-            quality_report=quality_report,
+            usage=usage,
+            progress_status="repairing",
+            progress_message="缺失翻译修复响应已解析",
+            emit_trace_id=False,
+            emit_usage=True,
         ).text
-
-    def _re_translate_traced(
-        self,
-        chunk: list[SubtitleEntry],
-        translation: str,
-        target_language: str,
-        usage: CompletionUsage,
-        quality_report: str = "",
-        chunk_index: int | None = None,
-        stage: str = "repair",
-    ) -> TracedTranslationText:
-        original_text = format_chunk(chunk)
-        prompt = RE_TRANSLATE_PROMPT.format(
-            target_language=target_language,
-            original_text=original_text,
-            translation=translation,
-            quality_report=quality_report or "No structured quality report was provided.",
-            chunk_size=len(chunk),
-        )
-        operation = self.operations.create_completion(prompt, stage=stage, chunk=chunk, chunk_index=chunk_index)
-        result = operation.completion
-        duration_ms = operation.duration_ms
-        usage.add(result.usage)
-        extracted_response = extract_translation_block(result.content)
-        processed_translation = process_translation(original_text, extracted_response, chunk)
-        trace_id = self.operations.record_trace(
-            stage=stage,
-            prompt=prompt,
-            response=result.content,
-            usage=result.usage,
-            duration_ms=duration_ms,
-            chunk=chunk,
-            chunk_index=chunk_index,
-            processed_translation=processed_translation,
-        )
-        self.operations.emit_chunk_progress(
-            stage,
-            "repairing",
-            f"{chunk_stage_label(stage)}响应已解析",
-            chunk,
-            chunk_index,
-            trace_id=trace_id,
-        )
-        return TracedTranslationText(processed_translation, trace_id)
 
     def repair_semantic_timed_cues_traced(
         self,
@@ -630,57 +635,19 @@ class ChunkTranslator:
             repair_brief=repair_brief,
             chunk_size=len(output_entries),
         )
-        operation = self.operations.create_completion(prompt, stage=stage, chunk=output_entries, chunk_index=chunk_index)
-        result = operation.completion
-        duration_ms = operation.duration_ms
-        usage.add(result.usage)
-        extracted_response = extract_translation_block(result.content)
-        try:
-            parsed_translations = parse_indexed_translation_for_entries(
-                extracted_response,
-                output_entries,
-            )
-        except Exception as exc:
-            self.operations.record_trace(
-                stage=stage,
-                prompt=prompt,
-                response=result.content,
-                usage=result.usage,
-                duration_ms=duration_ms,
-                chunk=output_entries,
-                chunk_index=chunk_index,
-                processed_translation="",
-                error=str(exc),
-            )
-            self.operations.emit_chunk_progress(
-                stage,
-                "failed",
-                f"{chunk_stage_label(stage)}解析失败：{exc}",
-                output_entries,
-                chunk_index,
-            )
-            raise
-
-        processed_translation = format_indexed_translations(parsed_translations)
-        trace_id = self.operations.record_trace(
+        return self._execute_operation(
             stage=stage,
             prompt=prompt,
-            response=result.content,
-            usage=result.usage,
-            duration_ms=duration_ms,
             chunk=output_entries,
+            usage=usage,
             chunk_index=chunk_index,
-            processed_translation=processed_translation,
+            process=lambda content: format_indexed_translations(
+                parse_indexed_translation_for_entries(extract_translation_block(content), output_entries)
+            ),
+            progress_status="repairing",
+            record_error=True,
+            emit_failure_progress=True,
         )
-        self.operations.emit_chunk_progress(
-            stage,
-            "repairing",
-            f"{chunk_stage_label(stage)}响应已解析",
-            output_entries,
-            chunk_index,
-            trace_id=trace_id,
-        )
-        return TracedTranslationText(processed_translation, trace_id)
 
     def repair_source_correction_traced(
         self,
@@ -698,62 +665,18 @@ class ChunkTranslator:
             correction=flag.to_prompt_text(),
             nearby_cues=format_source_correction_nearby_cues(nearby_entries),
         )
-        operation = self.operations.create_completion(prompt, stage=stage, chunk=[entry], chunk_index=chunk_index)
-        result = operation.completion
-        duration_ms = operation.duration_ms
-        usage.add(result.usage)
-        try:
-            payload = extract_json_payload(result.content)
-            data = json.loads(payload)
-            if not isinstance(data, dict):
-                raise ValueError("source correction repair JSON must be an object")
-            cue_id = int(data.get("cue_id", entry.index))
-            if cue_id not in {entry.index, 1}:
-                raise ValueError(f"source correction repair cue_id mismatch: expected={entry.index}, actual={cue_id}")
-            translation = str(data.get("translation", "")).strip()
-            if not translation:
-                raise ValueError("source correction repair translation is empty")
-        except Exception as exc:
-            self.operations.record_trace(
-                stage=stage,
-                prompt=prompt,
-                response=result.content,
-                usage=result.usage,
-                duration_ms=duration_ms,
-                chunk=[entry],
-                chunk_index=chunk_index,
-                processed_translation="",
-                error=str(exc),
-            )
-            self.operations.emit_chunk_progress(
-                stage,
-                "failed",
-                f"{chunk_stage_label(stage)}解析失败：{exc}",
-                [entry],
-                chunk_index,
-            )
-            raise
-
-        processed_translation = f"[{entry.index}]\n{translation}"
-        trace_id = self.operations.record_trace(
+        return self._execute_operation(
             stage=stage,
             prompt=prompt,
-            response=result.content,
-            usage=result.usage,
-            duration_ms=duration_ms,
             chunk=[entry],
+            usage=usage,
             chunk_index=chunk_index,
-            processed_translation=processed_translation,
+            process=lambda content: self._parse_source_correction_response(content, entry),
+            progress_status="repairing",
+            record_error=True,
+            emit_failure_progress=True,
+            trace_format=lambda translation: f"[{entry.index}]\n{translation}",
         )
-        self.operations.emit_chunk_progress(
-            stage,
-            "repairing",
-            f"{chunk_stage_label(stage)}响应已解析",
-            [entry],
-            chunk_index,
-            trace_id=trace_id,
-        )
-        return TracedTranslationText(translation, trace_id)
 
     def retranslate_alignment_drift(
         self,
@@ -793,58 +716,33 @@ class ChunkTranslator:
             translation_reference=format_translation_reference(drift_chunk),
             chunk_size=len(drift_chunk),
         )
-        operation = self.operations.create_completion(prompt, stage="drift", chunk=drift_chunk, chunk_index=chunk_index)
-        result = operation.completion
-        duration_ms = operation.duration_ms
-        usage.add(result.usage)
-        extracted_response = extract_translation_block(result.content)
-        processed_translation = process_translation(original_text, extracted_response, drift_chunk)
-        trace_id = self.operations.record_trace(
+        return self._execute_operation(
             stage="drift",
             prompt=prompt,
-            response=result.content,
-            usage=result.usage,
-            duration_ms=duration_ms,
             chunk=drift_chunk,
+            usage=usage,
             chunk_index=chunk_index,
-            processed_translation=processed_translation,
+            process=lambda content: process_translation(original_text, extract_translation_block(content), drift_chunk),
+            progress_status="repairing",
+            progress_message="对齐漂移重译响应已解析",
         )
-        self.operations.emit_chunk_progress(
-            "drift",
-            "repairing",
-            "对齐漂移重译响应已解析",
-            drift_chunk,
-            chunk_index,
-            trace_id=trace_id,
-        )
-        return TracedTranslationText(processed_translation, trace_id)
 
-    def _process_semantic_json_response(
-        self,
-        response: str,
-        chunk: list[SubtitleEntry],
-        *,
-        stage: str,
-        prompt: str,
-        usage: CompletionUsage,
-        duration_ms: int,
-        chunk_index: int | None,
-    ) -> str:
-        try:
-            return process_semantic_json_translation(response, chunk)
-        except Exception as exc:
-            self.operations.record_trace(
-                stage=stage,
-                prompt=prompt,
-                response=response,
-                usage=usage,
-                duration_ms=duration_ms,
-                chunk=chunk,
-                chunk_index=chunk_index,
-                processed_translation="",
-                error=str(exc),
-            )
-            raise
+    # ------------------------------------------------------------------
+    # 响应解析器
+    # ------------------------------------------------------------------
+
+    def _parse_source_correction_response(self, content: str, entry: SubtitleEntry) -> str:
+        payload = extract_json_payload(content)
+        data = json.loads(payload)
+        if not isinstance(data, dict):
+            raise ValueError("source correction repair JSON must be an object")
+        cue_id = int(data.get("cue_id", entry.index))
+        if cue_id not in {entry.index, 1}:
+            raise ValueError(f"source correction repair cue_id mismatch: expected={entry.index}, actual={cue_id}")
+        translation = str(data.get("translation", "")).strip()
+        if not translation:
+            raise ValueError("source correction repair translation is empty")
+        return translation
 
     def _process_semantic_timed_response(
         self,
