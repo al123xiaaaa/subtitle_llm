@@ -16,7 +16,7 @@ interface JobLifecycleOptions {
 export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycleOptions) {
   const activeJobId = ref("");
   const activeCommand = ref<CommandName | "">("");
-  const runStatus = ref("空闲");
+  const runStatus = ref("待命");
   const logText = ref("");
   const logBody = ref<HTMLElement | null>(null);
   const lastOutputPath = ref("");

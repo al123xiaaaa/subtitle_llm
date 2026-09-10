@@ -40,6 +40,22 @@ button:disabled {
   opacity: 0.5;
 }
 
+/* hiddenInset 标题栏：静态区域可拖拽窗口，交互控件排除 */
+.sidebar,
+.run-heading,
+.drawer-heading,
+.task-records-heading {
+  -webkit-app-region: drag;
+}
+
+button,
+input,
+select,
+summary,
+a {
+  -webkit-app-region: no-drag;
+}
+
 h1,
 h2,
 h3,
@@ -87,12 +103,11 @@ p {
   display: flex;
   flex: 0 0 var(--sidebar-w);
   flex-direction: column;
-  gap: var(--space-6);
+  gap: var(--space-8);
   width: var(--sidebar-w);
   min-width: 0;
-  padding: var(--space-6) var(--space-5);
-  border-right: 1px solid var(--line);
-  background: var(--surface);
+  padding: 52px var(--space-5) var(--space-6);
+  border-right: 1px solid var(--line-soft);
   overflow-y: auto;
 }
 
@@ -109,8 +124,8 @@ p {
 
 .brand-mark {
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 42px;
+  height: 42px;
   place-items: center;
   border-radius: var(--radius);
   color: #fff;
@@ -279,7 +294,7 @@ p {
   flex: 0 0 var(--drawer-w);
   max-width: var(--drawer-w);
   min-width: 0;
-  border-left: 1px solid var(--line);
+  border-left: 1px solid var(--line-soft);
   background: var(--surface);
   overflow: hidden;
   transition: flex-basis var(--dur-slow) var(--ease-out), max-width var(--dur-slow) var(--ease-out);
@@ -418,11 +433,10 @@ p {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-bold);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0;
 }
 
 .form-group-title svg {
@@ -458,7 +472,7 @@ select {
   width: 100%;
   min-height: var(--control-h);
   border: 1px solid var(--gray-300);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   color: var(--ink);
   background: var(--surface);
   padding: 0 var(--space-3);
@@ -612,8 +626,8 @@ select {
   justify-content: center;
   gap: var(--space-2);
   min-height: var(--control-h);
-  border-radius: var(--radius-sm);
-  padding: 0 var(--space-4);
+  border-radius: var(--radius);
+  padding: 0 var(--space-5);
   font-weight: var(--weight-semibold);
   font-size: var(--text-sm);
   white-space: nowrap;
@@ -677,6 +691,12 @@ select {
   border-color: var(--danger);
 }
 
+/* 低调的删除按钮：平时灰，悬停才显红 */
+.danger-ghost:hover {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
 /* ===================== 状态药丸 ===================== */
 .status-pill {
   display: inline-flex;
@@ -700,8 +720,8 @@ select {
 }
 
 .status-pill.is-missing {
-  color: var(--danger);
-  background: var(--danger-bg);
+  color: var(--muted);
+  background: var(--gray-100);
 }
 
 /* ===================== 设置卡片 ===================== */
@@ -852,21 +872,59 @@ select {
   border-left-color: var(--danger);
 }
 
-.progress-empty-hint {
-  padding: var(--space-3) var(--space-4);
-  border: 1px dashed var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-soft);
-  color: var(--muted);
-  font-size: var(--text-sm);
+/* 空状态 hero：第一次打开就是产品门面 */
+.empty-hero {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  max-width: 460px;
+  margin: var(--space-8) auto var(--space-6);
   text-align: center;
 }
 
-.run-panel.is-idle .progress-empty-hint {
-  max-width: none;
-  padding: var(--space-3) var(--space-4);
-  color: var(--ink-soft);
-  text-align: left;
+.empty-hero-mark {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  place-items: center;
+  border-radius: 20px;
+  color: var(--accent-strong);
+  background: linear-gradient(150deg, var(--accent-softter), var(--accent-soft));
+  box-shadow: var(--shadow-sm), var(--highlight-line);
+}
+
+.empty-hero-mark svg {
+  width: 30px;
+  height: 30px;
+}
+
+.empty-hero h2 {
+  font-size: var(--text-xl);
+  letter-spacing: -0.01em;
+}
+
+.progress-empty-hint {
+  color: var(--muted);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+}
+
+.empty-hero-steps {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: var(--space-2);
+}
+
+.empty-hero-steps span {
+  padding: 5px var(--space-3);
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
 }
 
 .progress-hint {
@@ -1132,10 +1190,11 @@ select {
   justify-content: space-between;
   gap: var(--space-3);
   min-width: 0;
-  padding: var(--space-3);
-  border: 1px solid var(--line);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius);
   background: var(--surface);
+  box-shadow: var(--shadow-xs);
 }
 
 .result-file-row > div:first-child {
@@ -1173,10 +1232,14 @@ select {
 
 .log-details summary {
   cursor: pointer;
-  padding: var(--space-3) var(--space-6);
+  padding: var(--space-2) var(--space-6);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.log-details summary:hover {
   color: var(--ink-soft);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
 }
 
 #logBody {
@@ -1200,10 +1263,9 @@ select {
   gap: var(--space-4);
   min-width: 0;
   max-height: clamp(220px, 32vh, 340px);
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--line-soft);
   padding: var(--space-5) var(--space-6);
   overflow: hidden;
-  background: var(--bg);
 }
 
 .task-records-heading {
@@ -1278,10 +1340,11 @@ select {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--space-3);
   align-items: center;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius);
   background: var(--surface);
-  padding: var(--space-3);
+  box-shadow: var(--shadow-xs);
+  padding: var(--space-3) var(--space-4);
 }
 
 .task-record-item.is-deleted {

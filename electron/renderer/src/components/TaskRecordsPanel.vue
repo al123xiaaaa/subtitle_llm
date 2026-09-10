@@ -28,6 +28,29 @@ function recordTitle(input: string): string {
   return parts.at(-1) || input || "未命名任务";
 }
 
+// URL 来源的任务用输出文件名做标题（去掉语言后缀与扩展名），不再展示 raw URL。
+function displayTitle(record: { input_display: string; output_file: string }): string {
+  if (/^https?:\/\//.test(record.input_display) && record.output_file) {
+    const fileName = recordTitle(record.output_file);
+    return fileName.replace(/\.[a-z-]+\.srt$/i, "").replace(/\.srt$/i, "") || fileName;
+  }
+  return recordTitle(record.input_display);
+}
+
+const STATUS_LABELS: Record<string, string> = {  created: "已创建",
+  preparing_input: "准备输入",
+  preparing_translation: "准备翻译",
+  processing_chunks: "翻译中",
+  finalizing_output: "生成结果",
+  completed: "已完成",
+  completed_with_warnings: "已完成 · 有警告",
+  failed: "失败",
+};
+
+function statusLabel(status: string): string {
+  return STATUS_LABELS[status] || status;
+}
+
 function formatTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -50,20 +73,20 @@ function canContinue(status: string, deletedAt?: string | null): boolean {
     <div class="task-records-heading">
       <div>
         <h2 id="taskRecordsTitle">
-          翻译任务记录
+          最近任务
         </h2>
-        <p>{{ taskRecordsStatus || "最近更新的翻译任务" }}</p>
+        <p>{{ taskRecordsStatus || "继续或回看之前的翻译" }}</p>
       </div>
       <div class="task-record-actions">
         <button
-          class="secondary-button"
+          class="ghost-button"
           type="button"
           @click="refreshTaskRecords"
         >
           刷新
         </button>
         <button
-          class="secondary-button"
+          class="ghost-button"
           type="button"
           @click="toggleDeletedTaskRecords"
         >
@@ -80,10 +103,9 @@ function canContinue(status: string, deletedAt?: string | null): boolean {
       >
         <div class="task-record-main">
           <div>
-            <strong>{{ recordTitle(record.input_display) }}</strong>
-            <span>{{ record.target_language }} · {{ record.status }} · {{ formatTime(record.updated_at) }}</span>
+            <strong>{{ displayTitle(record) }}</strong>
+            <span>{{ record.target_language }} · {{ statusLabel(record.status) }} · {{ formatTime(record.updated_at) }}</span>
           </div>
-          <p>{{ record.output_file }}</p>
           <div class="task-record-files">
             <span class="task-file-actions">
               <span class="task-file-label">字幕</span>
@@ -144,7 +166,7 @@ function canContinue(status: string, deletedAt?: string | null): boolean {
           </button>
           <button
             v-else
-            class="danger-button"
+            class="ghost-button danger-ghost"
             type="button"
             @click="softDeleteTaskRecord(record)"
           >

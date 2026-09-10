@@ -21,7 +21,8 @@ function createWindow(): void {
     minWidth: 980,
     minHeight: 680,
     title: "Subtitle LLM",
-    backgroundColor: "#f7f7f2",
+    titleBarStyle: "hiddenInset",
+    backgroundColor: "#f6f4f1",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,

@@ -5,21 +5,21 @@
 :root {
   color-scheme: light;
 
-  /* —— 灰阶（7 档，替换满屏的单一边框色）—— */
-  --gray-50: #f8faf9;
-  --gray-100: #f1f4f2;
-  --gray-150: #e9ede9;
-  --gray-200: #dfe4df;
-  --gray-300: #cfd6d0;
-  --gray-400: #aeb8b1;
-  --gray-500: #7d8782;
-  --gray-600: #5b6560;
-  --gray-700: #3f4744;
-  --gray-800: #2a302e;
-  --gray-900: #1c211f;
+  /* —— 暖灰阶（纸感，告别开发工具的冷灰）—— */
+  --gray-50: #faf9f7;
+  --gray-100: #f4f2ee;
+  --gray-150: #ebe8e3;
+  --gray-200: #e2ded6;
+  --gray-300: #d3cdc2;
+  --gray-400: #b7b1a5;
+  --gray-500: #8e887c;
+  --gray-600: #6f695e;
+  --gray-700: #4e4941;
+  --gray-800: #36322c;
+  --gray-900: #25221d;
 
   /* —— 背景/表面 —— */
-  --bg: #f6f7f5;
+  --bg: #f6f4f1;
   --bg-subtle: var(--gray-50);
   --surface: #ffffff;
   --surface-soft: var(--gray-50);
@@ -49,16 +49,16 @@
   --danger-border: #f6c4bb;
   --info: #2563eb;
 
-  /* —— 圆角三档 —— */
-  --radius-sm: 6px;
-  --radius: 8px;
-  --radius-lg: 12px;
+  /* —— 圆角：更松弛的产品感 —— */
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 18px;
 
   /* —— 阴影：分层柔和 —— */
-  --shadow-xs: 0 1px 2px rgba(28, 33, 31, 0.04);
-  --shadow-sm: 0 2px 5px rgba(28, 33, 31, 0.05), 0 1px 2px rgba(28, 33, 31, 0.04);
-  --shadow: 0 6px 16px rgba(28, 33, 31, 0.07), 0 2px 5px rgba(28, 33, 31, 0.04);
-  --shadow-lg: 0 16px 40px rgba(28, 33, 31, 0.12), 0 4px 12px rgba(28, 33, 31, 0.06);
+  --shadow-xs: 0 1px 2px rgba(37, 34, 29, 0.04);
+  --shadow-sm: 0 2px 6px rgba(37, 34, 29, 0.05), 0 1px 2px rgba(37, 34, 29, 0.04);
+  --shadow: 0 8px 20px rgba(37, 34, 29, 0.07), 0 2px 6px rgba(37, 34, 29, 0.04);
+  --shadow-lg: 0 20px 48px rgba(37, 34, 29, 0.12), 0 4px 12px rgba(37, 34, 29, 0.06);
   /* 卡片顶部 1px 内高光线 —— Stripe 标志性细节 */
   --highlight-line: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 
@@ -67,14 +67,14 @@
   --text-sm: 13px;
   --text-base: 14px;
   --text-md: 15px;
-  --text-lg: 18px;
-  --text-xl: 22px;
+  --text-lg: 20px;
+  --text-xl: 26px;
   --weight-medium: 500;
   --weight-semibold: 600;
   --weight-bold: 700;
   --weight-extrabold: 800;
   --leading-tight: 1.25;
-  --leading-normal: 1.5;
+  --leading-normal: 1.55;
 
   /* —— 间距节奏 —— */
   --space-1: 4px;
@@ -92,10 +92,10 @@
   --dur-fast: 120ms;
   --dur-slow: 300ms;
 
-  --control-h: 38px;
+  --control-h: 40px;
   --drawer-w: 440px;
   --drawer-collapsed-w: 44px;
-  --sidebar-w: 264px;
+  --sidebar-w: 248px;
 
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei",

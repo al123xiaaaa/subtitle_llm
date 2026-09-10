@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Languages } from "@lucide/vue";
 import type { useAppController } from "../composables/useAppController";
 
 type Controller = ReturnType<typeof useAppController>;
@@ -49,7 +50,7 @@ const {
     <div class="run-heading">
       <div>
         <h2 id="runTitle">
-          工作进度
+          当前任务
         </h2>
         <p id="runStatus">
           {{ runStatus }}
@@ -96,12 +97,23 @@ const {
           class="progress-wait"
         >{{ progressWaitText }}</span>
       </div>
-      <p
+      <div
         v-if="progressIsEmpty"
-        class="progress-empty-hint"
+        class="empty-hero"
       >
-        从右侧选择一个任务并配置，然后开始。运行时这里会显示程序当前在做什么。
-      </p>
+        <div class="empty-hero-mark">
+          <Languages />
+        </div>
+        <h2>把字幕翻译成任何语言</h2>
+        <p class="progress-empty-hint">
+          粘贴视频链接或选择本地字幕文件，下载、转写、翻译、封装一次完成。
+        </p>
+        <div class="empty-hero-steps">
+          <span>粘贴链接</span>
+          <span>选择模型</span>
+          <span>开始翻译</span>
+        </div>
+      </div>
       <p
         id="progressLongWaitHint"
         :class="['progress-hint', { 'is-hidden': !progressLongWaitHint }]"

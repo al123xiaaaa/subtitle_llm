@@ -50,7 +50,7 @@ const { appState, providers, runtimeInfo, statusPillClass } = props.providerStat
       aria-labelledby="statusTitle"
     >
       <h2 id="statusTitle">
-        服务状态
+        翻译服务
       </h2>
       <div
         id="sidebarProviderStatus"
