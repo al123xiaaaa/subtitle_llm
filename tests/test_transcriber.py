@@ -81,7 +81,7 @@ class TestASRConfig(unittest.TestCase):
         self.assertEqual(config.model_name, "FunAudioLLM/Fun-ASR-Nano-2512")
         self.assertEqual(config.punc_model, None)
         self.assertEqual(config.spk_model, None)
-        self.assertEqual(config.max_single_segment_time, 30000)
+        self.assertEqual(config.max_single_segment_time, 8000)
         self.assertEqual(config.device, "cpu")
         self.assertEqual(config.hub, "hf")
         self.assertEqual(config.trust_remote_code, True)

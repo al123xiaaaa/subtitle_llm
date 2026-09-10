@@ -774,6 +774,7 @@ class FunasrAsrBackend:
             "device": self.config.device,
             "disable_update": True,
             "disable_pbar": True,
+            "max_single_segment_time": self.config.max_single_segment_time,
         }
         if self.config.hub:
             kwargs["hub"] = self.config.hub

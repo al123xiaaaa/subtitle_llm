@@ -76,6 +76,9 @@ class TranslationResult:
 class ResolvedInput:
     subtitle_file: str
     video_file: str | None = None
+    # ASR 转写来源的字幕按 VAD 段成块，需要强制规范化重断句（auto 闸门
+    # 是为 YouTube 滚动字幕设计的，拦不住段级长 cue）
+    from_asr: bool = False
 
 
 class TranslationService:
@@ -173,10 +176,13 @@ class TranslationService:
         logger.info("字幕读取完成: entries=%s", report.total_entries)
 
         progress_contract.normalization_started()
+        normalization_mode = (
+            "always" if resolved_input.from_asr else self.config.pipeline.normalize_subtitles
+        )
         normalization = normalize_subtitle(
             subtitle,
             NormalizationOptions(
-                mode=self.config.pipeline.normalize_subtitles,
+                mode=normalization_mode,
                 max_cue_chars=self.config.pipeline.normalize_max_cue_chars,
                 max_line_chars=self.config.pipeline.normalize_max_line_chars,
                 max_duration_seconds=self.config.pipeline.normalize_max_duration,
@@ -600,7 +606,7 @@ class TranslationService:
         transcribed_path = transcribe(audio_path, source_language, srt_path, self.config.asr, progress=progress.emitter)
         progress.asr_ready(transcribed_path)
         logger.info("ASR转写完成: srt=%s", transcribed_path)
-        return ResolvedInput(subtitle_file=transcribed_path, video_file=_video_path)
+        return ResolvedInput(subtitle_file=transcribed_path, video_file=_video_path, from_asr=True)
 
     def _is_url(self, value: str) -> bool:
         parsed = urlparse(value)

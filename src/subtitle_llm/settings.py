@@ -102,7 +102,7 @@ class ASRConfig(BaseModel):
     # 说话人分离模型；cam++ 会触发 sentence_info（带时间戳分段）输出
     spk_model: str | None = None
     # VAD 单段最长时长（毫秒）。控制分段粒度，避免超长段
-    max_single_segment_time: int = 30000
+    max_single_segment_time: int = 8000
     # 推理设备：cpu 或 cuda
     device: str = "cpu"
     # 模型 hub：modelscope/ms（国内快）或 hf（HuggingFace，海外）

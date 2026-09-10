@@ -75,7 +75,7 @@ class ConfigContractParityTest(unittest.TestCase):
         base = ASRConfig(device="cuda", max_single_segment_time=15000)
         config = resolve_asr_config(base, profile="fun-asr-nano")
         self.assertEqual(config.device, "cuda")
-        self.assertEqual(config.max_single_segment_time, 30000)
+        self.assertEqual(config.max_single_segment_time, 8000)
         self.assertEqual(config.model_name, "FunAudioLLM/Fun-ASR-Nano-2512")
         self.assertEqual(resolve_asr_config(base, device="mps").device, "mps")
 

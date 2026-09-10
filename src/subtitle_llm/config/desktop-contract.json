@@ -32,7 +32,7 @@
     "model_name": "FunAudioLLM/Fun-ASR-Nano-2512",
     "punc_model": null,
     "spk_model": null,
-    "max_single_segment_time": 30000,
+    "max_single_segment_time": 8000,
     "device": "cpu",
     "hub": "hf",
     "trust_remote_code": true,
@@ -56,7 +56,7 @@
       "punc_model": null,
       "spk_model": null,
       "forced_aligner": null,
-      "max_single_segment_time": 30000,
+      "max_single_segment_time": 8000,
       "language_style": "name",
       "generate_kwargs": {
         "itn": true,
@@ -93,7 +93,7 @@
       "punc_model": null,
       "spk_model": null,
       "forced_aligner": "Qwen/Qwen3-ForcedAligner-0.6B",
-      "max_single_segment_time": 30000,
+      "max_single_segment_time": 8000,
       "language_style": "name",
       "generate_kwargs": {
         "itn": true,
