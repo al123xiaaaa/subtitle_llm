@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { toRefs } from "vue";
+import { Languages } from "@lucide/vue";
 import type { useAppController } from "../composables/useAppController";
 
 type Controller = ReturnType<typeof useAppController>;
@@ -49,11 +50,13 @@ function providerCardHint(provider: { id: string; credential: { envKey: string }
     @keydown.esc="dismissOnboarding"
   >
     <section class="onboarding-panel">
-      <p class="eyebrow">
-        首次配置
-      </p>
-      <h1>先连接一个翻译服务</h1>
-      <p>保存 API Key 后就可以开始翻译字幕。也可以使用系统环境变量，App 会自动识别。</p>
+      <div class="onboarding-hero">
+        <div class="empty-hero-mark">
+          <Languages />
+        </div>
+        <h1>欢迎使用 Subtitle LLM</h1>
+        <p>先连接一个翻译服务，马上就能开始翻译。API Key 只保存在这台电脑上。</p>
+      </div>
       <div
         id="onboardingProviders"
         class="provider-cards"
@@ -67,21 +70,21 @@ function providerCardHint(provider: { id: string; credential: { envKey: string }
           :disabled="isBusy"
           @click="selectOnboardingProvider(provider.id)"
         >
+          <span class="provider-mark">{{ provider.name.slice(0, 1) }}</span>
           <strong>{{ provider.name }}</strong>
           <span>{{ providerCardHint(provider) }}</span>
         </button>
       </div>
-      <label>
-        <span id="onboardingKeyLabel">{{ onboardingKeyLabel }}</span>
+      <div class="settings-key-row onboarding-key-row">
         <input
           id="onboardingApiKey"
           v-model="onboardingApiKey"
           type="password"
           autocomplete="off"
+          :placeholder="onboardingKeyLabel"
           :disabled="isBusy"
+          @keyup.enter="saveOnboardingKey"
         >
-      </label>
-      <div class="actions">
         <button
           id="onboardingSave"
           class="primary-button"
@@ -91,9 +94,11 @@ function providerCardHint(provider: { id: string; credential: { envKey: string }
         >
           保存并开始
         </button>
+      </div>
+      <div class="onboarding-foot">
         <button
           id="onboardingSettings"
-          class="secondary-button"
+          class="ghost-button"
           type="button"
           :disabled="isBusy"
           @click="openSettingsFromOnboarding"

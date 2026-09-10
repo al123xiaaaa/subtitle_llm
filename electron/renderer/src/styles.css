@@ -1613,45 +1613,58 @@ select {
 
 .onboarding-panel {
   display: grid;
-  width: min(520px, calc(100vw - 48px));
+  width: min(560px, calc(100vw - 48px));
   gap: var(--space-5);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-lg), var(--highlight-line);
-  padding: var(--space-6);
+  padding: var(--space-8);
 }
 
-.eyebrow {
-  color: var(--accent-strong);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-bold);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+/* 欢迎头部：与空状态 hero 同族 */
+.onboarding-hero {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  text-align: center;
 }
 
-.onboarding-panel h1 {
+.onboarding-hero h1 {
   font-size: var(--text-xl);
+  letter-spacing: -0.01em;
+}
+
+.onboarding-hero p {
+  max-width: 380px;
+  font-size: var(--text-sm);
 }
 
 .provider-cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-2);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
 }
 
 .provider-card {
   display: grid;
-  min-height: 76px;
-  gap: 5px;
-  border: 1px solid var(--gray-300);
+  justify-items: center;
+  align-content: start;
+  min-height: 108px;
+  gap: 6px;
+  border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  padding: var(--space-3);
-  text-align: left;
+  padding: var(--space-4) var(--space-3);
+  text-align: center;
   transition:
     border-color var(--dur) var(--ease),
-    background var(--dur) var(--ease);
+    background var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+
+.provider-card .provider-mark {
+  margin-bottom: 2px;
 }
 
 .provider-card strong {
@@ -1662,9 +1675,10 @@ select {
 
 .provider-card:hover {
   border-color: var(--gray-400);
+  box-shadow: var(--shadow-xs);
 }
 
-.provider-card span {
+.provider-card > span:last-child {
   color: var(--muted);
   font-size: var(--text-xs);
 }
@@ -1673,6 +1687,21 @@ select {
   border-color: var(--accent);
   background: var(--accent-softter);
   box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.onboarding-key-row {
+  margin-top: var(--space-1);
+}
+
+.onboarding-foot {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-4);
+}
+
+.onboarding-foot .ghost-button {
+  min-height: 30px;
+  font-size: var(--text-sm);
 }
 
 .is-hidden {
