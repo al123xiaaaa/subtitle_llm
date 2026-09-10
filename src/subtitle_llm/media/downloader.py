@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import shutil
+from importlib import resources
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,8 +15,20 @@ from subtitle_llm.progress_events import ProgressEmitter
 
 logger = logging.getLogger(__name__)
 
-# 与桌面端 electron/lib/ffmpegStatus.ts 的常见安装位置保持一致
-_COMMON_FFMPEG_PATHS = ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg")
+# 与桌面端共用 src/subtitle_llm/config/desktop-contract.json 里的同一份路径列表；
+# 契约文件缺失（非预期安装方式）时回退到内置列表。
+_FALLBACK_FFMPEG_PATHS = ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg")
+
+
+def _common_ffmpeg_paths() -> tuple[str, ...]:
+    try:
+        contract_text = resources.files("subtitle_llm.config").joinpath("desktop-contract.json").read_text("utf-8")
+        paths = json.loads(contract_text).get("ffmpegPaths")
+        if isinstance(paths, list) and all(isinstance(p, str) for p in paths):
+            return tuple(paths)
+    except Exception:
+        logger.debug("读取 desktop-contract.json 失败，使用内置 ffmpeg 路径", exc_info=True)
+    return _FALLBACK_FFMPEG_PATHS
 
 
 def _resolve_ffmpeg_location() -> str | None:
@@ -29,7 +43,7 @@ def _resolve_ffmpeg_location() -> str | None:
     found = shutil.which("ffmpeg")
     if found:
         return found
-    for candidate in _COMMON_FFMPEG_PATHS:
+    for candidate in _common_ffmpeg_paths():
         if Path(candidate).exists():
             return candidate
     return None

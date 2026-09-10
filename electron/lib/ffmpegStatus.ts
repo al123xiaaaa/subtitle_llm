@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import type { FfmpegStatus } from "../types.js";
+import { desktopContract } from "./desktopContract.js";
 
-export const COMMON_FFMPEG_PATHS = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"];
+// 与 Python downloader.py 共用 desktop-contract.json 里的同一份路径列表。
+export const COMMON_FFMPEG_PATHS = desktopContract.ffmpegPaths;
 
 interface FfmpegDetectorOptions {
   env?: NodeJS.ProcessEnv;

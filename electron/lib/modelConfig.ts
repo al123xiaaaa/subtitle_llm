@@ -2,6 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ModelSelection } from "../types.js";
 import { getProvider, resolveModelId } from "./providerCatalog.js";
+import { desktopContract } from "./desktopContract.js";
+
+// 模型参数默认值、provider 覆盖、ASR 段全部来自 desktop-contract.json
+// （Python 侧 settings.py 的 ASR 默认值由 tests/test_config_contract.py 锁定一致）。
+// CLIProxyAPI 上游的 Kimi 思考模型仅允许 temperature=1、top_p=0.95，
+// 故契约里 cliproxy 固定覆盖这组值（对已验证的 claude / gemini / gpt 同样可用）。
+const MODEL_PARAMS = desktopContract.modelParams;
+const PROVIDER_PARAM_OVERRIDES = desktopContract.providerParamOverrides;
 
 interface DesktopModelConfig {
   provider: string;
@@ -49,15 +57,6 @@ export function buildModelFromSelection(selection: Partial<ModelSelection> = {})
   };
 }
 
-// CLIProxyAPI 上游的 Kimi 思考模型仅允许 temperature=1、top_p=0.95，
-// 这组值对所有已验证模型（claude / gemini / gpt）同样可用，故该服务固定使用。
-const PROVIDER_PARAM_DEFAULTS: Record<string, Record<string, Record<string, string>>> = {
-  cliproxy: {
-    summary: { temperature: "1.0", top_p: "0.95" },
-    translation: { temperature: "1.0", top_p: "0.95" },
-  },
-};
-
 export function buildDesktopModelConfigContent(selection: Partial<ModelSelection> = {}): string {
   if (selection.mode !== "service") {
     throw new Error("未启用服务商模型配置");
@@ -65,27 +64,19 @@ export function buildDesktopModelConfigContent(selection: Partial<ModelSelection
 
   const translationModel = buildModelFromSelection(selection);
   const summaryModel = translationModel;
-  const providerOverrides = PROVIDER_PARAM_DEFAULTS[selection.providerId || ""] || {};
+  const providerOverrides = PROVIDER_PARAM_OVERRIDES[selection.providerId || ""] || {};
 
   return [
     'config_version: "2"',
     'default_output_format: "source-first"',
     "",
     renderModelSection("summary_model", summaryModel, {
-      temperature: "0.5",
-      top_p: "0.85",
-      top_k: "12",
-      retry_delay_seconds: "40",
+      ...MODEL_PARAMS.summary,
       ...providerOverrides.summary,
     }),
     "",
     renderModelSection("translation_model", translationModel, {
-      temperature: "0.3",
-      top_p: "0.8",
-      max_tokens: "4096",
-      rate_limit: "5",
-      max_retries: "3",
-      retry_delay_seconds: "10",
+      ...MODEL_PARAMS.translation,
       ...providerOverrides.translation,
     }),
     "",
@@ -106,19 +97,28 @@ export function writeDesktopModelConfig(projectRoot: string, selection: ModelSel
 }
 
 // 渲染 FunASR Python SDK 配置段（见 docs/adr/0003）。
-// 不再依赖二进制路径；funasr 通过 pip 安装，模型首次运行自动下载。
+// 字段取自契约，与 settings.py 的 ASRConfig 默认值保持一致（由测试锁定）。
 function renderAsrSection(_projectRoot: string): string {
-  return [
+  const asr = desktopContract.asr;
+  const lines = [
     "",
-    "# FunASR Python SDK（由 modelConfig.ts 生成）。pip install funasr；模型首次自动下载。",
+    "# FunASR Python SDK（由 desktop-contract.json 生成）。pip install funasr；模型首次自动下载。",
     "asr:",
-    '  model_name: "FunAudioLLM/SenseVoiceSmall"',
-    '  punc_model: "ct-punc"',
-    '  spk_model: "cam++"',
-    "  max_single_segment_time: 8000",
-    '  device: "cpu"',
-    '  hub: "hf"',
-    "  trust_remote_code: true",
-    "",
-  ].join("\n");
+    `  model_name: ${yamlString(asr.model_name)}`,
+  ];
+  if (asr.punc_model !== null) {
+    lines.push(`  punc_model: ${yamlString(asr.punc_model)}`);
+  }
+  if (asr.spk_model !== null) {
+    lines.push(`  spk_model: ${yamlString(asr.spk_model)}`);
+  }
+  lines.push(`  max_single_segment_time: ${asr.max_single_segment_time}`);
+  lines.push(`  device: ${yamlString(asr.device)}`);
+  lines.push(`  hub: ${yamlString(asr.hub)}`);
+  lines.push(`  trust_remote_code: ${asr.trust_remote_code}`);
+  if (asr.forced_aligner !== null) {
+    lines.push(`  forced_aligner: ${yamlString(asr.forced_aligner)}`);
+  }
+  lines.push("");
+  return lines.join("\n");
 }

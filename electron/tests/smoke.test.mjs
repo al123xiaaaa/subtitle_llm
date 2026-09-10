@@ -184,6 +184,10 @@ assert.match(deepseekConfig, /api_key_env: "DEEPSEEK_API_KEY"/);
 assert.match(deepseekConfig, /endpoint: "https:\/\/api\.deepseek\.com"/);
 assert.match(deepseekConfig, /model: "deepseek-v4-flash"/);
 assert.match(deepseekConfig, /refine_translation: false/);
+// 默认值来自 desktop-contract.json（单一来源），不再在 TS 内硬编码
+assert.match(deepseekConfig, /temperature: 0\.3/);
+assert.match(deepseekConfig, /max_tokens: 4096/);
+assert.match(deepseekConfig, /retry_delay_seconds: 10/);
 assert.doesNotMatch(deepseekConfig, /sk-test-secret/);
 
 const cliproxyProvider = getProvider("cliproxy");

@@ -1,0 +1,36 @@
+{
+  "$schema": "桌面端配置契约：Electron 与 Python 两侧的单一来源。改这里，两侧同时生效。",
+  "modelParams": {
+    "summary": {
+      "temperature": "0.5",
+      "top_p": "0.85",
+      "top_k": "12",
+      "retry_delay_seconds": "40"
+    },
+    "translation": {
+      "temperature": "0.3",
+      "top_p": "0.8",
+      "max_tokens": "4096",
+      "rate_limit": "5",
+      "max_retries": "3",
+      "retry_delay_seconds": "10"
+    }
+  },
+  "providerParamOverrides": {
+    "cliproxy": {
+      "summary": { "temperature": "1.0", "top_p": "0.95" },
+      "translation": { "temperature": "1.0", "top_p": "0.95" }
+    }
+  },
+  "asr": {
+    "model_name": "paraformer-zh",
+    "punc_model": "ct-punc",
+    "spk_model": "cam++",
+    "max_single_segment_time": 8000,
+    "device": "cpu",
+    "hub": "ms",
+    "trust_remote_code": false,
+    "forced_aligner": null
+  },
+  "ffmpegPaths": ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
+}

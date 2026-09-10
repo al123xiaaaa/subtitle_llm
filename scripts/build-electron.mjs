@@ -1,4 +1,4 @@
-import { readdir, rm, mkdir } from "node:fs/promises";
+import { copyFile, readdir, rm, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -48,3 +48,10 @@ await build({
   bundle: false,
   format: "esm",
 });
+
+// lib 以 bundle:false 转译，desktop-contract.json 的 import 在运行时按相对路径
+// 解析（dist/electron/lib -> dist/src/...），这里把契约镜像到对应位置。
+const contractSource = path.join(projectRoot, "src", "subtitle_llm", "config", "desktop-contract.json");
+const contractTarget = path.join(projectRoot, "dist", "src", "subtitle_llm", "config", "desktop-contract.json");
+await mkdir(path.dirname(contractTarget), { recursive: true });
+await copyFile(contractSource, contractTarget);
