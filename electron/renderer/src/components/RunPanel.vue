@@ -14,6 +14,8 @@ const {
   chunkStatusLabel,
   chunkTooltip,
   clearLog,
+  copyLog,
+  elapsedText,
   hasAnyResult,
   hasSourceVideoResult,
   hasSubtitleResult,
@@ -23,8 +25,10 @@ const {
   lastLlmTraceDir,
   lastSourceVideoPath,
   lastSubtitlePath,
+  latestLogLine,
+  logAutoScroll,
   logBody,
-  logText,
+  logLines,
   openResult,
   progressChunkLegendItems,
   progressChunkSummary,
@@ -57,26 +61,16 @@ const {
         </p>
       </div>
       <div
-        v-if="activeJobId || logText"
+        v-if="activeJobId"
         class="run-actions"
       >
         <button
-          v-if="activeJobId"
           id="cancelJob"
           class="danger-button"
           type="button"
           @click="cancelJob"
         >
           取消
-        </button>
-        <button
-          v-if="logText"
-          id="clearLog"
-          class="secondary-button"
-          type="button"
-          @click="clearLog"
-        >
-          清空
         </button>
       </div>
     </div>
@@ -319,12 +313,59 @@ const {
       id="logDetails"
       class="log-details"
     >
-      <summary>详细日志</summary>
-      <pre
-        id="logBody"
-        ref="logBody"
-        aria-live="polite"
-      >{{ logText }}</pre>
+      <summary>
+        <span class="log-summary-title">运行日志</span>
+        <span
+          v-if="elapsedText"
+          class="log-elapsed"
+        >已进行 {{ elapsedText }}</span>
+        <span
+          v-if="latestLogLine"
+          class="log-latest"
+        >{{ latestLogLine }}</span>
+      </summary>
+      <div class="log-card">
+        <div class="log-toolbar">
+          <button
+            id="copyLog"
+            class="ghost-button"
+            type="button"
+            @click="copyLog"
+          >
+            复制
+          </button>
+          <button
+            id="clearLog"
+            class="ghost-button"
+            type="button"
+            @click="clearLog"
+          >
+            清空
+          </button>
+          <label class="log-autoscroll">
+            <input
+              v-model="logAutoScroll"
+              type="checkbox"
+            >
+            自动滚动
+          </label>
+        </div>
+        <div
+          id="logBody"
+          ref="logBody"
+          class="log-body"
+          aria-live="polite"
+        >
+          <div
+            v-for="line in logLines"
+            :key="line.id"
+            :class="['log-line', `is-${line.kind}`]"
+          >
+            <span class="log-time">{{ line.time }}</span>
+            <span class="log-text">{{ line.text }}</span>
+          </div>
+        </div>
+      </div>
     </details>
   </section>
 </template>

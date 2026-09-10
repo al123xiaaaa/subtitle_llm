@@ -13,12 +13,25 @@ interface JobLifecycleOptions {
   onSubtitlePath: (filePath: string) => void;
 }
 
+interface LogLine {
+  id: number;
+  time: string;
+  kind: "stdout" | "stderr";
+  text: string;
+}
+
 export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycleOptions) {
   const activeJobId = ref("");
   const activeCommand = ref<CommandName | "">("");
   const runStatus = ref("待命");
   const logText = ref("");
   const logBody = ref<HTMLElement | null>(null);
+  // 结构化日志行：带到达时间戳与流类型，供产品化日志卡渲染。
+  const logLines = ref<LogLine[]>([]);
+  const logAutoScroll = ref(true);
+  let logLineId = 0;
+  const elapsedText = ref("");
+  let elapsedTimer: ReturnType<typeof setInterval> | null = null;
   const lastOutputPath = ref("");
   const lastSubtitlePath = ref("");
   const lastEmbeddedVideoPath = ref("");
@@ -49,13 +62,52 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
   function appendLog(text: string, kind: "stdout" | "stderr" = "stdout"): void {
     const prefix = kind === "stderr" ? "[stderr] " : "";
     logText.value += `${prefix}${text}`;
+    const time = new Date().toTimeString().slice(0, 8);
+    for (const line of text.replace(/\r?\n$/, "").split(/\r?\n/)) {
+      if (!line) {
+        continue;
+      }
+      logLines.value.push({ id: ++logLineId, time, kind, text: line });
+    }
+    // 长跑任务日志可能很长，保留最近 3000 行防止渲染卡顿
+    if (logLines.value.length > 3000) {
+      logLines.value.splice(0, logLines.value.length - 3000);
+    }
     void scrollLogToEnd();
   }
 
   async function scrollLogToEnd(): Promise<void> {
+    if (!logAutoScroll.value) {
+      return;
+    }
     await nextTick();
     if (logBody.value) {
       logBody.value.scrollTop = logBody.value.scrollHeight;
+    }
+  }
+
+  const latestLogLine = computed(() => logLines.value.at(-1)?.text || "");
+
+  function refreshElapsed(): void {
+    const startedAt = progress.progressState.value.startedAt;
+    if (!startedAt) {
+      elapsedText.value = "";
+      return;
+    }
+    const totalSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    elapsedText.value = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  async function copyLog(): Promise<void> {
+    if (!logText.value) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(logText.value);
+    } catch {
+      // 剪贴板不可用时静默失败（Electron 焦点窗口外可能拒绝）
     }
   }
 
@@ -144,6 +196,7 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
 
   function clearLog(): void {
     logText.value = "";
+    logLines.value = [];
   }
 
   function resultPath(target: ResultTarget): string {
@@ -223,10 +276,14 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
 
   onMounted(() => {
     unsubscribeJobEvents = api.onJobEvent(handleJobEvent);
+    elapsedTimer = setInterval(refreshElapsed, 1000);
   });
 
   onUnmounted(() => {
     unsubscribeJobEvents?.();
+    if (elapsedTimer) {
+      clearInterval(elapsedTimer);
+    }
   });
 
   return {
@@ -237,6 +294,8 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
     chunkStatusLabel: progress.chunkStatusLabel,
     chunkTooltip: progress.chunkTooltip,
     clearLog,
+    copyLog,
+    elapsedText,
     hasAnyResult,
     hasSourceVideoResult,
     hasSubtitleResult,
@@ -247,7 +306,10 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
     lastOutputPath,
     lastSourceVideoPath,
     lastSubtitlePath,
+    latestLogLine,
+    logAutoScroll,
     logBody,
+    logLines,
     logText,
     openOutput,
     openResult,
