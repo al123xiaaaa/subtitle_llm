@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from subtitle_llm.cli.result_events import emit_result_event
 from subtitle_llm.media import download as download_media
 from subtitle_llm.media import mux_subtitle_track
+from subtitle_llm.media.asr_models import resolve_asr_config
 from subtitle_llm.media.muxer import MuxError
 from subtitle_llm.media import transcribe as transcribe_audio
 from subtitle_llm.pipeline import TranslationRequest, TranslationService
@@ -57,11 +58,16 @@ def _validate_translate_options(
         raise typer.Exit(2)
 
 
-def _load_service(config_path: Path | None) -> TranslationService:
+def _load_service(config_path: Path | None, asr_model: str | None = None) -> TranslationService:
     try:
         config = load_config(config_path)
+        if asr_model:
+            config.asr = resolve_asr_config(config.asr, profile=asr_model)
         return TranslationService(config)
     except ConfigError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from exc
+    except ValueError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(2) from exc
 
@@ -112,6 +118,10 @@ def translate(
         bool,
         typer.Option("--force-asr/--no-force-asr", help="For URL input, skip source subtitles and generate subtitles with ASR."),
     ] = False,
+    asr_model: Annotated[
+        str | None,
+        typer.Option("--asr-model", help="ASR 模型 profile：fun-asr-nano / paraformer-zh / qwen3-asr。"),
+    ] = None,
     embed_video: Annotated[
         bool,
         typer.Option("--embed-video/--no-embed-video", help="Generate an MKV with the translated subtitle as a styled ASS soft subtitle track."),
@@ -160,7 +170,7 @@ def translate(
         video_output,
     )
     try:
-        service = _load_service(config)
+        service = _load_service(config, asr_model=asr_model)
         result = service.translate(
             TranslationRequest(
                 input_file=input_file,
@@ -333,6 +343,10 @@ def transcribe(
     output: Annotated[Path, typer.Option("--output", "-o", help="Output .srt file.")],
     language: Annotated[str, typer.Option("--language", "-l", help="Spoken language.")] = "English",
     config: Annotated[Path | None, typer.Option("--config", "-c", help="Config YAML path.")] = None,
+    asr_model: Annotated[
+        str | None,
+        typer.Option("--asr-model", help="ASR 模型 profile：fun-asr-nano / paraformer-zh / qwen3-asr。"),
+    ] = None,
 ) -> None:
     """Transcribe audio to SRT with the configured ASR model."""
     log_path = configure_run_logging("transcribe")
@@ -352,6 +366,8 @@ def transcribe(
     )
     try:
         app_config = load_config(config)
+        if asr_model:
+            app_config.asr = resolve_asr_config(app_config.asr, profile=asr_model)
         transcribe_audio(audio, language, output, app_config.asr, progress=progress)
     except Exception:
         logger.exception("命令失败: transcribe")

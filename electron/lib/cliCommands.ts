@@ -70,6 +70,8 @@ function buildTranslateArgs(options: TranslateJobOptions): string[] {
     args.push("--force-asr");
   }
 
+  addOption(args, "--asr-model", options.asrModel);
+
   if (options.embedVideo) {
     args.push("--embed-video");
     addOption(args, "--video", options.video);
@@ -94,6 +96,7 @@ function buildTranscribeArgs(options: TranscribeJobOptions): string[] {
   const args = ["main.py", "transcribe", audio, "--output", output];
   addOption(args, "--language", options.language || "English");
   addOption(args, "--config", options.config);
+  addOption(args, "--asr-model", options.asrModel);
   return args;
 }
 

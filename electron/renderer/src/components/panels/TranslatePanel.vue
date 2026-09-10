@@ -14,11 +14,13 @@ const props = defineProps<{
 }>();
 
 const {
+  asrModels,
   chooseMuxSubtitle,
   chooseMuxVideo,
   chooseOutput,
   chooseTranslateConfig,
   chooseTranslateVideo,
+  defaultAsrModel,
   mkvCapabilityClass,
   mkvCapabilityText,
   muxForm,
@@ -231,6 +233,29 @@ const { ffmpegAvailable } = props.providerState;
               :disabled="isBusy"
             >
             <span>不下载原字幕，改用 ASR</span>
+          </label>
+          <label
+            v-if="translateForm.forceAsr"
+            class="span-2"
+          >
+            <span>ASR 模型</span>
+            <select
+              id="asrModel"
+              v-model="translateForm.asrModel"
+              :disabled="isBusy"
+            >
+              <option value="">
+                默认（{{ asrModels.find((model) => model.id === defaultAsrModel)?.label || defaultAsrModel }}）
+              </option>
+              <option
+                v-for="model in asrModels"
+                :key="model.id"
+                :value="model.id"
+                :title="model.description"
+              >
+                {{ model.label }}
+              </option>
+            </select>
           </label>
         </div>
       </div>

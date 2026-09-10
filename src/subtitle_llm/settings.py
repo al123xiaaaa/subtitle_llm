@@ -88,30 +88,39 @@ class PipelineConfig(BaseModel):
 class ASRConfig(BaseModel):
     """FunASR Python SDK 配置。
 
-    通过 funasr.AutoModel 组合 paraformer-zh（识别）+ fsmn-vad（分段）+
-    ct-punc（标点恢复）+ cam++（说话人分离，触发 sentence_info 输出）。详见
+    默认值即默认 profile（fun-asr-nano）；可选 profile 见
+    media/asr_models.py 注册表（数据来自 config/desktop-contract.json），
+    通过 CLI --asr-model 或桌面端下拉选择。详见
     docs/adr/0003-asr-backend-migrate-to-funasr-sdk.md。
-    首次运行自动下载模型（约 1GB）。CPU 可跑。
-    中文场景 paraformer-zh 精度明显优于 SenseVoiceSmall，且输出连续中文文本。
+    首次运行自动下载模型。CPU 可跑。
     """
 
     # ASR 识别模型（ModelScope namespace 或 HuggingFace repo）
-    model_name: str = "paraformer-zh"
-    # 标点恢复模型；None 表示用模型自带标点（SenseVoice/Qwen3-ASR 自带）
-    punc_model: str | None = "ct-punc"
+    model_name: str = "FunAudioLLM/Fun-ASR-Nano-2512"
+    # 标点恢复模型；None 表示用模型自带标点（Fun-ASR-Nano/SenseVoice/Qwen3-ASR 自带）
+    punc_model: str | None = None
     # 说话人分离模型；cam++ 会触发 sentence_info（带时间戳分段）输出
-    spk_model: str | None = "cam++"
+    spk_model: str | None = None
     # VAD 单段最长时长（毫秒）。控制分段粒度，避免超长段
-    max_single_segment_time: int = 8000
+    max_single_segment_time: int = 30000
     # 推理设备：cpu 或 cuda
     device: str = "cpu"
     # 模型 hub：modelscope/ms（国内快）或 hf（HuggingFace，海外）
-    hub: str = "ms"
+    hub: str = "hf"
     # 某些模型（Fun-ASR-Nano / Qwen3-ASR）需要 trust_remote_code
-    trust_remote_code: bool = False
+    trust_remote_code: bool = True
     # 强制对齐模型；Qwen3-ASR 需要它才能输出字符级时间戳
     # （如 "Qwen/Qwen3-ForcedAligner-0.6B"），其它模型留空
     forced_aligner: str | None = None
+    # 语言参数风格：code = en/zh（paraformer 系），name = 英文/中文（Fun-ASR 系）
+    language_style: Literal["code", "name"] = "name"
+    # 传给 model.generate 的额外参数（不同模型的签名差异在此吸收）
+    generate_kwargs: dict[str, Any] = Field(
+        default_factory=lambda: {"itn": True, "batch_size": 1}
+    )
+    # 模型不返回时间戳时（Fun-ASR-Nano / Qwen3-ASR）：先用独立 fsmn-vad 切段，
+    # 再逐段识别，段时间戳即字幕时间轴
+    segment_via_vad: bool = True
 
 
 class AppConfig(BaseModel):

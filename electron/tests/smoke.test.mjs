@@ -486,4 +486,14 @@ const flushed = createStdoutProtocolParser();
 flushed.push("tail-without-newline");
 assert.deepEqual(flushed.flush(), [{ kind: "log", text: "tail-without-newline" }]);
 
+// ASR 模型 profile：契约驱动 AppState 与 CLI 参数
+const asrArgs = buildPythonArgs({
+  command: "transcribe",
+  options: { audio: "a.wav", output: "a.srt", asrModel: "fun-asr-nano" },
+});
+assert.ok(asrArgs.includes("--asr-model"));
+assert.ok(asrArgs.includes("fun-asr-nano"));
+assert.equal(runtime.getAppState().asrModels.length >= 3, true);
+assert.equal(runtime.getAppState().defaultAsrModel, "fun-asr-nano");
+
 console.log("desktop smoke tests passed");

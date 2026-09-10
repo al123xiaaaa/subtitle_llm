@@ -22,6 +22,7 @@ export function useTaskForms(api: Window["subtitleLLM"], options: TaskFormsOptio
     useYamlConfig: false,
     refineTranslation: false,
     forceAsr: false,
+    asrModel: "",
     resume: false,
     embedMkv: false,
     video: "",
@@ -44,7 +45,11 @@ export function useTaskForms(api: Window["subtitleLLM"], options: TaskFormsOptio
     language: "English",
     output: "",
     config: "",
+    asrModel: "",
   });
+
+  const asrModels = computed(() => options.appState.value?.asrModels || []);
+  const defaultAsrModel = computed(() => options.appState.value?.defaultAsrModel || "");
 
   const mkvCapabilityText = computed(() => {
     if (!options.appState.value) {
@@ -166,6 +171,7 @@ export function useTaskForms(api: Window["subtitleLLM"], options: TaskFormsOptio
   }
 
   return {
+    asrModels,
     canStartMux,
     chooseAudio,
     chooseDownloadDir,
@@ -177,6 +183,7 @@ export function useTaskForms(api: Window["subtitleLLM"], options: TaskFormsOptio
     chooseTranscribeOutput,
     chooseTranslateConfig,
     chooseTranslateVideo,
+    defaultAsrModel,
     downloadForm,
     mkvCapabilityClass,
     mkvCapabilityText,

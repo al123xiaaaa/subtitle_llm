@@ -68,6 +68,7 @@ export function useAppController() {
         reviewMode: taskForms.translateForm.reviewMode,
         refineTranslation: taskForms.translateForm.refineTranslation,
         forceAsr: taskForms.translateForm.forceAsr,
+        asrModel: taskForms.translateForm.asrModel,
         resume: taskForms.translateForm.resume,
         embedVideo,
         video,
@@ -108,6 +109,7 @@ export function useAppController() {
         output,
         language: cleanString(taskForms.transcribeForm.language),
         config: cleanString(taskForms.transcribeForm.config),
+        asrModel: taskForms.transcribeForm.asrModel,
       },
     });
   }

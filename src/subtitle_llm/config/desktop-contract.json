@@ -18,19 +18,93 @@
   },
   "providerParamOverrides": {
     "cliproxy": {
-      "summary": { "temperature": "1.0", "top_p": "0.95" },
-      "translation": { "temperature": "1.0", "top_p": "0.95" }
+      "summary": {
+        "temperature": "1.0",
+        "top_p": "0.95"
+      },
+      "translation": {
+        "temperature": "1.0",
+        "top_p": "0.95"
+      }
     }
   },
   "asr": {
-    "model_name": "paraformer-zh",
-    "punc_model": "ct-punc",
-    "spk_model": "cam++",
-    "max_single_segment_time": 8000,
+    "model_name": "FunAudioLLM/Fun-ASR-Nano-2512",
+    "punc_model": null,
+    "spk_model": null,
+    "max_single_segment_time": 30000,
     "device": "cpu",
-    "hub": "ms",
-    "trust_remote_code": false,
-    "forced_aligner": null
+    "hub": "hf",
+    "trust_remote_code": true,
+    "forced_aligner": null,
+    "language_style": "name",
+    "generate_kwargs": {
+      "itn": true,
+      "batch_size": 1
+    },
+    "segment_via_vad": true
   },
-  "ffmpegPaths": ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
+  "defaultAsrModel": "fun-asr-nano",
+  "asrModels": [
+    {
+      "id": "fun-asr-nano",
+      "label": "Fun-ASR-Nano",
+      "description": "800M 多语大模型：中/英/日 + 方言口音，上下文理解强；首次下载约 3GB",
+      "model_name": "FunAudioLLM/Fun-ASR-Nano-2512",
+      "hub": "hf",
+      "trust_remote_code": true,
+      "punc_model": null,
+      "spk_model": null,
+      "forced_aligner": null,
+      "max_single_segment_time": 30000,
+      "language_style": "name",
+      "generate_kwargs": {
+        "itn": true,
+        "batch_size": 1
+      },
+      "segment_via_vad": true
+    },
+    {
+      "id": "paraformer-zh",
+      "label": "Paraformer-zh",
+      "description": "220M 轻量快速，中文精度最高；英文为附带支持",
+      "model_name": "paraformer-zh",
+      "hub": "ms",
+      "trust_remote_code": false,
+      "punc_model": "ct-punc",
+      "spk_model": "cam++",
+      "forced_aligner": null,
+      "max_single_segment_time": 8000,
+      "language_style": "code",
+      "generate_kwargs": {
+        "use_itn": true,
+        "batch_size_s": 60,
+        "output_timestamp": true
+      },
+      "segment_via_vad": false
+    },
+    {
+      "id": "qwen3-asr",
+      "label": "Qwen3-ASR",
+      "description": "1.7B，52 语种高精度但 CPU 很慢；需附带强制对齐模型（约 7GB）",
+      "model_name": "Qwen/Qwen3-ASR-1.7B",
+      "hub": "hf",
+      "trust_remote_code": true,
+      "punc_model": null,
+      "spk_model": null,
+      "forced_aligner": "Qwen/Qwen3-ForcedAligner-0.6B",
+      "max_single_segment_time": 30000,
+      "language_style": "name",
+      "generate_kwargs": {
+        "itn": true,
+        "batch_size": 1
+      },
+      "segment_via_vad": true
+    }
+  ],
+  "ffmpegPaths": [
+    "/opt/homebrew/bin/ffmpeg",
+    "/usr/local/bin/ffmpeg",
+    "/usr/bin/ffmpeg"
+  ]
 }

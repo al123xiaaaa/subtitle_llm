@@ -16,6 +16,7 @@ import { createFfmpegDetector } from "./ffmpegStatus.js";
 import { getProvider, modelsFromApiResponse } from "./providerCatalog.js";
 import { clearApiKey, resolveCredential, saveApiKey, savePreferences, summarizeSettings } from "./settingsStore.js";
 import { createStdoutProtocolParser } from "./stdoutProtocol.js";
+import { desktopContract } from "./desktopContract.js";
 
 interface DesktopRuntimeOptions {
   app: Pick<App, "getPath">;
@@ -100,6 +101,8 @@ export function createDesktopRuntime({
       hasMainPy: fs.existsSync(path.join(projectRoot, "main.py")),
       settingsPath: getSettingsPath(),
       ffmpeg: detectFfmpeg(),
+      asrModels: desktopContract.asrModels.map(({ id, label, description }) => ({ id, label, description })),
+      defaultAsrModel: desktopContract.defaultAsrModel,
       ...summarizeSettings(getSettingsPath(), env),
     };
   }

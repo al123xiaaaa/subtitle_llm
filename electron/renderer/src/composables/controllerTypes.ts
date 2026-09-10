@@ -22,6 +22,7 @@ export interface TranslateFormState {
   useYamlConfig: boolean;
   refineTranslation: boolean;
   forceAsr: boolean;
+  asrModel: string;
   resume: boolean;
   embedMkv: boolean;
   video: string;
@@ -44,4 +45,5 @@ export interface TranscribeFormState {
   language: string;
   output: string;
   config: string;
+  asrModel: string;
 }

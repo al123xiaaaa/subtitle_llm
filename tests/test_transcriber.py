@@ -14,6 +14,7 @@ from subtitle_llm.media.asr_backend import (
     FunasrAsrBackend,
     clean_sensevoice_text,
 )
+from subtitle_llm.media.asr_models import resolve_asr_config
 from subtitle_llm.media.transcriber import (
     build_subtitle,
     normalize_asr_language,
@@ -75,13 +76,16 @@ class TestCleanSensevoiceText(unittest.TestCase):
 class TestASRConfig(unittest.TestCase):
     """ASRConfig funasr SDK 字段验证。"""
 
-    def test_default_uses_funasr_sdk(self):
+    def test_default_profile_is_fun_asr_nano(self):
         config = ASRConfig()
-        self.assertEqual(config.model_name, "paraformer-zh")
-        self.assertEqual(config.punc_model, "ct-punc")
-        self.assertEqual(config.spk_model, "cam++")
-        self.assertEqual(config.max_single_segment_time, 8000)
+        self.assertEqual(config.model_name, "FunAudioLLM/Fun-ASR-Nano-2512")
+        self.assertEqual(config.punc_model, None)
+        self.assertEqual(config.spk_model, None)
+        self.assertEqual(config.max_single_segment_time, 30000)
         self.assertEqual(config.device, "cpu")
+        self.assertEqual(config.hub, "hf")
+        self.assertEqual(config.trust_remote_code, True)
+        self.assertEqual(config.language_style, "name")
 
     def test_custom_model_and_device(self):
         config = ASRConfig(
@@ -156,7 +160,8 @@ class TestFunasrAsrBackend(unittest.TestCase):
     """FunasrAsrBackend 解析逻辑（mock funasr.AutoModel，不依赖真实模型）。"""
 
     def _make_backend(self):
-        return FunasrAsrBackend(config=ASRConfig())
+        # 这些用例 mock 的是 paraformer 系（词级时间戳 + ct-punc）路径
+        return FunasrAsrBackend(config=resolve_asr_config(profile="paraformer-zh"))
 
     def _mock_auto_model(self, mock_am_cls, generate_result):
         """构造一个 mock AutoModel，其 generate 返回 generate_result。"""
@@ -496,11 +501,19 @@ class TestFunasrAsrBackend(unittest.TestCase):
         self.assertEqual(self._make_backend().transcribe("/tmp/a.wav", "English"), [])
 
     def test_normalize_language_maps_names_to_codes(self):
-        """语言名称（English）映射为 funasr 代码（en）。"""
-        self.assertEqual(FunasrAsrBackend._normalize_language("English"), "en")
-        self.assertEqual(FunasrAsrBackend._normalize_language("Chinese"), "zh")
-        self.assertEqual(FunasrAsrBackend._normalize_language(None), "auto")
-        self.assertEqual(FunasrAsrBackend._normalize_language(""), "auto")
+        """code 风格（paraformer 系）：语言名称（English）映射为 funasr 代码（en）。"""
+        backend = self._make_backend()
+        self.assertEqual(backend._normalize_language("English"), "en")
+        self.assertEqual(backend._normalize_language("Chinese"), "zh")
+        self.assertEqual(backend._normalize_language(None), "auto")
+        self.assertEqual(backend._normalize_language(""), "auto")
+
+    def test_normalize_language_name_style_for_fun_asr(self):
+        """name 风格（Fun-ASR 系）：映射为「英文/中文」。"""
+        backend = FunasrAsrBackend(config=resolve_asr_config(profile="fun-asr-nano"))
+        self.assertEqual(backend._normalize_language("English"), "英文")
+        self.assertEqual(backend._normalize_language("Chinese"), "中文")
+        self.assertEqual(backend._normalize_language(None), "auto")
 
     @patch("subtitle_llm.media.asr_backend.FunasrAsrBackend._get_or_load_model")
     def test_language_passed_to_generate(self, mock_load):

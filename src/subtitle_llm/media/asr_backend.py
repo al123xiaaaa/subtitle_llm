@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -478,6 +479,7 @@ class FunasrAsrBackend:
 
     config: ASRConfig
     _model: object | None = field(default=None, init=False, repr=False)
+    _vad_model: object | None = field(default=None, init=False, repr=False)
 
     def transcribe(
         self,
@@ -486,23 +488,98 @@ class FunasrAsrBackend:
         progress: ProgressEmitter | None = None,
     ) -> list[AsrCue]:
         from funasr import AutoModel
+
+        lang = self._normalize_language(language)
+        if self.config.segment_via_vad:
+            # Fun-ASR-Nano / Qwen3-ASR 等不返回时间戳：独立 VAD 切段 + 逐段识别，
+            # 段时间戳直接作为字幕时间轴（ADR-0003 的词级时间轴路径对这些模型不可用）。
+            return self._transcribe_segmented(AutoModel, audio_path, lang, progress)
+        return self._transcribe_combined(AutoModel, audio_path, lang, progress)
+
+    def _transcribe_segmented(
+        self,
+        auto_model_cls,
+        audio_path: str | Path,
+        lang: str,
+        progress: ProgressEmitter | None,
+    ) -> list[AsrCue]:
+        """独立 fsmn-vad 切段 → 逐段识别。段时间戳即字幕时间轴，不做段数配对。"""
+        import soundfile
+
+        _patch_funasr_distribute_spk()
+        emit_asr_progress(progress, "load_asr", "加载 ASR", "正在加载 FunASR 模型")
+        model = cast(Any, self._get_or_load_model(auto_model_cls))
+        vad = cast(Any, self._get_or_load_vad_model(auto_model_cls))
+
+        emit_asr_progress(progress, "load_asr", "加载 ASR", "正在进行 VAD 分段")
+        vad_result = vad.generate(input=str(audio_path))
+        segments = vad_result[0].get("value") or [] if vad_result else []
+        if not segments:
+            logger.warning("VAD 未检出任何语音段: audio=%s", audio_path)
+            return []
+
+        audio_data, sample_rate = soundfile.read(str(audio_path), dtype="float32")
+        cues: list[AsrCue] = []
+        skipped_short = 0
+        with tempfile.TemporaryDirectory(prefix="subtitle-llm-vad-") as tmp_dir:
+            for position, segment in enumerate(segments):
+                start_ms, end_ms = int(segment[0]), int(segment[1])
+                if end_ms - start_ms < 250:
+                    skipped_short += 1
+                    continue
+                slice_path = str(Path(tmp_dir) / f"seg_{position:04d}.wav")
+                soundfile.write(
+                    slice_path,
+                    audio_data[start_ms * sample_rate // 1000:end_ms * sample_rate // 1000],
+                    sample_rate,
+                )
+                result = model.generate(
+                    input=slice_path,
+                    cache={},
+                    language=lang,
+                    **self.config.generate_kwargs,
+                )
+                text = clean_sensevoice_text(str(result[0].get("text", "") if result else "")).strip()
+                if not text:
+                    continue
+                cues.append(AsrCue(start_ms=start_ms, end_ms=end_ms, text=text))
+                if (position + 1) % 5 == 0 or position == len(segments) - 1:
+                    emit_asr_progress(
+                        progress,
+                        "transcribe_audio",
+                        "转写音频",
+                        f"正在识别语音段 {position + 1}/{len(segments)}",
+                    )
+        logger.info(
+            "VAD 分段识别完成: audio=%s segments=%s cues=%s skipped_short=%s",
+            audio_path, len(segments), len(cues), skipped_short,
+        )
+        emit_asr_progress(progress, "load_asr", "加载 ASR", "识别完成", status="done")
+        return cues
+
+    def _transcribe_combined(
+        self,
+        auto_model_cls,
+        audio_path: str | Path,
+        lang: str,
+        progress: ProgressEmitter | None,
+    ) -> list[AsrCue]:
         from funasr.utils.postprocess_utils import rich_transcription_postprocess
 
         _patch_funasr_distribute_spk()
         emit_asr_progress(progress, "load_asr", "加载 ASR", "正在加载 FunASR 模型")
-        model = cast(Any, self._get_or_load_model(AutoModel))
+        model = cast(Any, self._get_or_load_model(auto_model_cls))
 
         emit_asr_progress(progress, "load_asr", "加载 ASR", "正在运行 FunASR 识别")
         # language: 用户指定（如 "English"）则约束识别语言，杜绝跨语言幻觉；
         # None/"auto" 时由模型自动检测。
-        lang = self._normalize_language(language)
+        # generate 的额外参数（itn/batch_size_s/output_timestamp 等）由 profile 决定，
+        # 不同模型的自定义 generate 签名差异在 ASRConfig.generate_kwargs 里吸收。
         result = model.generate(
             input=str(audio_path),
             cache={},
             language=lang,
-            use_itn=True,
-            batch_size_s=60,
-            output_timestamp=True,
+            **self.config.generate_kwargs,
         )
         emit_asr_progress(progress, "load_asr", "加载 ASR", "识别完成", status="done")
 
@@ -659,14 +736,19 @@ class FunasrAsrBackend:
         cfg = self.config
         kwargs: dict[str, object] = {
             "model": cfg.model_name,
-            "vad_model": "fsmn-vad",
-            "vad_kwargs": {"max_single_segment_time": cfg.max_single_segment_time},
-            "punc_model": cfg.punc_model,
-            "spk_model": cfg.spk_model,
             "device": cfg.device,
             "disable_update": True,
             "disable_pbar": True,
         }
+        # 分段两轮路径下逐段识别，不需要在合并调用里挂 VAD
+        if not cfg.segment_via_vad:
+            kwargs["vad_model"] = "fsmn-vad"
+            kwargs["vad_kwargs"] = {"max_single_segment_time": cfg.max_single_segment_time}
+        # punc/spk 为 None 时不传（Fun-ASR-Nano 等自带标点，显式传 None 可能报错）
+        if cfg.punc_model:
+            kwargs["punc_model"] = cfg.punc_model
+        if cfg.spk_model:
+            kwargs["spk_model"] = cfg.spk_model
         # Fun-ASR-Nano / Qwen3-ASR 等需 trust_remote_code + HF hub
         if cfg.hub:
             kwargs["hub"] = cfg.hub
@@ -683,20 +765,46 @@ class FunasrAsrBackend:
         self._model = auto_model_cls(**kwargs)
         return self._model
 
-    @staticmethod
-    def _normalize_language(language: str | None) -> str:
-        """把 ASR 语言标识（如 "English"）转为 funasr 接受的形式（如 "en"）。
+    def _get_or_load_vad_model(self, auto_model_cls) -> object:
+        """分段两轮路径用的独立 fsmn-vad 模型（只出段时间戳）。"""
+        if self._vad_model is not None:
+            return self._vad_model
+        kwargs: dict[str, object] = {
+            "model": "fsmn-vad",
+            "device": self.config.device,
+            "disable_update": True,
+            "disable_pbar": True,
+        }
+        if self.config.hub:
+            kwargs["hub"] = self.config.hub
+        self._vad_model = auto_model_cls(**kwargs)
+        return self._vad_model
 
-        funasr 的 language 参数接受语言代码或 "auto"。
-        用户传入的可能是完整名称（来自 normalize_asr_language），这里映射回代码。
+    def _normalize_language(self, language: str | None) -> str:
+        """把 ASR 语言标识（如 "English"）转为当前模型接受的形式。
+
+        language_style=code（paraformer 系）：funasr 标准模型接受 "en"/"zh" 等代码；
+        language_style=name（Fun-ASR / Qwen3-ASR 系）：自定义 generate 要 "英文"/"中文"。
+        None/"auto" 时由模型自动检测。
         """
         if not language:
             return "auto"
+        normalized = language.strip().lower()
+        if self.config.language_style == "name":
+            name_mapping = {
+                "english": "英文", "en": "英文",
+                "chinese": "中文", "zh": "中文",
+                "japanese": "日文", "ja": "日文",
+                "korean": "韩文", "ko": "韩文",
+                "cantonese": "粤语", "yue": "粤语",
+                "auto": "auto",
+            }
+            return name_mapping.get(normalized, language.strip())
         mapping = {
             "english": "en", "chinese": "zh", "japanese": "ja",
             "korean": "ko", "cantonese": "yue", "auto": "auto",
         }
-        return mapping.get(language.strip().lower(), language.strip().lower())
+        return mapping.get(normalized, normalized)
 
 
 def emit_asr_progress(

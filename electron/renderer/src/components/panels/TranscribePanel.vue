@@ -13,7 +13,7 @@ const props = defineProps<{
 }>();
 
 const { activeTab, isBusy } = toRefs(props);
-const { chooseTranscribeConfig, chooseTranscribeOutput, transcribeForm } = props.forms;
+const { asrModels, chooseTranscribeConfig, chooseTranscribeOutput, defaultAsrModel, transcribeForm } = props.forms;
 const { submitTranscribe } = props.formActions;
 </script>
 
@@ -50,6 +50,26 @@ const { submitTranscribe } = props.formActions;
               type="text"
               :disabled="isBusy"
             >
+          </label>
+          <label>
+            <span>ASR 模型</span>
+            <select
+              id="transcribeAsrModel"
+              v-model="transcribeForm.asrModel"
+              :disabled="isBusy"
+            >
+              <option value="">
+                默认（{{ asrModels.find((model) => model.id === defaultAsrModel)?.label || defaultAsrModel }}）
+              </option>
+              <option
+                v-for="model in asrModels"
+                :key="model.id"
+                :value="model.id"
+                :title="model.description"
+              >
+                {{ model.label }}
+              </option>
+            </select>
           </label>
           <label>
             <span>输出 SRT</span>

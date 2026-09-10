@@ -26,6 +26,23 @@ export interface DesktopContract {
     forced_aligner: string | null;
   };
   ffmpegPaths: string[];
+  defaultAsrModel: string;
+  asrModels: AsrModelProfile[];
+}
+
+export interface AsrModelProfile {
+  id: string;
+  label: string;
+  description: string;
+  model_name: string;
+  hub: string;
+  trust_remote_code: boolean;
+  punc_model: string | null;
+  spk_model: string | null;
+  forced_aligner: string | null;
+  max_single_segment_time: number;
+  language_style: string;
+  generate_kwargs: Record<string, unknown>;
 }
 
 function loadContract(): DesktopContract {

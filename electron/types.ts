@@ -58,6 +58,14 @@ export interface AppState {
   preferences: DesktopPreferences;
   hasAnyCredential: boolean;
   preferredProviderId: string;
+  asrModels: AsrModelOption[];
+  defaultAsrModel: string;
+}
+
+export interface AsrModelOption {
+  id: string;
+  label: string;
+  description: string;
 }
 
 export type CommandName = "translate" | "download" | "transcribe" | "mux";
@@ -93,6 +101,7 @@ export interface TranslateJobOptions {
   reviewMode?: ReviewMode;
   refineTranslation?: boolean;
   forceAsr?: boolean;
+  asrModel?: string;
   resume?: boolean;
   embedVideo?: boolean;
   video?: string;
@@ -111,6 +120,7 @@ export interface TranscribeJobOptions {
   output: string;
   language?: string;
   config?: string;
+  asrModel?: string;
 }
 
 export interface MuxJobOptions {

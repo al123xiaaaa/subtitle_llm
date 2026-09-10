@@ -30,7 +30,7 @@ dependencies = [
 subtitle-llm = "subtitle_llm.cli.app:app"
 
 [project.optional-dependencies]
-asr = ["funasr"]
+asr = ["funasr", "torchaudio"]  # torchaudio: funasr 的 fbank 特征提取后端
 
 [tool.setuptools.packages.find]
 where = ["src"]
