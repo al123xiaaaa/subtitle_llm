@@ -204,5 +204,72 @@ class TestDownloader(unittest.TestCase):
         self.assertTrue(str(subtitle_path).endswith("Demo Video.en.srt"))
 
 
+class BotWallYoutubeDL:
+    """第一次探测抛反机器人墙，带 cookies 后放行。"""
+
+    instances = []
+    bot_wall = True
+
+    def __init__(self, options):
+        self.options = options
+        BotWallYoutubeDL.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def extract_info(self, url, download=False):
+        if "cookiesfrombrowser" not in self.options and BotWallYoutubeDL.bot_wall:
+            raise RuntimeError("ERROR: [youtube] abc: Sign in to confirm you're not a bot")
+        return {"title": "Demo Video", "subtitles": {}, "automatic_captions": {}}
+
+    def download(self, urls):
+        output_path = Path(self.options["outtmpl"]).parent
+        (output_path / "Demo Video.webm").write_text("video", encoding="utf-8")
+        (output_path / "Demo Video.wav").write_text("audio", encoding="utf-8")
+
+
+class TestCookieFallback(unittest.TestCase):
+    def setUp(self):
+        BotWallYoutubeDL.instances = []
+        BotWallYoutubeDL.bot_wall = True
+
+    def test_bot_wall_retries_with_browser_cookies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("subtitle_llm.media.downloader.YoutubeDL", BotWallYoutubeDL):
+                downloader.download("https://example.test/video", tmp, "en")
+
+        probe = BotWallYoutubeDL.instances[0]
+        self.assertNotIn("cookiesfrombrowser", probe.options)
+        retried = BotWallYoutubeDL.instances[1]
+        self.assertEqual(retried.options["cookiesfrombrowser"], ("chrome",))
+        # 后续下载沿用通过验证的同一浏览器
+        download_options = BotWallYoutubeDL.instances[-1].options
+        self.assertEqual(download_options.get("cookiesfrombrowser"), ("chrome",))
+
+    def test_bot_wall_without_usable_cookies_raises_friendly_error(self):
+        class AlwaysWalled(BotWallYoutubeDL):
+            def extract_info(self, url, download=False):
+                raise RuntimeError("ERROR: [youtube] abc: Sign in to confirm you're not a bot")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("subtitle_llm.media.downloader.YoutubeDL", AlwaysWalled):
+                with self.assertRaisesRegex(RuntimeError, "反机器人"):
+                    downloader.download("https://example.test/video", tmp, "en")
+
+    def test_env_specified_browser_is_used_directly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch("subtitle_llm.media.downloader.YoutubeDL", BotWallYoutubeDL),
+                patch.dict("os.environ", {"SUBTITLE_LLM_COOKIES_BROWSER": "firefox"}),
+            ):
+                downloader.download("https://example.test/video", tmp, "en")
+
+        probe = BotWallYoutubeDL.instances[0]
+        self.assertEqual(probe.options["cookiesfrombrowser"], ("firefox",))
+
+
 if __name__ == "__main__":
     unittest.main()

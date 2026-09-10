@@ -31,6 +31,73 @@ def _common_ffmpeg_paths() -> tuple[str, ...]:
     return _FALLBACK_FFMPEG_PATHS
 
 
+# YouTube 反机器人验证（"Sign in to confirm you're not a bot"）的识别与绕过：
+# 优先用环境变量 SUBTITLE_LLM_COOKIES_BROWSER 指定的浏览器；未指定时按序尝试
+# 本机常见浏览器的登录 cookies（首次读取 Chrome cookies 会弹钥匙串授权）。
+_BOT_WALL_MARKERS = ("sign in to confirm", "not a bot")
+_BROWSER_CANDIDATES = ("chrome", "firefox", "edge", "brave", "safari")
+
+
+def _is_bot_wall(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in _BOT_WALL_MARKERS)
+
+
+def _extract_metadata(url: str, cookie_browser: str | None) -> dict:
+    opts = _finalize_ydl_opts({"quiet": True}, cookie_browser)
+    with YoutubeDL(cast(Any, opts)) as ydl:
+        return ydl.extract_info(url, download=False)
+
+
+def _probe_with_cookie_fallback(url: str, progress: ProgressEmitter | None) -> tuple[dict, str | None]:
+    """读取元信息；撞反机器人墙时自动改用本机浏览器 cookies 重试。
+
+    返回 (info, cookie_browser)，cookie_browser 用于后续下载调用保持同一会话。
+    """
+    preferred = (os.getenv("SUBTITLE_LLM_COOKIES_BROWSER") or "").strip() or None
+    try:
+        return _extract_metadata(url, preferred), preferred
+    except Exception as exc:
+        if preferred is not None or not _is_bot_wall(exc):
+            _raise_friendly_if_bot_wall(exc)
+            raise
+
+    logger.info("无 cookies 探测被反机器人拦截，尝试本机浏览器 cookies")
+    last_error: Exception | None = None
+    for browser in _BROWSER_CANDIDATES:
+        try:
+            info = _extract_metadata(url, browser)
+        except Exception as exc:
+            last_error = exc
+            logger.debug("浏览器 %s cookies 不可用或仍被拦截: %s", browser, exc)
+            continue
+        logger.info("使用 %s 的浏览器 cookies 通过验证", browser)
+        emit_progress(progress, "metadata", "读取视频元信息", f"已通过 {browser} 浏览器登录态读取元信息")
+        return info, browser
+    raise RuntimeError(
+        "YouTube 要求登录验证（反机器人拦截），已自动尝试本机浏览器 cookies 均未通过。\n"
+        "请先在 Chrome/Firefox/Safari 中登录 YouTube 后重试；"
+        "也可用环境变量 SUBTITLE_LLM_COOKIES_BROWSER 指定浏览器（如 chrome）。"
+    ) from last_error
+
+
+def _raise_friendly_if_bot_wall(exc: Exception) -> None:
+    if _is_bot_wall(exc):
+        raise RuntimeError(
+            f"YouTube 要求登录验证（反机器人拦截），指定的浏览器 cookies 未通过：{exc}\n"
+            "请确认该浏览器已登录 YouTube，或更换 SUBTITLE_LLM_COOKIES_BROWSER。"
+        ) from exc
+
+
+def _finalize_ydl_opts(ydl_opts: dict[str, Any], cookie_browser: str | None) -> dict[str, Any]:
+    if cookie_browser:
+        ydl_opts["cookiesfrombrowser"] = (cookie_browser,)
+    # 允许 yt-dlp 下载 EJS 挑战求解脚本，交给 deno 解 YouTube 的 JS 挑战
+    # （n challenge）。缺它时即使装了 deno 也会跳过求解导致 "needs to be reloaded"。
+    ydl_opts["remote_components"] = {"ejs:github"}
+    return ydl_opts
+
+
 def _resolve_ffmpeg_location() -> str | None:
     """解析 yt-dlp 可用的 ffmpeg 路径。
 
@@ -72,8 +139,7 @@ def download(
         source_language,
         force_asr,
     )
-    with YoutubeDL({"quiet": True}) as ydl:
-        info = ydl.extract_info(url, download=False)
+    info, cookie_browser = _probe_with_cookie_fallback(url, progress)
 
     title = _sanitize_filename(str(info.get("title") or "video"))
     manual_subs = info.get("subtitles", {})
@@ -113,7 +179,7 @@ def download(
         }
         if ffmpeg_location:
             ydl_opts["ffmpeg_location"] = ffmpeg_location
-        with YoutubeDL(cast(Any, ydl_opts)) as ydl:
+        with YoutubeDL(cast(Any, _finalize_ydl_opts(ydl_opts, cookie_browser))) as ydl:
             ydl.download([url])
         video_path = _find_file(output_path, title, ".mp4", ".mkv", ".webm")
         emit_progress(
@@ -160,7 +226,7 @@ def download(
             ydl_opts["ffmpeg_location"] = ffmpeg_location
         else:
             logger.warning("未找到 ffmpeg，视频降级为单文件格式下载：%s", video_format)
-        with YoutubeDL(cast(Any, ydl_opts)) as ydl:
+        with YoutubeDL(cast(Any, _finalize_ydl_opts(ydl_opts, cookie_browser))) as ydl:
             ydl.download([url])
         result = (
             _find_file(output_path, title, ".mp4", ".mkv", ".webm"),
@@ -194,7 +260,7 @@ def download(
         ydl_opts["ffmpeg_location"] = ffmpeg_location
     else:
         logger.warning("未找到 ffmpeg，音频提取可能失败；视频降级为单文件格式下载")
-    with YoutubeDL(cast(Any, ydl_opts)) as ydl:
+    with YoutubeDL(cast(Any, _finalize_ydl_opts(ydl_opts, cookie_browser))) as ydl:
         ydl.download([url])
 
     result = (
