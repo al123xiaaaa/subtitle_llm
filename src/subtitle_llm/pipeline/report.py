@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import threading
+
 from pydantic import BaseModel, Field
+
+# 片段接受并行化后，多个 worker 线程会并发累计 token 用量；
+# += 链不是原子操作，这里用模块级锁串行化。
+_TOKEN_USAGE_LOCK = threading.Lock()
 
 
 class TokenUsage(BaseModel):
@@ -13,11 +19,12 @@ class TokenUsage(BaseModel):
 
     def add_usage(self, usage) -> None:
         data = usage.to_dict() if hasattr(usage, "to_dict") else usage
-        self.prompt_tokens += int(data.get("prompt_tokens", 0))
-        self.completion_tokens += int(data.get("completion_tokens", 0))
-        self.total_tokens += int(data.get("total_tokens", 0))
-        self.prompt_cache_hit_tokens += int(data.get("prompt_cache_hit_tokens", 0))
-        self.prompt_cache_miss_tokens += int(data.get("prompt_cache_miss_tokens", 0))
+        with _TOKEN_USAGE_LOCK:
+            self.prompt_tokens += int(data.get("prompt_tokens", 0))
+            self.completion_tokens += int(data.get("completion_tokens", 0))
+            self.total_tokens += int(data.get("total_tokens", 0))
+            self.prompt_cache_hit_tokens += int(data.get("prompt_cache_hit_tokens", 0))
+            self.prompt_cache_miss_tokens += int(data.get("prompt_cache_miss_tokens", 0))
 
     def cache_hit_rate(self) -> int:
         """prompt 缓存命中率（百分比），缓存字段为 0 时返回 0。"""

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 from subtitle_llm.domain import SubtitleEntry
 from subtitle_llm.review.ports import ReviewResult
 
 logger = logging.getLogger(__name__)
+
+# 片段接受在多个 worker 线程并行执行；TUI 的临时目录 IPC 和单一
+# 终端窗口一次只能承载一个片段，用模块级锁把并发复核排队。
+_REVIEW_LOCK = threading.Lock()
 
 
 class TuiReviewPort:
@@ -27,12 +32,13 @@ class TuiReviewPort:
         total_chunks: int,
         completed_chunks: int = 0,
     ) -> ReviewResult:
-        data = self.manager.submit_chunk(
-            [entry.to_dict() for entry in chunk],
-            chunk_index=chunk_index,
-            total_chunks=total_chunks,
-            completed_chunks=completed_chunks,
-        )
+        with _REVIEW_LOCK:
+            data = self.manager.submit_chunk(
+                [entry.to_dict() for entry in chunk],
+                chunk_index=chunk_index,
+                total_chunks=total_chunks,
+                completed_chunks=completed_chunks,
+            )
         if data is None:
             raise RuntimeError("TUI returned no data")
 
