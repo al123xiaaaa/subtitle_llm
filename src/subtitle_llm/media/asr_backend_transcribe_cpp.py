@@ -12,11 +12,11 @@ handy-computer 的 HuggingFace 仓库下载到本地缓存。
 from __future__ import annotations
 
 import logging
+import hashlib
 import os
 import re
 import shutil
 import subprocess
-import tempfile
 import urllib.request
 import wave
 from dataclasses import dataclass
@@ -157,9 +157,16 @@ def _resolve_gguf_model(config: ASRConfig, progress: ProgressEmitter | None) -> 
     return str(cached)
 
 
+_RESAMPLE_CACHE_DIR = Path.home() / ".cache" / "subtitle-llm" / "resampled"
+
+
 def _ensure_16k_mono_wav(audio_path: str | Path) -> str:
     """transcribe.cpp v1 只接受 16kHz 单声道 WAV；yt-dlp 抽出的音频常是
-    44.1/48kHz，需要先重采样。已是目标格式的直接返回原路径。"""
+    44.1/48kHz，需要先重采样。已是目标格式的直接返回原路径。
+
+    重采样结果按源文件（路径+大小+修改时间）缓存到 ~/.cache/subtitle-llm，
+    命中即复用——不在 /tmp 留一次性大文件，重复转写也不再重采样。
+    """
     path = str(audio_path)
     try:
         with wave.open(path, "rb") as wav:
@@ -174,18 +181,27 @@ def _ensure_16k_mono_wav(audio_path: str | Path) -> str:
             "音频不是 16kHz 单声道 WAV，需要 ffmpeg 重采样但未找到 ffmpeg。"
             "请安装 ffmpeg 或设置 SUBTITLE_LLM_FFMPEG 环境变量。"
         )
-    resampled = tempfile.NamedTemporaryFile(
-        prefix="subtitle-llm-16k-", suffix=".wav", delete=False
-    ).name
-    logger.info("重采样到 16kHz 单声道: %s -> %s", path, resampled)
+
+    stat = os.stat(path)
+    cache_key = hashlib.sha1(f"{os.path.abspath(path)}:{stat.st_size}:{stat.st_mtime_ns}".encode()).hexdigest()[:16]
+    cached = _RESAMPLE_CACHE_DIR / f"{cache_key}.wav"
+    if cached.exists():
+        logger.info("复用已缓存的 16kHz 重采样: %s", cached)
+        return str(cached)
+
+    _RESAMPLE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_out = cached.with_suffix(".tmp.wav")
+    logger.info("重采样到 16kHz 单声道: %s -> %s", path, cached)
     result = subprocess.run(
-        [ffmpeg, "-y", "-i", path, "-ar", "16000", "-ac", "1", resampled],
+        [ffmpeg, "-y", "-i", path, "-ar", "16000", "-ac", "1", str(tmp_out)],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
+        tmp_out.unlink(missing_ok=True)
         raise TranscribeCppError(f"ffmpeg 重采样失败：{result.stderr.strip()[:300]}")
-    return resampled
+    tmp_out.rename(cached)  # 原子落盘，中断不残留半成品
+    return str(cached)
 
 
 def _emit(progress: ProgressEmitter | None, message: str, *, status: str = "running") -> None:

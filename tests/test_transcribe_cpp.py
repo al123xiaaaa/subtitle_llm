@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from subtitle_llm.media.asr_backend_transcribe_cpp import (
@@ -113,3 +114,33 @@ class TestEnsure16kMonoWav(unittest.TestCase):
             wav.writeframes(b"\x00" * 3200)
         from subtitle_llm.media.asr_backend_transcribe_cpp import _ensure_16k_mono_wav
         self.assertEqual(_ensure_16k_mono_wav(path), path)
+
+    def test_resample_is_cached_and_reused(self):
+        """重采样结果进缓存目录：第二次调用直接复用，不再跑 ffmpeg。"""
+        import wave as wave_mod
+        import subtitle_llm.media.asr_backend_transcribe_cpp as cpp
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "src.wav"
+            with wave_mod.open(str(source), "wb") as wav:
+                wav.setnchannels(2)
+                wav.setframerate(48000)
+                wav.setsampwidth(2)
+                wav.writeframes(b"\x00" * 9600)
+            cache_dir = Path(tmp) / "cache"
+
+            def fake_ffmpeg(cmd, **_kwargs):
+                Path(cmd[-1]).write_bytes(b"resampled")
+                return MagicMock(returncode=0, stderr="")
+
+            with (
+                patch.object(cpp, "_RESAMPLE_CACHE_DIR", cache_dir),
+                patch.object(cpp, "_resolve_ffmpeg_location", return_value="/bin/fake-ffmpeg"),
+                patch("subprocess.run", side_effect=fake_ffmpeg) as run_mock,
+            ):
+                first = cpp._ensure_16k_mono_wav(source)
+                second = cpp._ensure_16k_mono_wav(source)
+
+            self.assertEqual(first, second)
+            self.assertTrue(str(first).startswith(str(cache_dir)))
+            self.assertEqual(run_mock.call_count, 1)  # 第二次命中缓存，未再调 ffmpeg
