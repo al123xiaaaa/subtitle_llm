@@ -2,6 +2,15 @@ import { computed, nextTick, reactive, ref } from "vue";
 import type { AppState, ModelSelection, ProviderModel, ProviderSummary } from "../../../types";
 import type { TaskTab } from "./controllerTypes";
 import { cleanString, statusPillClass } from "./controllerUtils";
+import { appRuntime } from "../effect/runtime";
+import {
+  clearSettingsKey as clearSettingsKeyProgram,
+  loadDynamicModels as loadDynamicModelsProgram,
+  persistProviderPreference as persistProviderPreferenceProgram,
+  saveOnboardingKey as saveOnboardingKeyProgram,
+  saveSettingsKey as saveSettingsKeyProgram,
+} from "../effect/programs/providers";
+import type { ProviderPorts } from "../effect/programs/providers";
 
 interface ProviderSettingsOptions {
   appendLog: (text: string, kind?: "stdout" | "stderr") => void;
@@ -9,7 +18,7 @@ interface ProviderSettingsOptions {
   setActiveTab: (tab: TaskTab) => void;
 }
 
-export function useProviderSettings(api: Window["subtitleLLM"], options: ProviderSettingsOptions) {
+export function useProviderSettings(options: ProviderSettingsOptions) {
   const appState = ref<AppState | null>(null);
   const selectedProviderId = ref("deepseek");
   const selectedModelId = ref("");
@@ -70,21 +79,6 @@ export function useProviderSettings(api: Window["subtitleLLM"], options: Provide
     return provider.models || [];
   }
 
-  async function loadDynamicModels(provider: ProviderSummary | null): Promise<void> {
-    if (!provider?.dynamicModels || dynamicModelsByProvider[provider.id]) {
-      return;
-    }
-    try {
-      const models = await api.fetchProviderModels(provider.id);
-      if (models.length) {
-        dynamicModelsByProvider[provider.id] = models;
-        syncModelSelection();
-      }
-    } catch {
-      // 拉取失败静默回退静态列表
-    }
-  }
-
   function selectedModelForProvider(provider: ProviderSummary): string {
     const models = modelsForProvider(provider);
     const stored = appState.value?.preferences?.modelsByProvider?.[provider.id];
@@ -124,33 +118,37 @@ export function useProviderSettings(api: Window["subtitleLLM"], options: Provide
       selectedOnboardingProviderId.value = "deepseek";
     }
     syncModelSelection();
-    void loadDynamicModels(selectedProvider.value);
+    void appRuntime.runPromise(loadDynamicModelsProgram(selectedProvider.value, providerPorts));
   }
 
-  async function persistProviderPreference(): Promise<void> {
-    const provider = selectedProvider.value;
-    if (!provider || !appState.value) {
-      return;
-    }
+  const providerPorts: ProviderPorts = {
+    appState,
+    selectedProviderId,
+    selectedModelId,
+    customModelInput,
+    getSelectedProvider: () => selectedProvider.value,
+    hasDynamicModels: (providerId) => Boolean(dynamicModelsByProvider[providerId]),
+    storeDynamicModels: (providerId, models) => {
+      dynamicModelsByProvider[providerId] = models;
+    },
+    syncModelSelection,
+    updateAppState,
+    clearApiKeyDraft: (providerId) => {
+      apiKeyDrafts[providerId] = "";
+    },
+    clearOnboardingKey: () => {
+      onboardingApiKey.value = "";
+    },
+    appendLog: options.appendLog,
+  };
 
-    const preferences = {
-      ...appState.value.preferences,
-      lastProviderId: provider.id,
-      modelsByProvider: {
-        ...appState.value.preferences?.modelsByProvider,
-        [provider.id]: selectedModelId.value,
-      },
-      customModelsByProvider: {
-        ...appState.value.preferences?.customModelsByProvider,
-        [provider.id]: cleanString(customModelInput.value),
-      },
-    };
-    updateAppState(await api.savePreferences(preferences));
+  async function persistProviderPreference(): Promise<void> {
+    await appRuntime.runPromise(persistProviderPreferenceProgram(providerPorts));
   }
 
   async function onProviderChanged(): Promise<void> {
     syncModelSelection();
-    void loadDynamicModels(selectedProvider.value);
+    void appRuntime.runPromise(loadDynamicModelsProgram(selectedProvider.value, providerPorts));
     await persistProviderPreference();
   }
 
@@ -172,20 +170,11 @@ export function useProviderSettings(api: Window["subtitleLLM"], options: Provide
   }
 
   async function saveSettingsKey(providerId: string): Promise<void> {
-    try {
-      updateAppState(await api.saveApiKey(providerId, apiKeyDrafts[providerId] || ""));
-      apiKeyDrafts[providerId] = "";
-    } catch (error) {
-      options.appendLog(`${error instanceof Error ? error.message : String(error)}\n`, "stderr");
-    }
+    await appRuntime.runPromise(saveSettingsKeyProgram(providerId, apiKeyDrafts[providerId] || "", providerPorts));
   }
 
   async function clearSettingsKey(providerId: string): Promise<void> {
-    try {
-      updateAppState(await api.clearApiKey(providerId));
-    } catch (error) {
-      options.appendLog(`${error instanceof Error ? error.message : String(error)}\n`, "stderr");
-    }
+    await appRuntime.runPromise(clearSettingsKeyProgram(providerId, providerPorts));
   }
 
   function selectOnboardingProvider(providerId: string): void {
@@ -193,14 +182,7 @@ export function useProviderSettings(api: Window["subtitleLLM"], options: Provide
   }
 
   async function saveOnboardingKey(): Promise<void> {
-    try {
-      updateAppState(await api.saveApiKey(selectedOnboardingProviderId.value, onboardingApiKey.value));
-      selectedProviderId.value = selectedOnboardingProviderId.value;
-      onboardingApiKey.value = "";
-      syncModelSelection();
-    } catch (error) {
-      options.appendLog(`${error instanceof Error ? error.message : String(error)}\n`, "stderr");
-    }
+    await appRuntime.runPromise(saveOnboardingKeyProgram(selectedOnboardingProviderId.value, onboardingApiKey.value, providerPorts));
   }
 
   function openSettingsFromOnboarding(): void {

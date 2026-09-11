@@ -1,6 +1,15 @@
 import type { LucideIcon } from "@lucide/vue";
 import type { OutputFormat, ReviewMode } from "../../../types";
 
+export type LogKind = "stdout" | "stderr";
+
+export interface LogLine {
+  id: number;
+  time: string;
+  kind: LogKind;
+  text: string;
+}
+
 export type TaskTab = "translate" | "download" | "transcribe" | "settings";
 export type ResultTarget = "subtitle" | "trace" | "video" | "source";
 

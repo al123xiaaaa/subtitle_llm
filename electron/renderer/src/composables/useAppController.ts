@@ -5,9 +5,16 @@ import { useJobLifecycle } from "./useJobLifecycle";
 import { useProviderSettings } from "./useProviderSettings";
 import { useTaskForms } from "./useTaskForms";
 import { cleanString, looksLikeUrl } from "./controllerUtils";
+import { appRuntime, runBridge, runSilent } from "../effect/runtime";
+import { makeReusableController } from "../effect/programs/reusable";
+import {
+  refreshTaskRecords as refreshTaskRecordsProgram,
+  restoreTaskRecord as restoreTaskRecordProgram,
+  softDeleteTaskRecord as softDeleteTaskRecordProgram,
+} from "../effect/programs/records";
+import type { TaskRecordsPorts } from "../effect/programs/records";
 
 export function useAppController() {
-  const api = window.subtitleLLM;
   const isBusy = ref(false);
   const taskRecords = ref<TranslationTaskSummary[]>([]);
   const taskRecordsStatus = ref("加载中");
@@ -15,18 +22,18 @@ export function useAppController() {
   const shell = useAppShell(isBusy);
   let taskForms = {} as ReturnType<typeof useTaskForms>;
   let jobLifecycle = {} as ReturnType<typeof useJobLifecycle>;
-  const providerState = useProviderSettings(api, {
+  const providerState = useProviderSettings({
     appendLog: (text, kind) => jobLifecycle.appendLog(text, kind),
     getUseYamlConfig: () => Boolean(taskForms.translateForm?.useYamlConfig),
     setActiveTab: shell.setActiveTab,
   });
 
-  taskForms = useTaskForms(api, {
+  taskForms = useTaskForms({
     appState: providerState.appState,
     ffmpegAvailable: providerState.ffmpegAvailable,
   });
 
-  jobLifecycle = useJobLifecycle(api, {
+  jobLifecycle = useJobLifecycle({
     configDrawerOpen: shell.configDrawerOpen,
     isBusy,
     onSourceVideoPath: (filePath) => {
@@ -132,13 +139,17 @@ export function useAppController() {
     return providerState.modelSelection();
   }
 
+  const recordsPorts: TaskRecordsPorts = {
+    showDeletedTaskRecords,
+    taskRecords,
+    setStatus: (text) => {
+      taskRecordsStatus.value = text;
+    },
+    appendLog: (text, kind) => jobLifecycle.appendLog(text, kind),
+  };
+
   async function refreshTaskRecords(): Promise<void> {
-    try {
-      taskRecords.value = await api.listTranslationTasks(showDeletedTaskRecords.value);
-      taskRecordsStatus.value = taskRecords.value.length ? "" : "暂无翻译任务记录";
-    } catch (error) {
-      taskRecordsStatus.value = error instanceof Error ? error.message : String(error);
-    }
+    await appRuntime.runPromise(refreshTaskRecordsProgram(recordsPorts));
   }
 
   async function continueTaskRecord(record: TranslationTaskSummary): Promise<void> {
@@ -156,42 +167,34 @@ export function useAppController() {
   }
 
   async function softDeleteTaskRecord(record: TranslationTaskSummary): Promise<void> {
-    const result = await api.softDeleteTranslationTask(record.task_id);
-    if (!result.ok) {
-      jobLifecycle.appendLog(`${result.error || result.message || "删除任务记录失败"}\n`, "stderr");
-    }
-    await refreshTaskRecords();
+    await appRuntime.runPromise(softDeleteTaskRecordProgram(record.task_id, recordsPorts));
   }
 
   async function restoreTaskRecord(record: TranslationTaskSummary): Promise<void> {
-    const result = await api.restoreTranslationTask(record.task_id);
-    if (!result.ok) {
-      jobLifecycle.appendLog(`${result.error || result.message || "恢复任务记录失败"}\n`, "stderr");
-    }
-    await refreshTaskRecords();
+    await appRuntime.runPromise(restoreTaskRecordProgram(record.task_id, recordsPorts));
   }
 
   async function openTaskOutput(record: TranslationTaskSummary): Promise<void> {
     if (record.output_file) {
-      await api.openPath(record.output_file);
+      await runSilent((bridge) => bridge.openPath(record.output_file as string));
     }
   }
 
   async function showTaskOutput(record: TranslationTaskSummary): Promise<void> {
     if (record.output_file) {
-      await api.showInFolder(record.output_file);
+      await runSilent((bridge) => bridge.showInFolder(record.output_file as string));
     }
   }
 
   async function openTaskSourceVideo(record: TranslationTaskSummary): Promise<void> {
     if (record.source_video_file) {
-      await api.openPath(record.source_video_file);
+      await runSilent((bridge) => bridge.openPath(record.source_video_file as string));
     }
   }
 
   async function showTaskSourceVideo(record: TranslationTaskSummary): Promise<void> {
     if (record.source_video_file) {
-      await api.showInFolder(record.source_video_file);
+      await runSilent((bridge) => bridge.showInFolder(record.source_video_file as string));
     }
   }
 
@@ -203,47 +206,25 @@ export function useAppController() {
   // 输入 URL 变化时去任务记录里找可复用的源字幕（上次下载/ASR 产物），
   // 找到就提示用户复用还是重新生成，避免重跑时白白再转写一遍。
   const reusableSubtitle = ref<ReusableSubtitleMatch | null>(null);
-  let reusableQueryToken = 0;
   let reusableDismissedFor = "";
-  let reusableQueryTimer: ReturnType<typeof setTimeout> | null = null;
+  const reusableController = makeReusableController({
+    reusableSubtitle,
+    getInput: () => taskForms.translateForm.input,
+    isBusy: () => isBusy.value,
+    getDismissedFor: () => reusableDismissedFor,
+    setDismissedFor: (value) => {
+      reusableDismissedFor = value;
+    },
+  });
 
   function dismissReusableSubtitle(): void {
-    reusableDismissedFor = cleanString(taskForms.translateForm.input);
-    reusableSubtitle.value = null;
-  }
-
-  async function queryReusableSubtitle(url: string): Promise<void> {
-    const token = ++reusableQueryToken;
-    try {
-      const match = await api.findReusableSubtitle(url);
-      if (token !== reusableQueryToken || cleanString(taskForms.translateForm.input) !== url) {
-        return;
-      }
-      reusableSubtitle.value = match && url !== reusableDismissedFor ? match : null;
-    } catch {
-      if (token === reusableQueryToken) {
-        reusableSubtitle.value = null;
-      }
-    }
+    reusableController.dismiss();
   }
 
   watch(
     () => taskForms.translateForm.input,
     (value) => {
-      if (reusableQueryTimer) {
-        clearTimeout(reusableQueryTimer);
-        reusableQueryTimer = null;
-      }
-      const url = cleanString(value);
-      if (!looksLikeUrl(url) || isBusy.value) {
-        reusableQueryToken += 1;
-        reusableSubtitle.value = null;
-        return;
-      }
-      reusableQueryTimer = setTimeout(() => {
-        reusableQueryTimer = null;
-        void queryReusableSubtitle(url);
-      }, 400);
+      reusableController.onInputChanged(value);
     },
   );
 
@@ -288,7 +269,7 @@ export function useAppController() {
 
   onMounted(async () => {
     try {
-      providerState.updateAppState(await api.getState());
+      providerState.updateAppState(await runBridge((bridge) => bridge.getState()));
       taskForms.syncEmbedDefault();
       await refreshTaskRecords();
     } catch (error) {

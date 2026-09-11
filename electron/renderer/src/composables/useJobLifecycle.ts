@@ -1,10 +1,13 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import type { Ref } from "vue";
-import type { CliResultEvent, CommandName, DesktopJobRequest, JobEvent } from "../../../types";
-import { formatProgressLogLine } from "../../../lib/progressModel";
+import { Effect, Fiber, Stream } from "effect";
+import type { CommandName, DesktopJobRequest } from "../../../types";
 import { useJobProgress } from "./useJobProgress";
-import type { ResultTarget } from "./controllerTypes";
+import type { LogKind, LogLine, ResultTarget } from "./controllerTypes";
 import { cleanString } from "./controllerUtils";
+import { appRuntime, runSilent } from "../effect/runtime";
+import { jobEventsStream, subscribeJobEvents } from "../effect/jobEvents";
+import { createJobProgram } from "../effect/programs/job";
 
 interface JobLifecycleOptions {
   configDrawerOpen: Ref<boolean>;
@@ -13,14 +16,7 @@ interface JobLifecycleOptions {
   onSubtitlePath: (filePath: string) => void;
 }
 
-interface LogLine {
-  id: number;
-  time: string;
-  kind: "stdout" | "stderr";
-  text: string;
-}
-
-export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycleOptions) {
+export function useJobLifecycle(options: JobLifecycleOptions) {
   const activeJobId = ref("");
   const activeCommand = ref<CommandName | "">("");
   const runStatus = ref("待命");
@@ -31,7 +27,6 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
   const logAutoScroll = ref(true);
   let logLineId = 0;
   const elapsedText = ref("");
-  let elapsedTimer: ReturnType<typeof setInterval> | null = null;
   const lastOutputPath = ref("");
   const lastSubtitlePath = ref("");
   const lastEmbeddedVideoPath = ref("");
@@ -44,22 +39,31 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
   const hasAnyResult = computed(
     () => hasSubtitleResult.value || hasVideoResult.value || hasTraceResult.value || hasSourceVideoResult.value,
   );
-  let lastLogStage = "";
-  let unsubscribeJobEvents: (() => void) | null = null;
+  let eventsFiber: Fiber.RuntimeFiber<void, never> | null = null;
+  let elapsedFiber: Fiber.RuntimeFiber<never, never> | null = null;
 
   const progress = useJobProgress();
 
-  function setBusy(nextBusy: boolean): void {
-    options.isBusy.value = nextBusy;
-    if (nextBusy) {
-      options.configDrawerOpen.value = false;
-    }
-    if (!nextBusy) {
-      activeJobId.value = "";
-    }
-  }
+  const program = createJobProgram({
+    isBusy: options.isBusy,
+    configDrawerOpen: options.configDrawerOpen,
+    activeJobId,
+    activeCommand,
+    runStatus,
+    lastOutputPath,
+    lastSubtitlePath,
+    lastEmbeddedVideoPath,
+    lastLlmTraceDir,
+    lastSourceVideoPath,
+    appendLog,
+    onSubtitlePath: options.onSubtitlePath,
+    onSourceVideoPath: options.onSourceVideoPath,
+    recordProgress: progress.recordProgress,
+    resetProgress: progress.resetProgress,
+    finishProgress: progress.finishJobProgress,
+  });
 
-  function appendLog(text: string, kind: "stdout" | "stderr" = "stdout"): void {
+  function appendLog(text: string, kind: LogKind = "stdout"): void {
     const prefix = kind === "stderr" ? "[stderr] " : "";
     logText.value += `${prefix}${text}`;
     const time = new Date().toTimeString().slice(0, 8);
@@ -111,10 +115,6 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
     }
   }
 
-  function setStatus(text: string): void {
-    runStatus.value = text;
-  }
-
   function setOutputPath(filePath: unknown): void {
     const cleaned = cleanString(filePath);
     if (!cleaned) {
@@ -133,65 +133,12 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
     options.onSubtitlePath(cleaned);
   }
 
-  function setSourceVideoPath(filePath: unknown): void {
-    const cleaned = cleanString(filePath);
-    if (!cleaned) {
-      return;
-    }
-    lastSourceVideoPath.value = cleaned;
-    options.onSourceVideoPath(cleaned);
-  }
-
-  function setEmbeddedVideoPath(filePath: unknown): void {
-    const cleaned = cleanString(filePath);
-    if (!cleaned) {
-      return;
-    }
-    lastEmbeddedVideoPath.value = cleaned;
-    setOutputPath(cleaned);
-  }
-
-  function setLlmTraceDir(filePath: unknown): void {
-    const cleaned = cleanString(filePath);
-    if (!cleaned) {
-      return;
-    }
-    lastLlmTraceDir.value = cleaned;
-  }
-
-  function applyResultEvent(event: CliResultEvent): void {
-    setSubtitlePath(event.output_file);
-    setSourceVideoPath(event.source_video_file);
-    setEmbeddedVideoPath(event.output_video_file || event.embedded_video_file);
-    setLlmTraceDir(event.llm_trace_dir);
-  }
-
   async function startJob(request: DesktopJobRequest): Promise<void> {
-    try {
-      setBusy(true);
-      setStatus("启动中");
-      progress.resetProgress(request.command);
-      appendLog(`\n$ subtitle-llm ${request.command}\n`);
-      const response = await api.startJob(request);
-      activeJobId.value = response.jobId;
-      activeCommand.value = request.command;
-    } catch (error) {
-      setBusy(false);
-      setStatus("启动失败");
-      progress.finishJobProgress(false);
-      appendLog(`${error instanceof Error ? error.message : String(error)}\n`, "stderr");
-    }
+    await appRuntime.runPromise(program.startJob(request));
   }
 
   async function cancelJob(): Promise<void> {
-    if (!activeJobId.value) {
-      return;
-    }
-    const result = await api.cancelJob(activeJobId.value);
-    if (result.ok) {
-      setStatus("正在取消");
-      appendLog("正在取消任务...\n");
-    }
+    await appRuntime.runPromise(program.cancelJob());
   }
 
   function clearLog(): void {
@@ -215,74 +162,55 @@ export function useJobLifecycle(api: Window["subtitleLLM"], options: JobLifecycl
   async function openResult(target: ResultTarget): Promise<void> {
     const filePath = resultPath(target);
     if (filePath) {
-      await api.openPath(filePath);
+      await runSilent((bridge) => bridge.openPath(filePath));
     }
   }
 
   async function showResult(target: ResultTarget): Promise<void> {
     const filePath = resultPath(target);
     if (filePath) {
-      await api.showInFolder(filePath);
+      await runSilent((bridge) => bridge.showInFolder(filePath));
     }
   }
 
   async function openOutput(): Promise<void> {
     if (lastOutputPath.value) {
-      await api.openPath(lastOutputPath.value);
+      await runSilent((bridge) => bridge.openPath(lastOutputPath.value));
     }
   }
 
   async function showOutput(): Promise<void> {
     if (lastOutputPath.value) {
-      await api.showInFolder(lastOutputPath.value);
-    }
-  }
-
-  function handleJobEvent(event: JobEvent): void {
-    if (event.type === "started") {
-      setStatus("运行中");
-      progress.resetProgress(event.command);
-      lastLogStage = "";
-      appendLog(`Python: ${event.pythonExecutable}\n工作目录: ${event.cwd}\n`);
-      if (event.generatedConfigPath) {
-        appendLog(`模型配置: ${event.generatedConfigPath}\n`);
-      }
-    } else if (event.type === "stdout") {
-      appendLog(event.text);
-    } else if (event.type === "stderr") {
-      appendLog(event.text, "stderr");
-    } else if (event.type === "progress") {
-      // 结构化进度事件已由主进程 stdoutProtocol 解析完毕，这里只做归约与展示。
-      progress.recordProgress(event.event);
-      const formatted = formatProgressLogLine(event.event, { previousStage: lastLogStage });
-      if (formatted) {
-        appendLog(`${formatted.line}\n`);
-        lastLogStage = formatted.stage;
-      }
-    } else if (event.type === "result") {
-      applyResultEvent(event.event);
-    } else if (event.type === "error") {
-      setBusy(false);
-      setStatus("失败");
-      progress.finishJobProgress(false);
-      appendLog(`${event.message}\n`, "stderr");
-    } else if (event.type === "finished") {
-      setBusy(false);
-      setStatus(event.code === 0 ? "完成" : `退出码 ${event.code}`);
-      progress.finishJobProgress(event.code === 0);
-      appendLog(`\n任务结束：code=${event.code} signal=${event.signal || "none"}\n`, event.code === 0 ? "stdout" : "stderr");
+      await runSilent((bridge) => bridge.showInFolder(lastOutputPath.value));
     }
   }
 
   onMounted(() => {
-    unsubscribeJobEvents = api.onJobEvent(handleJobEvent);
-    elapsedTimer = setInterval(refreshElapsed, 1000);
+    // 事件流：退订挂在流的生命周期上，fiber 中断时自动执行。
+    eventsFiber = appRuntime.runFork(
+      Stream.runForEach(jobEventsStream(subscribeJobEvents), (event) => program.handleEvent(event)),
+    );
+    elapsedFiber = appRuntime.runFork(
+      Effect.forever(
+        Effect.sleep("1 second").pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              refreshElapsed();
+            }),
+          ),
+        ),
+      ),
+    );
   });
 
   onUnmounted(() => {
-    unsubscribeJobEvents?.();
-    if (elapsedTimer) {
-      clearInterval(elapsedTimer);
+    if (eventsFiber) {
+      appRuntime.runFork(Fiber.interrupt(eventsFiber));
+      eventsFiber = null;
+    }
+    if (elapsedFiber) {
+      appRuntime.runFork(Fiber.interrupt(elapsedFiber));
+      elapsedFiber = null;
     }
   });
 
