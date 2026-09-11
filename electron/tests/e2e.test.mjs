@@ -179,6 +179,7 @@ const tests = [
   ["YouTube URL 翻译会自动启用 MKV，并传递正确 CLI 参数", testYoutubeTranslateWithMkv],
   ["长日志和多条任务记录保持在各自滚动区域", testBusyLayoutKeepsSectionsBounded],
   ["YouTube URL 可以勾选强制 ASR，不下载原字幕", testYoutubeTranslateForceAsr],
+  ["重跑同 URL 时提示复用已有字幕", testReuseSubtitleBanner],
   ["翻译默认不二次润色，勾选后传递 refine 参数", testRefineToggle],
   ["已有字幕和视频可以单独生成 MKV", testManualMuxFlow],
   ["API Key 可以从环境变量回退，跳过首次配置", testEnvCredentialFallback],
@@ -330,6 +331,61 @@ async function testYoutubeTranslateForceAsr() {
     assert.equal(commands.length, 1);
     assert.equal(commands[0].args.includes("--force-asr"), true);
   });
+}
+
+async function testReuseSubtitleBanner() {
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "subtitle-llm-reuse-fixture-"));
+  try {
+    const reusedSubtitle = path.join(fixtureDir, "Demo Video.srt");
+    const reusedVideo = path.join(fixtureDir, "Demo Video.webm");
+    fs.writeFileSync(reusedSubtitle, "1\n00:00:00,000 --> 00:00:01,000\nHello\n", "utf8");
+    fs.writeFileSync(reusedVideo, "video", "utf8");
+    const taskRecords = [
+      {
+        task_id: "reuse-task-1",
+        status: "completed",
+        input_display: youtubeUrl,
+        working_directory: projectRoot,
+        source_url: youtubeUrl,
+        source_subtitle_path: reusedSubtitle,
+        target_language: "Chinese",
+        source_language: "en",
+        output_format: "source-first",
+        output_file: path.join(fixtureDir, "Demo Video.zh.srt"),
+        source_video_file: reusedVideo,
+        created_at: "2026-09-10T15:20:21+00:00",
+        updated_at: "2026-09-10T15:35:13+00:00",
+        deleted_at: null,
+      },
+    ];
+
+    await withApp(
+      { env: { SUBTITLE_LLM_E2E_TASKS_JSON: JSON.stringify(taskRecords) } },
+      async ({ page, commandLogPath }) => {
+        await saveOnboardingKey(page);
+        await page.locator("#translateInput").fill(youtubeUrl);
+        await page.locator("#forceAsr").check();
+
+        const banner = page.locator("#reuseSubtitleBanner");
+        await banner.waitFor({ state: "visible" });
+        await banner.locator("strong", { hasText: "发现可复用的字幕" }).waitFor();
+        assert.ok((await banner.innerText()).includes("Demo Video"));
+
+        await page.locator("#reuseSubtitleUse").click();
+        await waitForRunStatus(page, "完成");
+        await banner.waitFor({ state: "hidden" });
+
+        const commands = readCommands(commandLogPath).filter((entry) => entry.command === "translate");
+        assert.equal(commands.length, 1);
+        assertHasArg(commands[0].args, "--reuse-subtitle", reusedSubtitle);
+        assert.equal(commands[0].args.includes("--force-asr"), false);
+        assert.equal(commands[0].args.includes("--embed-video"), true);
+        assertHasArg(commands[0].args, "--video", reusedVideo);
+      },
+    );
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
 }
 
 async function testRefineToggle() {

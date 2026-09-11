@@ -4,6 +4,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlparse
 
 import typer
 from dotenv import load_dotenv
@@ -41,6 +42,8 @@ def _validate_translate_options(
     output_file: str | None,
     resume: bool,
     task_id: str | None,
+    force_asr: bool = False,
+    reuse_subtitle: Path | None = None,
 ) -> None:
     if task_id:
         if not resume:
@@ -56,6 +59,20 @@ def _validate_translate_options(
     if not target_language:
         typer.secho("缺少 --target-language", fg=typer.colors.RED, err=True)
         raise typer.Exit(2)
+    if reuse_subtitle is not None:
+        if resume:
+            typer.secho("--reuse-subtitle 不能和 --resume 一起使用", fg=typer.colors.RED, err=True)
+            raise typer.Exit(2)
+        if force_asr:
+            typer.secho("--reuse-subtitle 与 --force-asr 互斥：复用即不重新转写", fg=typer.colors.RED, err=True)
+            raise typer.Exit(2)
+        parsed = urlparse(input_file)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            typer.secho("--reuse-subtitle 仅支持 URL 输入", fg=typer.colors.RED, err=True)
+            raise typer.Exit(2)
+        if not reuse_subtitle.exists():
+            typer.secho(f"复用字幕不存在：{reuse_subtitle}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(2)
 
 
 def _load_service(
@@ -122,6 +139,10 @@ def translate(
         bool,
         typer.Option("--force-asr/--no-force-asr", help="For URL input, skip source subtitles and generate subtitles with ASR."),
     ] = False,
+    reuse_subtitle: Annotated[
+        Path | None,
+        typer.Option("--reuse-subtitle", help="URL 输入时复用已有字幕文件，跳过下载与 ASR 转写。"),
+    ] = None,
     asr_model: Annotated[
         str | None,
         typer.Option("--asr-model", help="ASR 模型 profile：fun-asr-nano / paraformer-zh / qwen3-asr（覆盖配置文件 asr 段）。"),
@@ -151,6 +172,8 @@ def translate(
         output_file=output_file,
         resume=resume,
         task_id=task_id,
+        force_asr=force_asr,
+        reuse_subtitle=reuse_subtitle,
     )
     log_path = configure_run_logging("translate")
     progress = ProgressEmitter("translate")
@@ -161,7 +184,7 @@ def translate(
         message="正在加载模型和翻译配置",
     )
     logger.info(
-        "用户操作: translate input=%s output=%s target_language=%s source_language=%s config=%s format=%s resume=%s task_id=%s review=%s refine=%s force_asr=%s embed_video=%s video=%s video_output=%s",
+        "用户操作: translate input=%s output=%s target_language=%s source_language=%s config=%s format=%s resume=%s task_id=%s review=%s refine=%s force_asr=%s reuse_subtitle=%s embed_video=%s video=%s video_output=%s",
         input_file,
         output_file,
         target_language,
@@ -173,6 +196,7 @@ def translate(
         review,
         refine,
         force_asr,
+        reuse_subtitle,
         embed_video,
         video_file,
         video_output,
@@ -190,6 +214,7 @@ def translate(
                 review_mode=None if review is None else ("tui" if review else "auto"),
                 refine_translation=refine,
                 force_asr=force_asr,
+                reuse_subtitle=str(reuse_subtitle) if reuse_subtitle else None,
                 task_id=task_id,
             ),
             progress=progress,
@@ -432,6 +457,7 @@ def list_tasks(
             "status": record.status,
             "input_display": record.input_display,
             "working_directory": record.working_directory,
+            "source_url": record.source_url,
             "source_subtitle_path": record.source_subtitle_path,
             "target_language": record.target_language,
             "source_language": record.source_language,

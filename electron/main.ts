@@ -144,6 +144,10 @@ ipcMain.handle("tasks:list", async (_event, includeDeleted = false) => {
   return runtime.listTranslationTasks(Boolean(includeDeleted));
 });
 
+ipcMain.handle("tasks:find-reusable-subtitle", async (_event, sourceUrl: string) => {
+  return runtime.findReusableSubtitle(String(sourceUrl || ""));
+});
+
 ipcMain.handle("tasks:soft-delete", async (_event, taskId: string) => {
   return runtime.softDeleteTranslationTask(taskId);
 });

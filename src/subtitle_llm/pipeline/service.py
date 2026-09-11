@@ -64,6 +64,8 @@ class TranslationRequest:
     refine_translation: bool | None = None
     force_asr: bool = False
     task_id: str | None = None
+    # URL 输入时复用已有字幕（通常是上次 ASR 产物），跳过下载与转写
+    reuse_subtitle: str | None = None
 
 
 @dataclass
@@ -136,6 +138,7 @@ class TranslationService:
             request.source_language,
             progress_contract,
             force_asr=request.force_asr,
+            reuse_subtitle=request.reuse_subtitle,
         )
         input_file = resolved_input.subtitle_file
         output_file = request.output_file or self._default_output_file(
@@ -566,7 +569,18 @@ class TranslationService:
         progress: ProgressContract,
         *,
         force_asr: bool = False,
+        reuse_subtitle: str | None = None,
     ) -> ResolvedInput:
+        if reuse_subtitle is not None:
+            progress.url_input_detected()
+            reuse_path = Path(reuse_subtitle)
+            if not reuse_path.exists():
+                raise RuntimeError(f"复用字幕不存在：{reuse_path}")
+            progress.subtitle_ready(str(reuse_path))
+            logger.info("复用已有字幕，跳过下载与ASR: input=%s subtitle=%s", input_file, reuse_path)
+            # 复用场景以 ASR 产物为主，沿用 ASR 来源的强制规范化
+            return ResolvedInput(subtitle_file=str(reuse_path), from_asr=True)
+
         if not self._is_url(input_file):
             progress.local_input_selected(input_file)
             return ResolvedInput(subtitle_file=input_file)

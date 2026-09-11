@@ -17,6 +17,7 @@ const bridge: SubtitleLlmBridge = {
   startJob: (request: DesktopJobRequest) => ipcRenderer.invoke("job:start", request),
   cancelJob: (jobId: string) => ipcRenderer.invoke("job:cancel", jobId),
   listTranslationTasks: (includeDeleted?: boolean) => ipcRenderer.invoke("tasks:list", includeDeleted),
+  findReusableSubtitle: (sourceUrl: string) => ipcRenderer.invoke("tasks:find-reusable-subtitle", sourceUrl),
   softDeleteTranslationTask: (taskId: string) => ipcRenderer.invoke("tasks:soft-delete", taskId),
   restoreTranslationTask: (taskId: string) => ipcRenderer.invoke("tasks:restore", taskId),
   openPath: (filePath: string) => ipcRenderer.invoke("shell:open-path", filePath),

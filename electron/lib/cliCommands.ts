@@ -66,9 +66,11 @@ function buildTranslateArgs(options: TranslateJobOptions): string[] {
     args.push("--refine");
   }
 
-  if (options.forceAsr) {
+  if (options.forceAsr && !cleanString(options.reuseSubtitle)) {
     args.push("--force-asr");
   }
+
+  addOption(args, "--reuse-subtitle", options.reuseSubtitle);
 
   addOption(args, "--asr-model", options.asrModel);
   addOption(args, "--asr-device", options.asrDevice);

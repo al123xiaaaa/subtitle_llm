@@ -103,6 +103,7 @@ export interface TranslateJobOptions {
   reviewMode?: ReviewMode;
   refineTranslation?: boolean;
   forceAsr?: boolean;
+  reuseSubtitle?: string;
   asrModel?: string;
   asrDevice?: string;
   resume?: boolean;
@@ -273,6 +274,7 @@ export interface TranslationTaskSummary {
   status: string;
   input_display: string;
   working_directory: string;
+  source_url?: string | null;
   source_subtitle_path: string;
   target_language: string;
   source_language: string;
@@ -284,6 +286,16 @@ export interface TranslationTaskSummary {
   context_file?: string | null;
   llm_trace_dir?: string | null;
   source_video_file?: string | null;
+}
+
+export interface ReusableSubtitleMatch {
+  taskId: string;
+  sourceUrl: string;
+  subtitlePath: string;
+  videoPath: string;
+  title: string;
+  sourceLanguage: string;
+  createdAt: string;
 }
 
 export interface SubtitleLlmBridge {
@@ -301,6 +313,7 @@ export interface SubtitleLlmBridge {
   startJob: (request: DesktopJobRequest) => Promise<JobStartResponse>;
   cancelJob: (jobId: string) => Promise<ShellResult>;
   listTranslationTasks: (includeDeleted?: boolean) => Promise<TranslationTaskSummary[]>;
+  findReusableSubtitle: (sourceUrl: string) => Promise<ReusableSubtitleMatch | null>;
   softDeleteTranslationTask: (taskId: string) => Promise<ShellResult>;
   restoreTranslationTask: (taskId: string) => Promise<ShellResult>;
   openPath: (filePath: string) => Promise<ShellResult>;

@@ -697,6 +697,60 @@ select {
   background: var(--danger-bg);
 }
 
+/* ===================== 复用字幕提示条 ===================== */
+.reuse-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-ring);
+  border-radius: var(--radius);
+  background: var(--accent-softter);
+}
+
+.reuse-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--accent-strong);
+}
+
+.reuse-banner-text strong {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
+}
+
+.reuse-banner-text span {
+  overflow-wrap: anywhere;
+}
+
+.reuse-banner-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.reuse-banner-actions .primary-button {
+  min-height: 30px;
+  padding: 0 12px;
+  font-size: var(--text-sm);
+}
+
+.reuse-banner-actions .ghost-button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: var(--text-sm);
+}
+
+.reuse-banner-actions .reuse-dismiss {
+  padding: 0 8px;
+  font-size: var(--text-md);
+  line-height: 1;
+}
+
 /* ===================== 状态药丸 ===================== */
 .status-pill {
   display: inline-flex;

@@ -111,6 +111,29 @@ assert.equal(
   }).includes("--force-asr"),
   true,
 );
+assert.deepEqual(
+  buildPythonArgs({
+    command: "translate",
+    options: {
+      input: "https://example.com/video",
+      targetLanguage: "Chinese",
+      reuseSubtitle: "data/input/demo.en.srt",
+    },
+  }).filter((arg) => arg === "--reuse-subtitle" || arg === "data/input/demo.en.srt"),
+  ["--reuse-subtitle", "data/input/demo.en.srt"],
+);
+assert.equal(
+  buildPythonArgs({
+    command: "translate",
+    options: {
+      input: "https://example.com/video",
+      targetLanguage: "Chinese",
+      forceAsr: true,
+      reuseSubtitle: "data/input/demo.en.srt",
+    },
+  }).includes("--force-asr"),
+  false,
+);
 
 assert.deepEqual(
   buildPythonArgs({

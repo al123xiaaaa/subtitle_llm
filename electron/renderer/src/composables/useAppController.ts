@@ -1,5 +1,5 @@
-import { computed, onMounted, ref } from "vue";
-import type { ModelSelection, ProviderSummary, TranslationTaskSummary } from "../../../types";
+import { computed, onMounted, ref, watch } from "vue";
+import type { ModelSelection, ProviderSummary, ReusableSubtitleMatch, TranslationTaskSummary } from "../../../types";
 import { useAppShell } from "./useAppShell";
 import { useJobLifecycle } from "./useJobLifecycle";
 import { useProviderSettings } from "./useProviderSettings";
@@ -48,14 +48,25 @@ export function useAppController() {
   const canStartMux = computed(() => !isBusy.value && taskForms.canStartMux.value);
 
   async function submitTranslate(): Promise<void> {
+    await startTranslate(null);
+  }
+
+  async function submitTranslateReuse(): Promise<void> {
+    await startTranslate(reusableSubtitle.value);
+  }
+
+  async function startTranslate(reuse: ReusableSubtitleMatch | null): Promise<void> {
+    reusableSubtitle.value = null;
     const output = cleanString(taskForms.translateForm.output);
     if (output) {
       jobLifecycle.setSubtitlePath(output);
     }
     await providerState.persistProviderPreference();
     const input = cleanString(taskForms.translateForm.input);
-    const video = cleanString(taskForms.translateForm.video);
-    const embedVideo = taskForms.translateForm.embedMkv && providerState.ffmpegAvailable.value && (looksLikeUrl(input) || Boolean(video));
+    const video = reuse?.videoPath || cleanString(taskForms.translateForm.video);
+    // 复用模式下 Python 不参与下载，无法自己解析视频，embed 依赖记录里的视频路径
+    const embedVideo = taskForms.translateForm.embedMkv && providerState.ffmpegAvailable.value
+      && (reuse ? Boolean(reuse.videoPath) : looksLikeUrl(input) || Boolean(video));
     await jobLifecycle.startJob({
       command: "translate",
       options: {
@@ -67,7 +78,8 @@ export function useAppController() {
         outputFormat: taskForms.translateForm.outputFormat,
         reviewMode: taskForms.translateForm.reviewMode,
         refineTranslation: taskForms.translateForm.refineTranslation,
-        forceAsr: taskForms.translateForm.forceAsr,
+        forceAsr: reuse ? false : taskForms.translateForm.forceAsr,
+        reuseSubtitle: reuse?.subtitlePath || "",
         asrModel: taskForms.translateForm.asrModel,
         asrDevice: taskForms.translateForm.asrDevice,
         resume: taskForms.translateForm.resume,
@@ -188,13 +200,63 @@ export function useAppController() {
     await refreshTaskRecords();
   }
 
+  // 输入 URL 变化时去任务记录里找可复用的源字幕（上次下载/ASR 产物），
+  // 找到就提示用户复用还是重新生成，避免重跑时白白再转写一遍。
+  const reusableSubtitle = ref<ReusableSubtitleMatch | null>(null);
+  let reusableQueryToken = 0;
+  let reusableDismissedFor = "";
+  let reusableQueryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function dismissReusableSubtitle(): void {
+    reusableDismissedFor = cleanString(taskForms.translateForm.input);
+    reusableSubtitle.value = null;
+  }
+
+  async function queryReusableSubtitle(url: string): Promise<void> {
+    const token = ++reusableQueryToken;
+    try {
+      const match = await api.findReusableSubtitle(url);
+      if (token !== reusableQueryToken || cleanString(taskForms.translateForm.input) !== url) {
+        return;
+      }
+      reusableSubtitle.value = match && url !== reusableDismissedFor ? match : null;
+    } catch {
+      if (token === reusableQueryToken) {
+        reusableSubtitle.value = null;
+      }
+    }
+  }
+
+  watch(
+    () => taskForms.translateForm.input,
+    (value) => {
+      if (reusableQueryTimer) {
+        clearTimeout(reusableQueryTimer);
+        reusableQueryTimer = null;
+      }
+      const url = cleanString(value);
+      if (!looksLikeUrl(url) || isBusy.value) {
+        reusableQueryToken += 1;
+        reusableSubtitle.value = null;
+        return;
+      }
+      reusableQueryTimer = setTimeout(() => {
+        reusableQueryTimer = null;
+        void queryReusableSubtitle(url);
+      }, 400);
+    },
+  );
+
   const formActions = {
     canStartMux,
     canStartTranslate,
+    dismissReusableSubtitle,
+    reusableSubtitle,
     submitDownload,
     submitMux,
     submitTranscribe,
     submitTranslate,
+    submitTranslateReuse,
   };
 
   const onboarding = {

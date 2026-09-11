@@ -220,6 +220,107 @@ class TestNewCLI(unittest.TestCase):
         self.assertEqual(result.exit_code, 2)
         self.assertIn("不能同时指定新的 --input 或 --output", result.output)
 
+    def test_translate_command_maps_reuse_subtitle(self):
+        runner = CliRunner()
+        report = TranslationReport(
+            input_file="reused.en.srt",
+            output_file="output.srt",
+            context_file="output_context.txt",
+            total_entries=1,
+            processed_entries=1,
+            total_chunks=1,
+            completed_chunks=1,
+        )
+        fake_service = Mock()
+        fake_service.translate.return_value = Mock(report=report)
+
+        with isolated_filesystem() as tmp:
+            reused = Path(tmp) / "reused.en.srt"
+            reused.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n\n", encoding="utf-8")
+            with patch("subtitle_llm.cli.app._load_service", return_value=fake_service):
+                result = runner.invoke(
+                    app,
+                    [
+                        "translate",
+                        "--input",
+                        "https://example.test/video",
+                        "--target-language",
+                        "Chinese",
+                        "--reuse-subtitle",
+                        str(reused),
+                    ],
+                )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            request = fake_service.translate.call_args.args[0]
+            self.assertEqual(request.reuse_subtitle, str(reused))
+            self.assertFalse(request.force_asr)
+
+    def test_translate_command_rejects_reuse_subtitle_with_force_asr(self):
+        runner = CliRunner()
+
+        with isolated_filesystem() as tmp:
+            reused = Path(tmp) / "reused.en.srt"
+            reused.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n\n", encoding="utf-8")
+            result = runner.invoke(
+                app,
+                [
+                    "translate",
+                    "--input",
+                    "https://example.test/video",
+                    "--target-language",
+                    "Chinese",
+                    "--force-asr",
+                    "--reuse-subtitle",
+                    str(reused),
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 2)
+        self.assertIn("互斥", result.output)
+
+    def test_translate_command_rejects_reuse_subtitle_with_local_input(self):
+        runner = CliRunner()
+
+        with isolated_filesystem() as tmp:
+            reused = Path(tmp) / "reused.en.srt"
+            reused.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n\n", encoding="utf-8")
+            result = runner.invoke(
+                app,
+                [
+                    "translate",
+                    "--input",
+                    "input.srt",
+                    "--target-language",
+                    "Chinese",
+                    "--reuse-subtitle",
+                    str(reused),
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 2)
+        self.assertIn("仅支持 URL 输入", result.output)
+
+    def test_translate_command_rejects_missing_reuse_subtitle(self):
+        runner = CliRunner()
+
+        with isolated_filesystem():
+            result = runner.invoke(
+                app,
+                [
+                    "translate",
+                    "--input",
+                    "https://example.test/video",
+                    "--target-language",
+                    "Chinese",
+                    "--reuse-subtitle",
+                    "missing.srt",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 2)
+        self.assertIn("复用字幕不存在", result.output)
+
     def test_translate_command_can_embed_video_after_translation(self):
         runner = CliRunner()
         report = TranslationReport(

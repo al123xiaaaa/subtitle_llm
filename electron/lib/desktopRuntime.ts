@@ -8,6 +8,7 @@ import type {
   DesktopPreferences,
   FfmpegStatus,
   JobEvent,
+  ReusableSubtitleMatch,
   TranslationTaskSummary,
 } from "../types.js";
 import { buildEnv, buildPythonArgs } from "./cliCommands.js";
@@ -316,6 +317,35 @@ export function createDesktopRuntime({
     return JSON.parse(stdout || "[]") as TranslationTaskSummary[];
   }
 
+  // 重跑同 URL 时找到可复用的源字幕（通常是上次 ASR 产物），
+  // 让用户跳过下载与转写。取最近一次非删除记录，文件须仍在磁盘上。
+  function findReusableSubtitle(sourceUrl: string): ReusableSubtitleMatch | null {
+    const cleaned = cleanText(sourceUrl);
+    if (!cleaned) {
+      return null;
+    }
+    const candidates = listTranslationTasks()
+      .filter((task) => task.source_url === cleaned && task.source_subtitle_path)
+      .toSorted((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+    for (const task of candidates) {
+      const subtitlePath = resolveUserPath(task.source_subtitle_path);
+      if (!subtitlePath || !fs.existsSync(subtitlePath)) {
+        continue;
+      }
+      const videoPath = task.source_video_file ? resolveUserPath(task.source_video_file) : "";
+      return {
+        taskId: task.task_id,
+        sourceUrl: cleaned,
+        subtitlePath,
+        videoPath: videoPath && fs.existsSync(videoPath) ? videoPath : "",
+        title: path.basename(subtitlePath).replace(/\.[^.]+$/, ""),
+        sourceLanguage: task.source_language || "",
+        createdAt: task.created_at || "",
+      };
+    }
+    return null;
+  }
+
   function softDeleteTranslationTask(taskId: string) {
     const cleaned = cleanText(taskId);
     if (!cleaned) {
@@ -424,6 +454,7 @@ export function createDesktopRuntime({
   return {
     cancelJob,
     clearProviderApiKey,
+    findReusableSubtitle,
     getAppState,
     listProviderModels,
     listTranslationTasks,

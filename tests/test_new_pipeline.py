@@ -1092,5 +1092,55 @@ class TestNewPipeline(unittest.TestCase):
         self.assertEqual(result.removed_entry_indices, [2, 3])
 
 
+class TestReuseSubtitle(unittest.TestCase):
+    def test_reuse_subtitle_skips_download_and_asr(self):
+        # URL 输入 + 复用字幕：不触发 yt-dlp 下载/ASR，直接翻译复用文件。
+        # 若误走下载路径，伪 URL 会让用例失败。
+        with tempfile.TemporaryDirectory() as tmp:
+            reused_path = Path(tmp) / "reused.en.srt"
+            reused_path.write_text(
+                "1\n00:00:01,000 --> 00:00:02,000\nHello world.\n\n"
+                "2\n00:00:03,000 --> 00:00:04,000\nThis is a second line.\n\n",
+                encoding="utf-8",
+            )
+            output_path = Path(tmp) / "output.zh.srt"
+            service = TranslationService(
+                make_config(),
+                translation_client=FakeLLMClient(),
+                summary_client=FakeLLMClient(),
+            )
+
+            result = service.translate(
+                TranslationRequest(
+                    input_file="https://example.test/watch?v=nonexistent",
+                    output_file=str(output_path),
+                    target_language="Chinese",
+                    reuse_subtitle=str(reused_path),
+                )
+            )
+
+            output_text = output_path.read_text(encoding="utf-8")
+            self.assertIn("译文1", output_text)
+            self.assertEqual(result.report.input_file, str(reused_path))
+            self.assertEqual(result.report.total_entries, 2)
+
+    def test_reuse_subtitle_missing_file_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = TranslationService(
+                make_config(),
+                translation_client=FakeLLMClient(),
+                summary_client=FakeLLMClient(),
+            )
+            with self.assertRaisesRegex(RuntimeError, "复用字幕不存在"):
+                service.translate(
+                    TranslationRequest(
+                        input_file="https://example.test/watch?v=nonexistent",
+                        output_file=str(Path(tmp) / "output.zh.srt"),
+                        target_language="Chinese",
+                        reuse_subtitle=str(Path(tmp) / "missing.srt"),
+                    )
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

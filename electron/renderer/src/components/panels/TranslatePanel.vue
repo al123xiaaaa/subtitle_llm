@@ -29,7 +29,17 @@ const {
   onTranslateInput,
   translateForm,
 } = props.forms;
-const { canStartMux, canStartTranslate, submitMux, submitTranslate } = props.formActions;
+const { canStartMux, canStartTranslate, dismissReusableSubtitle, reusableSubtitle, submitMux, submitTranslate, submitTranslateReuse } = props.formActions;
+
+function formatReuseTime(createdAt: string): string {
+  const time = new Date(createdAt);
+  return Number.isNaN(time.getTime()) ? createdAt : time.toLocaleString();
+}
+
+function regenerateFromScratch(): void {
+  dismissReusableSubtitle();
+  void submitTranslate();
+}
 const {
   configureProvider,
   configureProviderText,
@@ -78,6 +88,45 @@ const { ffmpegAvailable } = props.providerState;
               @input="onTranslateInput"
             >
           </label>
+          <div
+            v-if="reusableSubtitle"
+            id="reuseSubtitleBanner"
+            class="reuse-banner span-2"
+          >
+            <div class="reuse-banner-text">
+              <strong>发现可复用的字幕</strong>
+              <span>《{{ reusableSubtitle.title }}》生成于 {{ formatReuseTime(reusableSubtitle.createdAt) }}，复用可跳过下载与 ASR 转写</span>
+            </div>
+            <div class="reuse-banner-actions">
+              <button
+                id="reuseSubtitleUse"
+                class="primary-button"
+                type="button"
+                :disabled="isBusy || !canStartTranslate"
+                @click="submitTranslateReuse"
+              >
+                复用并继续
+              </button>
+              <button
+                id="reuseSubtitleRegenerate"
+                class="ghost-button"
+                type="button"
+                :disabled="isBusy"
+                @click="regenerateFromScratch"
+              >
+                重新生成
+              </button>
+              <button
+                id="reuseSubtitleDismiss"
+                class="ghost-button reuse-dismiss"
+                type="button"
+                aria-label="忽略"
+                @click="dismissReusableSubtitle"
+              >
+                ×
+              </button>
+            </div>
+          </div>
           <label>
             <span>目标语言</span>
             <input
