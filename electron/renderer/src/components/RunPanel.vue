@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed, ref } from "vue";
 import { Languages } from "@lucide/vue";
 import type { useAppController } from "../composables/useAppController";
 
@@ -44,6 +45,17 @@ const {
   selectedProgressChunk,
   showResult,
 } = props.job;
+
+// 任务结束后片段网格收成一行摘要（进度区仍是主角，但完成态不再被
+// 满屏绿格子稀释）；用户可展开回看。运行中永远展开。
+const chunkExpanded = ref(false);
+const isDone = computed(() => progressChunks.value.length > 0 && !activeJobId.value);
+const chunksCollapsed = computed(() => isDone.value && !chunkExpanded.value);
+
+// 失败时日志自动展开——错误永远不该藏在折叠区里
+const logAutoOpen = computed(
+  () => runStatus.value.startsWith("失败") || runStatus.value.startsWith("退出码"),
+);
 </script>
 
 <template>
@@ -142,64 +154,77 @@ const {
               {{ progressChunkSummary }}
             </p>
           </div>
-          <span class="status-pill is-env">并发</span>
-        </div>
-        <div
-          class="chunk-grid"
-          role="list"
-          aria-label="Chunk activity"
-        >
-          <button
-            v-for="chunk in progressChunks"
-            :key="chunk.index"
-            type="button"
-            :class="['chunk-cell', `is-${chunk.status}`, { 'is-selected': selectedProgressChunk?.index === chunk.index }]"
-            :title="chunkTooltip(chunk)"
-            :aria-label="chunkTooltip(chunk)"
-            @click="selectChunk(chunk.index)"
-          />
-        </div>
-        <div
-          class="chunk-legend"
-          aria-hidden="true"
-        >
-          <span
-            v-for="legend in progressChunkLegendItems"
-            :key="legend.status"
-            class="chunk-legend-item"
-          >
-            <i :class="['legend-swatch', `is-${legend.status}`]" />{{ legend.label }}
-          </span>
-        </div>
-        <div
-          v-if="selectedProgressChunk"
-          id="chunkActivityDetail"
-          class="chunk-detail"
-        >
-          <div>
-            <strong>Chunk {{ selectedProgressChunk.index }} / {{ selectedProgressChunk.total }}</strong>
-            <span>{{ chunkStatusLabel(selectedProgressChunk.status) }}</span>
+          <div class="chunk-activity-actions">
+            <span class="status-pill is-env">并发</span>
+            <button
+              v-if="isDone"
+              id="toggleChunkActivity"
+              class="ghost-button"
+              type="button"
+              :aria-expanded="!chunksCollapsed"
+              @click="chunkExpanded = !chunkExpanded"
+            >
+              {{ chunksCollapsed ? "展开" : "收起" }}
+            </button>
           </div>
-          <p>{{ selectedProgressChunk.message }}</p>
-          <p>
-            字幕
-            {{ selectedProgressChunk.entryStart || "?" }}
-            -
-            {{ selectedProgressChunk.entryEnd || "?" }}
-            <span v-if="selectedProgressChunk.model"> · {{ selectedProgressChunk.model }}</span>
-            <span v-if="selectedProgressChunk.durationMs"> · {{ (selectedProgressChunk.durationMs / 1000).toFixed(1) }}s</span>
-            <span v-if="selectedProgressChunk.traceId"> · trace {{ selectedProgressChunk.traceId }}</span>
-          </p>
-          <p v-if="selectedProgressChunk.issueSummary">
-            {{ selectedProgressChunk.issueSummary }}
-          </p>
         </div>
+        <template v-if="!chunksCollapsed">
+          <div
+            class="chunk-grid"
+            role="list"
+            aria-label="Chunk activity"
+          >
+            <button
+              v-for="chunk in progressChunks"
+              :key="chunk.index"
+              type="button"
+              :class="['chunk-cell', `is-${chunk.status}`, { 'is-selected': selectedProgressChunk?.index === chunk.index }]"
+              :title="chunkTooltip(chunk)"
+              :aria-label="chunkTooltip(chunk)"
+              @click="selectChunk(chunk.index)"
+            />
+          </div>
+          <div
+            class="chunk-legend"
+            aria-hidden="true"
+          >
+            <span
+              v-for="legend in progressChunkLegendItems"
+              :key="legend.status"
+              class="chunk-legend-item"
+            >
+              <i :class="['legend-swatch', `is-${legend.status}`]" />{{ legend.label }}
+            </span>
+          </div>
+          <div
+            v-if="selectedProgressChunk"
+            id="chunkActivityDetail"
+            class="chunk-detail"
+          >
+            <div>
+              <strong>Chunk {{ selectedProgressChunk.index }} / {{ selectedProgressChunk.total }}</strong>
+              <span>{{ chunkStatusLabel(selectedProgressChunk.status) }}</span>
+            </div>
+            <p>{{ selectedProgressChunk.message }}</p>
+            <p>
+              字幕
+              {{ selectedProgressChunk.entryStart || "?" }}
+              -
+              {{ selectedProgressChunk.entryEnd || "?" }}
+              <span v-if="selectedProgressChunk.model"> · {{ selectedProgressChunk.model }}</span>
+              <span v-if="selectedProgressChunk.durationMs"> · {{ (selectedProgressChunk.durationMs / 1000).toFixed(1) }}s</span>
+              <span v-if="selectedProgressChunk.traceId"> · trace {{ selectedProgressChunk.traceId }}</span>
+            </p>
+            <p v-if="selectedProgressChunk.issueSummary">
+              {{ selectedProgressChunk.issueSummary }}
+            </p>
+          </div>
+        </template>
       </section>
-    </div>
-    <div
-      id="resultFiles"
-      :class="['result-files', { 'is-hidden': !hasAnyResult }]"
-    >
+      <div
+        id="resultFiles"
+        :class="['result-files', { 'is-hidden': !hasAnyResult }]"
+      >
       <div
         id="subtitleResultRow"
         :class="['result-file-row', { 'is-hidden': !hasSubtitleResult }]"
@@ -309,9 +334,11 @@ const {
         </div>
       </div>
     </div>
+    </div>
     <details
       id="logDetails"
       class="log-details"
+      :open="logAutoOpen"
     >
       <summary>
         <span class="log-summary-title">运行日志</span>

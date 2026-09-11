@@ -222,6 +222,8 @@ async function testYoutubeTranslateWithMkv() {
 
     await page.locator("#progressCurrentMessage", { hasText: "任务已完成" }).waitFor();
     await page.locator("#chunkActivitySummary", { hasText: "4 个片段" }).waitFor();
+    // 完成后片段网格默认折叠成摘要行，先展开再点格子
+    await page.locator("#toggleChunkActivity").click();
     await page.locator("#chunkActivity .chunk-cell.is-warning").click();
     await page.locator("#chunkActivityDetail", { hasText: "仍有疑似缺失" }).waitFor();
     await page.locator("#subtitleResultPath", { hasText: "data/output/youtube.zh.srt" }).waitFor();

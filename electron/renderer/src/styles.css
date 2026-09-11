@@ -1190,6 +1190,13 @@ select {
   align-items: flex-start;
 }
 
+.chunk-activity-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
 .chunk-activity-heading > div {
   display: grid;
   gap: 2px;
