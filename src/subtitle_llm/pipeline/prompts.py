@@ -240,23 +240,23 @@ Now provide the repaired timed cue translations:
 
 SOURCE_CORRECTION_REPAIR_PROMPT = """You are a senior subtitle repair translator specializing in {target_language}.
 
-Repair exactly one timed subtitle cue because a hard source correction was not preserved.
+Repair the timed subtitle cues listed below because hard source corrections were not preserved in their current translations.
 
-**Source Correction To Enforce:**
-{correction}
+**Source Corrections To Enforce (one block per cue):**
+{corrections}
 
 **Nearby Cues:**
 {nearby_cues}
 
 **Instructions:**
-1. Repair only cue {cue_id}.
-2. Preserve the one-cue timing segmentation.
-3. Preserve all non-erroneous meaning from the source cue, including discourse markers such as "so", "okay", fillers, dates, numbers, and tone.
-4. Use the corrected source phrase and include one of the target aliases when natural.
+1. Repair exactly the cues referenced by the corrections (cue ids: {cue_ids}). Do not touch other cues.
+2. Preserve the one-cue timing segmentation of each repaired cue.
+3. Preserve all non-erroneous meaning from each source cue, including discourse markers such as "so", "okay", fillers, dates, numbers, and tone.
+4. For each correction, use the corrected source phrase and include one of the target aliases when natural.
 5. Output valid JSON only. No markdown fences, no explanations.
 
 Required JSON shape:
-{{"cue_id": {cue_id}, "translation": "Repaired translation for cue {cue_id}"}}
+{{"repairs": [{{"cue_id": <cue id>, "translation": "Repaired translation for that cue"}}, ...]}}
 """
 
 FIX_MISSING_TRANSLATIONS_PROMPT = """You are a professional translator specializing in {target_language}. Your task is to fix missing translations in a subtitle chunk.

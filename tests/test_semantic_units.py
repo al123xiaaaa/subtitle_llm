@@ -101,9 +101,9 @@ class SourceCorrectionSemanticClient:
                 ),
                 usage=CompletionUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
             )
-        if "Repair exactly one timed subtitle cue" in prompt:
+        if "Repair the timed subtitle cues listed below" in prompt:
             return CompletionResult(
-                content='{"cue_id": 2, "translation": "所以，齐普赛街。都铎伦敦的主要市场大街。"}',
+                content='{"repairs": [{"cue_id": 2, "translation": "所以，齐普赛街。都铎伦敦的主要市场大街。"}]}',
                 usage=CompletionUsage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
             )
 
@@ -854,7 +854,7 @@ class TestSemanticUnits(unittest.TestCase):
             output_text = output_path.read_text(encoding="utf-8")
             self.assertIn("so Cheapside. The main market street of Tudor London", output_text)
             self.assertNotIn("so cheap side.The main market street of Tudor London", output_text)
-            self.assertTrue(any("Repair exactly one timed subtitle cue" in prompt for prompt in client.prompts))
+            self.assertTrue(any("Repair the timed subtitle cues listed below" in prompt for prompt in client.prompts))
             self.assertEqual(result.report.token_usage.total_tokens, 11)
 
     def test_tui_mode_still_translates_with_semantic_units(self):

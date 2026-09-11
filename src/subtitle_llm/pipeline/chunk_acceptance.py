@@ -1211,11 +1211,13 @@ class ChunkAcceptance:
             ],
         )
         entry_by_index = {entry.index: entry for entry in entries}
-        for flag in flags:
-            entry = entry_by_index.get(flag.cue_id)
-            if entry is None:
-                continue
-            self._repair_source_correction_flag(planned, entry, flag, entries)
+        pairs = [
+            (entry_by_index[flag.cue_id], flag)
+            for flag in flags
+            if flag.cue_id in entry_by_index
+        ]
+        if pairs:
+            self._repair_source_correction_flags(planned, pairs, entries)
 
         remaining_flags = find_unadopted_hard_corrections(corrections, entries)
         for flag in remaining_flags:
@@ -1236,20 +1238,25 @@ class ChunkAcceptance:
             )
         return entries
 
-    def _repair_source_correction_flag(
+    def _repair_source_correction_flags(
         self,
         planned: PlannedChunk,
-        entry: SubtitleEntry,
-        flag: SourceCorrectionFlag,
+        pairs: list[tuple[SubtitleEntry, SourceCorrectionFlag]],
         entries: list[SubtitleEntry],
     ) -> None:
-        before_repair = snapshot_entry_translations([entry])
+        # 同一片段的全部未采纳修正合并成一次 LLM 调用；串行逐 cue 修复
+        # 会让接受阶段多出 N 次调用、N 倍长尾。
+        before_repair = snapshot_entry_translations([entry for entry, _ in pairs])
         repair_usage = CompletionUsage()
+        nearby_ids: set[int] = set()
+        for entry, _flag in pairs:
+            for item in nearby_entries(entries, entry.index, window=1):
+                nearby_ids.add(item.index)
+        nearby = [entry for entry in entries if entry.index in nearby_ids]
         try:
-            repaired = self.translator.repair_source_correction_traced(
-                entry,
-                flag,
-                nearby_entries(entries, entry.index, window=1),
+            repairs = self.translator.repair_source_corrections_traced(
+                pairs,
+                nearby,
                 self.target_language,
                 repair_usage,
                 chunk_index=planned.index,
@@ -1257,27 +1264,38 @@ class ChunkAcceptance:
         except Exception as exc:
             self.report.token_usage.add_usage(repair_usage.to_dict())
             restore_entry_translations(before_repair)
-            entry.needs_retranslation = True
+            for entry, _flag in pairs:
+                entry.needs_retranslation = True
             logger.warning(
-                "source_correction_gate单cue修复失败，保留当前译文: chunk=%s cue=%s observed=%r corrected=%r error=%s",
+                "source_correction_gate批量修复失败，保留当前译文: chunk=%s cues=%s error=%s",
                 planned.index + 1,
-                entry.index,
-                flag.observed,
-                flag.corrected,
+                [entry.index for entry, _flag in pairs],
                 exc,
             )
             return
 
         self.report.token_usage.add_usage(repair_usage.to_dict())
-        entry.set_translated_text(repaired.text.strip())
-        entry.needs_retranslation = False
-        logger.info(
-            "source_correction_gate单cue修复完成: chunk=%s cue=%s observed=%r corrected=%r",
-            planned.index + 1,
-            entry.index,
-            flag.observed,
-            flag.corrected,
-        )
+        for entry, flag in pairs:
+            repaired = repairs.get(entry.index)
+            if not repaired:
+                entry.needs_retranslation = True
+                logger.warning(
+                    "source_correction_gate批量修复未覆盖cue: chunk=%s cue=%s observed=%r corrected=%r",
+                    planned.index + 1,
+                    entry.index,
+                    flag.observed,
+                    flag.corrected,
+                )
+                continue
+            entry.set_translated_text(repaired.strip())
+            entry.needs_retranslation = False
+            logger.info(
+                "source_correction_gate修复完成: chunk=%s cue=%s observed=%r corrected=%r",
+                planned.index + 1,
+                entry.index,
+                flag.observed,
+                flag.corrected,
+            )
 
     # ------------------------------------------------------------------
     # 语义单元辅助

@@ -664,34 +664,47 @@ class ChunkTranslator:
             emit_failure_progress=True,
         )
 
-    def repair_source_correction_traced(
+    def repair_source_corrections_traced(
         self,
-        entry: SubtitleEntry,
-        flag: SourceCorrectionFlag,
+        pairs: list[tuple[SubtitleEntry, SourceCorrectionFlag]],
         nearby_entries: list[SubtitleEntry],
         target_language: str,
         usage: CompletionUsage,
         chunk_index: int | None = None,
         stage: str = "source-correction-repair",
-    ) -> TracedTranslationText:
+    ) -> dict[int, str]:
+        """一次 LLM 调用修复同一片段内全部未采纳的硬性源文修正。
+
+        返回 {cue_id: 修复后的译文}；模型未覆盖或解析失败的 cue 不在返回值
+        里，由调用方决定回退。串行逐 cue 修复会把长尾拉成 N 次调用，这里
+        合并成一次以消除接受阶段的排队。
+        """
+        corrections_text = "\n\n".join(
+            f"cue {entry.index}:\n{flag.to_prompt_text()}" for entry, flag in pairs
+        )
         prompt = SOURCE_CORRECTION_REPAIR_PROMPT.format(
             target_language=target_language,
-            cue_id=entry.index,
-            correction=flag.to_prompt_text(),
+            corrections=corrections_text,
+            cue_ids=", ".join(str(entry.index) for entry, _ in pairs),
             nearby_cues=format_source_correction_nearby_cues(nearby_entries),
         )
-        return self._execute_operation(
+        entries = [entry for entry, _ in pairs]
+        result = self._execute_operation(
             stage=stage,
             prompt=prompt,
-            chunk=[entry],
+            chunk=entries,
             usage=usage,
             chunk_index=chunk_index,
-            process=lambda content: self._parse_source_correction_response(content, entry),
+            process=lambda content: self._parse_source_corrections_response(
+                content,
+                {entry.index for entry in entries},
+            ),
             progress_status="repairing",
             record_error=True,
             emit_failure_progress=True,
-            trace_format=lambda translation: f"[{entry.index}]\n{translation}",
+            trace_format=format_source_corrections_trace,
         )
+        return {int(cue_id): translation for cue_id, translation in json.loads(result.text).items()}
 
     def retranslate_alignment_drift(
         self,
@@ -746,18 +759,27 @@ class ChunkTranslator:
     # 响应解析器
     # ------------------------------------------------------------------
 
-    def _parse_source_correction_response(self, content: str, entry: SubtitleEntry) -> str:
+    def _parse_source_corrections_response(self, content: str, expected_ids: set[int]) -> str:
         payload = extract_json_payload(content)
         data = json.loads(payload)
-        if not isinstance(data, dict):
-            raise ValueError("source correction repair JSON must be an object")
-        cue_id = int(data.get("cue_id", entry.index))
-        if cue_id not in {entry.index, 1}:
-            raise ValueError(f"source correction repair cue_id mismatch: expected={entry.index}, actual={cue_id}")
-        translation = str(data.get("translation", "")).strip()
-        if not translation:
-            raise ValueError("source correction repair translation is empty")
-        return translation
+        items = data.get("repairs") if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            raise ValueError("source correction repair JSON must contain a repairs list")
+        repairs: dict[int, str] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                cue_id = int(item.get("cue_id"))
+            except (TypeError, ValueError):
+                continue
+            translation = str(item.get("translation", "")).strip()
+            if cue_id in expected_ids and translation:
+                repairs[cue_id] = translation
+        if not repairs:
+            raise ValueError("source correction repair returned no usable repairs")
+        # 操作骨架要求 process 返回 str；这里返回规范化 JSON，由调用方解析回映射。
+        return json.dumps(repairs, ensure_ascii=False, sort_keys=True)
 
     def _process_semantic_timed_response(
         self,
@@ -814,3 +836,14 @@ def format_source_correction_nearby_cues(entries: list[SubtitleEntry]) -> str:
         )
         for entry in entries
     )
+
+
+def format_source_corrections_trace(text: str) -> str:
+    """把批量修复的规范化 JSON 转成 trace 用的可读文本。"""
+    try:
+        repairs = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    if not isinstance(repairs, dict):
+        return text
+    return "\n".join(f"[{cue_id}]\n{translation}" for cue_id, translation in sorted(repairs.items()))
