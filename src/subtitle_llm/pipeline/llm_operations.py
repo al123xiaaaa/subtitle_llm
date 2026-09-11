@@ -22,6 +22,26 @@ class LlmOperationResult:
     duration_ms: int
 
 
+@dataclass(frozen=True)
+class RunUsageSnapshot:
+    """运行级累计用量快照：每次 LLM 调用返回时随进度事件发出，
+
+    桌面端据此展示实时 token/s，无需自行去重累计。"""
+
+    call_count: int
+    completion_tokens: int
+    total_tokens: int
+    call_duration_ms: int
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "call_count": self.call_count,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "call_duration_ms": self.call_duration_ms,
+        }
+
+
 class LlmOperationRunner:
     def __init__(
         self,
@@ -36,6 +56,10 @@ class LlmOperationRunner:
         self.trace_recorder = trace_recorder
         self.total_chunks = total_chunks
         self.progress = progress
+        self._run_call_count = 0
+        self._run_completion_tokens = 0
+        self._run_total_tokens = 0
+        self._run_call_duration_ms = 0
 
     def create_completion(
         self,
@@ -83,6 +107,7 @@ class LlmOperationRunner:
             raise
 
         duration_ms = elapsed_ms(started_at)
+        run_usage = self._accumulate_run_usage(completion.usage, duration_ms)
         self.emit_chunk_progress(
             stage,
             chunk_visual_status(stage),
@@ -91,8 +116,22 @@ class LlmOperationRunner:
             chunk_index,
             usage=completion.usage,
             duration_ms=duration_ms,
+            run_usage=run_usage,
         )
         return LlmOperationResult(completion=completion, duration_ms=duration_ms)
+
+    def _accumulate_run_usage(self, usage: CompletionUsage, duration_ms: int) -> RunUsageSnapshot:
+        # 片段线程池并发调用：GIL 下自增是安全的展示级指标，允许微小竞争
+        self._run_call_count += 1
+        self._run_completion_tokens += usage.completion_tokens
+        self._run_total_tokens += usage.total_tokens
+        self._run_call_duration_ms += duration_ms
+        return RunUsageSnapshot(
+            call_count=self._run_call_count,
+            completion_tokens=self._run_completion_tokens,
+            total_tokens=self._run_total_tokens,
+            call_duration_ms=self._run_call_duration_ms,
+        )
 
     def record_trace(
         self,
@@ -135,6 +174,7 @@ class LlmOperationRunner:
         usage: CompletionUsage | None = None,
         duration_ms: int | None = None,
         trace_id: str | None = None,
+        run_usage: RunUsageSnapshot | None = None,
     ) -> None:
         if self.progress is None or chunk is None:
             return
@@ -149,6 +189,7 @@ class LlmOperationRunner:
             usage=usage,
             trace_id=trace_id,
             duration_ms=duration_ms,
+            run_usage=run_usage.to_dict() if run_usage else None,
         )
 
 

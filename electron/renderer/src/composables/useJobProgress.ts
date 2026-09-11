@@ -4,6 +4,7 @@ import {
   applyProgressEvent,
   chunkLegendItems,
   chunkSummary,
+  chunkTokenRateText,
   chunkTooltip,
   createInitialJobProgressState,
   finishProgress,
@@ -11,6 +12,7 @@ import {
   selectedChunk,
   startProgress,
   statusLabel,
+  tokenThroughputText,
 } from "../../../lib/progressModel";
 
 export function useJobProgress() {
@@ -46,6 +48,7 @@ export function useJobProgress() {
   const progressLongWaitHint = computed(() =>
     progressWaitSeconds.value >= 90 ? "仍在等待响应，任务没有被标记为失败。" : "",
   );
+  const progressTokenText = computed(() => tokenThroughputText(progressState.value.runUsage));
 
   function resetProgress(command: CommandName): void {
     progressState.value = startProgress(command);
@@ -82,6 +85,7 @@ export function useJobProgress() {
 
   return {
     chunkStatusLabel: statusLabel,
+    chunkTokenRateText,
     chunkTooltip,
     clearProgress,
     finishJobProgress,
@@ -93,6 +97,7 @@ export function useJobProgress() {
     progressStages,
     progressState,
     progressStatusClass,
+    progressTokenText,
     progressWaitText,
     recordProgress,
     resetProgress,

@@ -1,6 +1,7 @@
 import type {
   ChunkProgressStatus,
   CliProgressEvent,
+  CliProgressRunUsage,
   CliProgressUsage,
   CommandName,
   ProgressStageStatus,
@@ -50,6 +51,7 @@ export interface JobProgressState {
   totalChunks: number;
   chunks: ChunkActivityItem[];
   selectedChunkIndex: number | null;
+  runUsage: Required<CliProgressRunUsage>;
 }
 
 export const STAGE_LABELS: Record<string, string> = {
@@ -77,6 +79,13 @@ const EMPTY_USAGE: Required<CliProgressUsage> = {
   total_tokens: 0,
 };
 
+const EMPTY_RUN_USAGE: Required<CliProgressRunUsage> = {
+  call_count: 0,
+  completion_tokens: 0,
+  total_tokens: 0,
+  call_duration_ms: 0,
+};
+
 const CHUNK_STATUS_ORDER: ChunkProgressStatus[] = [
   "waiting",
   "running",
@@ -102,6 +111,7 @@ export function createInitialJobProgressState(command: CommandName | "" = "", no
     totalChunks: 0,
     chunks: [],
     selectedChunkIndex: null,
+    runUsage: { ...EMPTY_RUN_USAGE },
   };
 }
 
@@ -164,6 +174,7 @@ export function applyProgressEvent(
     totalChunks: nextTotalChunks,
     chunks,
     selectedChunkIndex,
+    runUsage: normalizeRunUsage(event.run_usage) || state.runUsage,
   };
 }
 
@@ -210,6 +221,15 @@ export function chunkLegendItems(chunks: ChunkActivityItem[]): ChunkLegendItem[]
   }));
 }
 
+export function chunkTokenRateText(chunk: ChunkActivityItem): string {
+  const completionTokens = Number(chunk.usage.completion_tokens || 0);
+  const durationMs = Number(chunk.durationMs || 0);
+  if (!completionTokens || !durationMs) {
+    return "";
+  }
+  return `${(completionTokens / (durationMs / 1000)).toFixed(1)} tok/s`;
+}
+
 export function chunkTooltip(chunk: ChunkActivityItem): string {
   const range = chunk.entryStart && chunk.entryEnd ? `字幕 ${chunk.entryStart}-${chunk.entryEnd}` : "字幕范围未知";
   const lines = [
@@ -226,6 +246,10 @@ export function chunkTooltip(chunk: ChunkActivityItem): string {
   }
   if (chunk.durationMs) {
     lines.push(`耗时：${(chunk.durationMs / 1000).toFixed(1)}s`);
+  }
+  const rateText = chunkTokenRateText(chunk);
+  if (rateText) {
+    lines.push(`速度：${rateText}（输出 ${Number(chunk.usage.completion_tokens || 0).toLocaleString()} tokens）`);
   }
   if (chunk.traceId) {
     lines.push(`诊断：${chunk.traceId}`);
@@ -365,6 +389,30 @@ function normalizeStageStatus(status: unknown): ProgressStageStatus {
     return cleaned as ProgressStageStatus;
   }
   return "running";
+}
+
+function normalizeRunUsage(runUsage: CliProgressRunUsage | null | undefined): Required<CliProgressRunUsage> | null {
+  if (!runUsage) {
+    return null;
+  }
+  return {
+    call_count: Number(runUsage.call_count || 0),
+    completion_tokens: Number(runUsage.completion_tokens || 0),
+    total_tokens: Number(runUsage.total_tokens || 0),
+    call_duration_ms: Number(runUsage.call_duration_ms || 0),
+  };
+}
+
+// 运行级吞吐展示：run_usage 是 Python 侧每次 LLM 调用返回时发出的累计快照，
+// token/s = 累计输出 token / 累计调用耗时（只计模型生成时间，不含下载/排队）。
+export function tokenThroughputText(runUsage: Required<CliProgressRunUsage>): string {
+  const completionTokens = Number(runUsage.completion_tokens || 0);
+  const callDurationMs = Number(runUsage.call_duration_ms || 0);
+  if (!completionTokens || !callDurationMs) {
+    return "";
+  }
+  const perSecond = completionTokens / (callDurationMs / 1000);
+  return `输出 ${perSecond.toFixed(1)} tok/s · 共 ${Number(runUsage.total_tokens || 0).toLocaleString()} tokens`;
 }
 
 function normalizeChunkStatus(status: unknown): ChunkProgressStatus {

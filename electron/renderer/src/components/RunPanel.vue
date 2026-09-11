@@ -13,6 +13,7 @@ const {
   activeJobId,
   cancelJob,
   chunkStatusLabel,
+  chunkTokenRateText,
   chunkTooltip,
   clearLog,
   copyLog,
@@ -39,6 +40,7 @@ const {
   progressStages,
   progressState,
   progressStatusClass,
+  progressTokenText,
   progressWaitText,
   runStatus,
   selectChunk,
@@ -213,6 +215,7 @@ const logAutoOpen = computed(
               {{ selectedProgressChunk.entryEnd || "?" }}
               <span v-if="selectedProgressChunk.model"> · {{ selectedProgressChunk.model }}</span>
               <span v-if="selectedProgressChunk.durationMs"> · {{ (selectedProgressChunk.durationMs / 1000).toFixed(1) }}s</span>
+              <span v-if="chunkTokenRateText(selectedProgressChunk)"> · {{ chunkTokenRateText(selectedProgressChunk) }}</span>
               <span v-if="selectedProgressChunk.traceId"> · trace {{ selectedProgressChunk.traceId }}</span>
             </p>
             <p v-if="selectedProgressChunk.issueSummary">
@@ -346,6 +349,11 @@ const logAutoOpen = computed(
           v-if="elapsedText"
           class="log-elapsed"
         >已进行 {{ elapsedText }}</span>
+        <span
+          v-if="progressTokenText"
+          id="tokenThroughput"
+          class="log-tokens"
+        >{{ progressTokenText }}</span>
         <span
           v-if="latestLogLine"
           class="log-latest"

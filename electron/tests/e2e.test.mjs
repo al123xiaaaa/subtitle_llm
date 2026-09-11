@@ -89,6 +89,19 @@ setTimeout(() => {
     });
     progress({
       stage: "processing_chunks",
+      detail: "rough",
+      status: "running",
+      label: "初译",
+      message: "初译返回，耗时 16.8s",
+      total_chunks: 4,
+      chunk: { index: 2, total: 4, status: "running", entry_start: 20, entry_end: 39, detail: "rough" },
+      model: { provider: "deepseek", name: "deepseek-v4-pro" },
+      usage: { prompt_tokens: 5000, completion_tokens: 1200, total_tokens: 6200 },
+      duration_ms: 16800,
+      run_usage: { call_count: 1, completion_tokens: 1200, total_tokens: 6200, call_duration_ms: 16800 },
+    });
+    progress({
+      stage: "processing_chunks",
       detail: "tui_warning",
       status: "warning",
       label: "带风险继续",
@@ -222,6 +235,8 @@ async function testYoutubeTranslateWithMkv() {
     await waitForRunStatus(page, "完成");
 
     await page.locator("#progressCurrentMessage", { hasText: "任务已完成" }).waitFor();
+    await page.locator("#tokenThroughput", { hasText: "tok/s" }).waitFor();
+    await page.locator("#tokenThroughput", { hasText: "6,200 tokens" }).waitFor();
     await page.locator("#chunkActivitySummary", { hasText: "4 个片段" }).waitFor();
     // 完成后片段网格默认折叠成摘要行，先展开再点格子
     await page.locator("#toggleChunkActivity").click();

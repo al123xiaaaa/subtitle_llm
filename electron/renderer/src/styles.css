@@ -1483,6 +1483,17 @@ select {
   font-variant-numeric: tabular-nums;
 }
 
+.log-tokens {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-strong);
+  background: var(--accent-softter);
+  border-radius: 999px;
+  padding: 1px 9px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
 .log-latest {
   min-width: 0;
   overflow: hidden;

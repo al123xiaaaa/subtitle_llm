@@ -12,6 +12,8 @@ import {
   applyProgressEvent,
   chunkLegendItems,
   chunkSummary,
+  chunkTokenRateText,
+  chunkTooltip,
   createInitialJobProgressState,
   finishProgress,
   formatProgressLogLine,
@@ -19,6 +21,7 @@ import {
   selectedChunk,
   STAGE_LABELS,
   startProgress,
+  tokenThroughputText,
 } from "../../dist/electron/lib/progressModel.js";
 import { getProvider, listProviders, modelsFromApiResponse, resolveModelId } from "../../dist/electron/lib/providerCatalog.js";
 import { createStdoutProtocolParser } from "../../dist/electron/lib/stdoutProtocol.js";
@@ -387,6 +390,48 @@ assert.equal(selectedChunk(progress).issueSummary, "仍有疑似缺失");
 assert.match(chunkSummary(progress.chunks), /1 个带风险/);
 assert.equal(finishProgress(progress, true, 1500).currentStatus, "done");
 assert.equal(createInitialJobProgressState().currentLabel, "等待任务");
+
+// run_usage 累计快照 → token/s 文案
+assert.equal(progress.runUsage.completion_tokens, 0, "无 run_usage 事件时保持 0");
+progress = applyProgressEvent(
+  progress,
+  {
+    command: "translate",
+    stage: "processing_chunks",
+    detail: "semantic_cue_rough",
+    status: "running",
+    label: "语义逐条初译",
+    message: "语义逐条初译返回，耗时 16.8s",
+    chunk: { index: 1, total: 3, status: "running", detail: "semantic_cue_rough" },
+    usage: { prompt_tokens: 5000, completion_tokens: 1200, total_tokens: 6200 },
+    duration_ms: 16800,
+    run_usage: { call_count: 1, completion_tokens: 1200, total_tokens: 6200, call_duration_ms: 16800 },
+  },
+  1600,
+);
+assert.equal(progress.runUsage.completion_tokens, 1200);
+assert.equal(progress.runUsage.call_count, 1);
+assert.match(tokenThroughputText(progress.runUsage), /^输出 71\.4 tok\/s · 共 6,?200 tokens$/);
+assert.match(chunkTokenRateText(progress.chunks[0]), /71\.4 tok\/s/);
+assert.match(chunkTooltip(progress.chunks[0]), /速度：71\.4 tok\/s/);
+progress = applyProgressEvent(
+  progress,
+  {
+    command: "translate",
+    stage: "processing_chunks",
+    detail: "semantic_cue_rough",
+    status: "running",
+    label: "语义逐条初译",
+    message: "语义逐条初译返回，耗时 3.2s",
+    chunk: { index: 2, total: 3, status: "running", detail: "semantic_cue_rough" },
+    usage: { prompt_tokens: 100, completion_tokens: 100, total_tokens: 200 },
+    duration_ms: 3200,
+    run_usage: { call_count: 2, completion_tokens: 1300, total_tokens: 6400, call_duration_ms: 20000 },
+  },
+  1700,
+);
+assert.match(tokenThroughputText(progress.runUsage), /^输出 65\.0 tok\/s/);
+assert.equal(tokenThroughputText(createInitialJobProgressState().runUsage), "");
 
 // formatProgressLogLine：详细日志面板的可读行格式
 assert.ok(STAGE_LABELS.processing_chunks, "processing_chunks 应有阶段标签");

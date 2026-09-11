@@ -246,6 +246,13 @@ export interface CliProgressUsage {
   total_tokens?: number | null;
 }
 
+export interface CliProgressRunUsage {
+  call_count?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+  call_duration_ms?: number | null;
+}
+
 export interface CliProgressEvent {
   command: CommandName;
   stage: string;
@@ -259,6 +266,7 @@ export interface CliProgressEvent {
   chunk?: CliProgressChunk | null;
   model?: CliProgressModel | null;
   usage?: CliProgressUsage | null;
+  run_usage?: CliProgressRunUsage | null;
   trace_id?: string | null;
   total_chunks?: number | null;
 }

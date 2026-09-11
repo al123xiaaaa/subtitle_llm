@@ -1092,6 +1092,44 @@ class TestNewPipeline(unittest.TestCase):
         self.assertEqual(result.removed_entry_indices, [2, 3])
 
 
+class TestRunUsageSnapshot(unittest.TestCase):
+    def test_runner_accumulates_run_usage_across_calls(self):
+        from subtitle_llm.domain import SubtitleEntry
+        from subtitle_llm.pipeline.llm_operations import LlmOperationRunner
+        from subtitle_llm.progress_events import ProgressEmitter
+        from subtitle_llm.settings import ModelConfig, ModelProvider
+
+        emitter = ProgressEmitter("translate")
+        runner = LlmOperationRunner(
+            client=FakeLLMClient(),
+            model_config=ModelConfig(
+                type=ModelProvider.CUSTOM, api_key_env="FAKE_KEY", model="fake", endpoint="https://fake.test"
+            ),
+            progress=emitter,
+            total_chunks=1,
+        )
+        chunk = [SubtitleEntry(1, "00:00:01,000", "00:00:02,000", "Hello")]
+
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            runner.create_completion("翻 1 条", stage="rough", chunk=chunk, chunk_index=0)
+            runner.create_completion("翻 1 条", stage="rough", chunk=chunk, chunk_index=0)
+
+        events = [
+            json.loads(line[len(PROGRESS_EVENT_PREFIX):])
+            for line in buffer.getvalue().splitlines()
+            if line.startswith(PROGRESS_EVENT_PREFIX)
+        ]
+        run_usage_events = [event["run_usage"] for event in events if event.get("run_usage")]
+        self.assertEqual(len(run_usage_events), 2)
+        self.assertEqual(run_usage_events[0]["call_count"], 1)
+        self.assertEqual(run_usage_events[1]["call_count"], 2)
+        # FakeLLMClient 每次 completion_tokens=2 / total_tokens=4
+        self.assertEqual(run_usage_events[1]["completion_tokens"], 4)
+        self.assertEqual(run_usage_events[1]["total_tokens"], 8)
+        self.assertGreaterEqual(run_usage_events[1]["call_duration_ms"], run_usage_events[0]["call_duration_ms"])
+
+
 class TestReuseSubtitle(unittest.TestCase):
     def test_reuse_subtitle_skips_download_and_asr(self):
         # URL 输入 + 复用字幕：不触发 yt-dlp 下载/ASR，直接翻译复用文件。

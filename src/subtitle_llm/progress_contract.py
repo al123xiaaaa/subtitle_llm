@@ -527,6 +527,7 @@ class ProgressContract:
         usage: CompletionUsage | None = None,
         duration_ms: int | None = None,
         trace_id: str | None = None,
+        run_usage: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         normalized_detail = detail_key(detail)
         return self.emitter.emit(
@@ -546,6 +547,7 @@ class ProgressContract:
             usage=usage,
             trace_id=trace_id,
             duration_ms=duration_ms,
+            run_usage=run_usage,
         )
 
 
