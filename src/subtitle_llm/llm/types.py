@@ -59,6 +59,22 @@ class CompletionUsage:
 class CompletionResult:
     content: str
     usage: CompletionUsage
+    finish_reason: str | None = None
+
+
+class OutputBudgetExhaustedError(ValueError):
+    """输出 token 额度耗尽：响应为空或被 max_tokens 截断。
+
+    思考型模型（如 DeepSeek 思考模式）的思考过程计入输出额度，max_tokens
+    太小时正文可能一个字都没有。此类错误重试无意义，应直接失败并提示用户。"""
+
+
+def output_budget_exhausted(model: str, max_tokens: int, *, truncated: bool) -> OutputBudgetExhaustedError:
+    detail = "输出被 max_tokens 截断" if truncated else "模型返回为空（思考过程可能耗尽输出额度）"
+    return OutputBudgetExhaustedError(
+        f"输出额度耗尽：{detail}（model={model}，max_tokens={max_tokens}）。"
+        "请调大该模型的 max_tokens，或改用非思考型模型。"
+    )
 
 
 class ChatClient(Protocol):

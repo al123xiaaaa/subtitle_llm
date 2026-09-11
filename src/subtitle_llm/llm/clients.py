@@ -57,7 +57,12 @@ class OpenAIChatClient(BaseClient):
             presence_penalty=config.presence_penalty,
         )
         content = (response.choices[0].message.content or "").strip()
-        return CompletionResult(content=content, usage=CompletionUsage.from_any(response.usage))
+        finish_reason = response.choices[0].finish_reason
+        return CompletionResult(
+            content=content,
+            usage=CompletionUsage.from_any(response.usage),
+            finish_reason=str(finish_reason) if finish_reason else None,
+        )
 
 
 class CustomHTTPChatClient(BaseClient):
@@ -95,11 +100,17 @@ class CustomHTTPChatClient(BaseClient):
                 )
                 response.raise_for_status()
                 result = response.json()
-                content = result["choices"][0]["message"]["content"].strip()
+                choice = result["choices"][0]
+                content = (choice["message"]["content"] or "").strip()
                 usage = CompletionUsage.from_any(result.get("usage"))
                 if usage.total_tokens == 0:
                     usage = self._estimated_usage(config, messages, content)
-                return CompletionResult(content=content, usage=usage)
+                finish_reason = choice.get("finish_reason")
+                return CompletionResult(
+                    content=content,
+                    usage=usage,
+                    finish_reason=str(finish_reason) if finish_reason else None,
+                )
             except requests.exceptions.HTTPError as exc:
                 if exc.response is not None and exc.response.status_code == 429 and attempt < config.max_retries - 1:
                     logger.warning("Rate limited by custom endpoint. Retrying in %.1fs", config.retry_delay_seconds)

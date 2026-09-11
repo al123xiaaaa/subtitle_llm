@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from subtitle_llm.domain import SubtitleEntry
-from subtitle_llm.llm.types import ChatClient, CompletionUsage
+from subtitle_llm.llm.types import ChatClient, CompletionUsage, OutputBudgetExhaustedError, output_budget_exhausted
 from subtitle_llm.pipeline.llm_operations import LlmOperationResult, LlmOperationRunner
 from subtitle_llm.pipeline.llm_trace import LlmTraceRecorder
 from subtitle_llm.pipeline.prompts import (
@@ -160,6 +160,16 @@ class ChunkTranslator:
         try:
             processed_translation = process(result.content)
         except Exception as exc:
+            # 响应为空或被 max_tokens 截断时，解析错误只是表象，根因是输出额度耗尽
+            # （思考型模型的思考过程也计入输出额度）。换成明确的根因错误再抛出。
+            budget_error: OutputBudgetExhaustedError | None = None
+            if not result.content.strip() or result.finish_reason == "length":
+                budget_error = output_budget_exhausted(
+                    self.operations.model_config.model,
+                    self.operations.model_config.max_tokens,
+                    truncated=result.finish_reason == "length",
+                )
+            reported = budget_error or exc
             if record_error:
                 self.operations.record_trace(
                     stage=stage,
@@ -170,16 +180,18 @@ class ChunkTranslator:
                     chunk=chunk,
                     chunk_index=chunk_index,
                     processed_translation="",
-                    error=str(exc),
+                    error=str(reported),
                 )
             if emit_failure_progress:
                 self.operations.emit_chunk_progress(
                     stage,
                     "failed",
-                    f"{chunk_stage_label(stage)}解析失败：{exc}",
+                    f"{chunk_stage_label(stage)}解析失败：{reported}",
                     chunk,
                     chunk_index,
                 )
+            if budget_error is not None:
+                raise budget_error from exc
             raise
 
         trace_id = self.operations.record_trace(
@@ -353,6 +365,9 @@ class ChunkTranslator:
                 )
                 last_error = None
                 break
+            except OutputBudgetExhaustedError:
+                # 输出额度耗尽重试无意义（每次都会同样截断/返空，还白烧 token），直接失败
+                raise
             except Exception as exc:
                 last_error = exc
                 if attempt < TRANSLATION_PARSE_RETRIES:

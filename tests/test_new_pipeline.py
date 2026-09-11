@@ -1130,6 +1130,102 @@ class TestRunUsageSnapshot(unittest.TestCase):
         self.assertGreaterEqual(run_usage_events[1]["call_duration_ms"], run_usage_events[0]["call_duration_ms"])
 
 
+class FixedResponseClient(FakeLLMClient):
+    """无论 prompt 是什么都返回固定响应，用于模拟空响应 / 截断 / 解析失败。"""
+
+    def __init__(self, content: str, finish_reason: str | None = None):
+        self.calls = 0
+        self._content = content
+        self._finish_reason = finish_reason
+
+    def create_completion(self, config, messages):
+        self.calls += 1
+        return CompletionResult(
+            content=self._content,
+            usage=CompletionUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            finish_reason=self._finish_reason,
+        )
+
+
+class TestOutputBudgetExhausted(unittest.TestCase):
+    def _make_translator(self, client) -> ChunkTranslator:
+        return ChunkTranslator(client, make_config().translation_model, total_chunks=1)
+
+    def _chunk(self):
+        from subtitle_llm.domain import SubtitleEntry
+
+        return [SubtitleEntry(1, "00:00:01,000", "00:00:02,000", "Hello")]
+
+    def _units(self):
+        from subtitle_llm.pipeline.semantic_units import build_semantic_units
+
+        return build_semantic_units(self._chunk())
+
+    def _translate_with_failing_parser(self, client):
+        """走 _execute_operation 骨架，process 恒抛解析错误，模拟「响应无法解析」。"""
+        translator = self._make_translator(client)
+        with contextlib.redirect_stdout(io.StringIO()):
+            translator._execute_operation(
+                stage="rough",
+                prompt="翻 1 条",
+                chunk=self._chunk(),
+                usage=CompletionUsage(),
+                chunk_index=0,
+                process=lambda content: (_ for _ in ()).throw(ValueError("no JSON object or array found")),
+            )
+
+    def test_empty_response_parse_failure_raises_budget_error(self):
+        from subtitle_llm.llm.types import OutputBudgetExhaustedError
+
+        client = FixedResponseClient(content="")
+        with self.assertRaises(OutputBudgetExhaustedError) as ctx:
+            self._translate_with_failing_parser(client)
+        self.assertIn("输出额度耗尽", str(ctx.exception))
+        self.assertIn("max_tokens", str(ctx.exception))
+
+    def test_truncated_response_parse_failure_raises_budget_error(self):
+        from subtitle_llm.llm.types import OutputBudgetExhaustedError
+
+        # 有内容但被 max_tokens 截断（finish_reason=length），解析不过 → 额度耗尽
+        client = FixedResponseClient(content="[1]\n译", finish_reason="length")
+        with self.assertRaises(OutputBudgetExhaustedError) as ctx:
+            self._translate_with_failing_parser(client)
+        self.assertIn("截断", str(ctx.exception))
+
+    def test_normal_parse_failure_keeps_original_error(self):
+        from subtitle_llm.llm.types import OutputBudgetExhaustedError
+
+        # 有内容且正常结束，只是格式不对 → 原解析错误，不报额度耗尽
+        client = FixedResponseClient(content="这不是翻译结果")
+        with self.assertRaises(Exception) as ctx:
+            self._translate_with_failing_parser(client)
+        self.assertNotIsInstance(ctx.exception, OutputBudgetExhaustedError)
+        self.assertIn("no JSON object", str(ctx.exception))
+
+    def test_timed_cues_budget_error_not_retried(self):
+        from subtitle_llm.llm.types import OutputBudgetExhaustedError
+
+        client = FixedResponseClient(content="")
+        translator = self._make_translator(client)
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(OutputBudgetExhaustedError):
+                translator.translate_semantic_timed_cues(self._units(), "ctx", "中文", "", chunk_index=0)
+        # 重试无意义：只应调用一次
+        self.assertEqual(client.calls, 1)
+
+    def test_timed_cues_normal_parse_failure_still_retried(self):
+        from subtitle_llm.llm.types import OutputBudgetExhaustedError
+
+        client = FixedResponseClient(content="这不是 JSON")
+        translator = self._make_translator(client)
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(Exception) as ctx:
+                translator.translate_semantic_timed_cues(self._units(), "ctx", "中文", "", chunk_index=0)
+        self.assertNotIsInstance(ctx.exception, OutputBudgetExhaustedError)
+        # 普通解析错误照旧重试 TRANSLATION_PARSE_RETRIES + 1 次
+        self.assertEqual(client.calls, 3)
+
+
 class TestReuseSubtitle(unittest.TestCase):
     def test_reuse_subtitle_skips_download_and_asr(self):
         # URL 输入 + 复用字幕：不触发 yt-dlp 下载/ASR，直接翻译复用文件。
