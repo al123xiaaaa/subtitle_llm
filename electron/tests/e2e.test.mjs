@@ -515,6 +515,9 @@ async function withApp(optionsOrCallback, maybeCallback) {
     SUBTITLE_LLM_USER_DATA_DIR: userDataDir,
     SUBTITLE_LLM_PYTHON: fakePythonPath,
     SUBTITLE_LLM_E2E_COMMAND_LOG: commandLogPath,
+    // e2e 以真实仓库为 projectRoot 启动应用；生成的模型配置必须落在临时目录，
+    // 否则会覆盖正在运行的真实任务使用的 data/desktop-configs/latest-model-config.yaml
+    SUBTITLE_LLM_DESKTOP_CONFIG_DIR: path.join(tempDir, "desktop-configs"),
   };
   if (options.disableFfmpeg) {
     env.SUBTITLE_LLM_DISABLE_FFMPEG_DETECT = "1";

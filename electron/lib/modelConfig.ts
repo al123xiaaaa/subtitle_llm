@@ -86,8 +86,18 @@ export function buildDesktopModelConfigContent(selection: Partial<ModelSelection
   ].join("\n");
 }
 
-export function writeDesktopModelConfig(projectRoot: string, selection: ModelSelection): string {
-  const outputDir = path.join(projectRoot, "data", "desktop-configs");
+export interface WriteDesktopModelConfigOptions {
+  // 覆盖输出目录。E2E 测试用它把生成的配置指到临时目录，避免覆盖
+  // 真实运行时的 data/desktop-configs/latest-model-config.yaml（取证与并发运行都会被污染）。
+  configDir?: string;
+}
+
+export function writeDesktopModelConfig(
+  projectRoot: string,
+  selection: ModelSelection,
+  options: WriteDesktopModelConfigOptions = {},
+): string {
+  const outputDir = options.configDir || path.join(projectRoot, "data", "desktop-configs");
   fs.mkdirSync(outputDir, { recursive: true });
 
   const outputPath = path.join(outputDir, "latest-model-config.yaml");
