@@ -1,4 +1,5 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
+import { Effect, Fiber } from "effect";
 import type { CliProgressEvent, CommandName } from "../../../types";
 import {
   applyProgressEvent,
@@ -14,11 +15,12 @@ import {
   statusLabel,
   tokenThroughputText,
 } from "../../../lib/progressModel";
+import { appRuntime } from "../effect/runtime";
 
 export function useJobProgress() {
   const progressState = ref(createInitialJobProgressState());
   const now = ref(Date.now());
-  let timer: ReturnType<typeof setInterval> | null = null;
+  let tickerFiber: Fiber.RuntimeFiber<never, never> | null = null;
 
   const progressStages = computed(() => progressState.value.stages);
   const progressChunks = computed(() => progressState.value.chunks);
@@ -71,15 +73,24 @@ export function useJobProgress() {
   }
 
   onMounted(() => {
-    timer = setInterval(() => {
-      now.value = Date.now();
-    }, 1000);
+    // 1s 心跳：驱动已等待时长等相对时间展示；fiber 随组件卸载中断。
+    tickerFiber = appRuntime.runFork(
+      Effect.forever(
+        Effect.sleep("1 second").pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              now.value = Date.now();
+            }),
+          ),
+        ),
+      ),
+    );
   });
 
   onUnmounted(() => {
-    if (timer) {
-      clearInterval(timer);
-      timer = null;
+    if (tickerFiber) {
+      appRuntime.runFork(Fiber.interrupt(tickerFiber));
+      tickerFiber = null;
     }
   });
 

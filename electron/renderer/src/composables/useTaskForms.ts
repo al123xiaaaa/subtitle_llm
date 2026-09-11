@@ -3,13 +3,15 @@ import type { ComputedRef, Ref } from "vue";
 import type { AppState } from "../../../types";
 import type { DownloadFormState, MuxFormState, TranscribeFormState, TranslateFormState } from "./controllerTypes";
 import { cleanString, looksLikeUrl } from "./controllerUtils";
+import { appRuntime } from "../effect/runtime";
+import { pickPath } from "../effect/programs/forms";
 
 interface TaskFormsOptions {
   appState: Ref<AppState | null>;
   ffmpegAvailable: ComputedRef<boolean>;
 }
 
-export function useTaskForms(api: Window["subtitleLLM"], options: TaskFormsOptions) {
+export function useTaskForms(options: TaskFormsOptions) {
   const embedPreferenceTouched = reactive({ value: false });
   const translateForm = reactive<TranslateFormState>({
     input: "",
@@ -94,81 +96,93 @@ export function useTaskForms(api: Window["subtitleLLM"], options: TaskFormsOptio
     translateForm.embedMkv = looksLikeUrl(cleanString(translateForm.input));
   }
 
-  function assignIfSelected(assign: (filePath: string) => void, filePath: string | null): void {
-    const cleaned = cleanString(filePath);
-    if (cleaned) {
-      assign(cleaned);
-    }
-  }
-
   async function chooseInput(): Promise<void> {
-    assignIfSelected((filePath) => {
-      translateForm.input = filePath;
-    }, await api.selectInput());
+    await appRuntime.runPromise(
+      pickPath((bridge) => bridge.selectInput(), (filePath) => {
+        translateForm.input = filePath;
+      }),
+    );
     syncEmbedDefault();
   }
 
   async function chooseTranslateVideo(): Promise<void> {
-    assignIfSelected((filePath) => {
-      translateForm.video = filePath;
-      translateForm.embedMkv = true;
-      embedPreferenceTouched.value = true;
-      muxForm.video = filePath;
-    }, await api.selectVideo());
+    await appRuntime.runPromise(
+      pickPath((bridge) => bridge.selectVideo(), (filePath) => {
+        translateForm.video = filePath;
+        translateForm.embedMkv = true;
+        embedPreferenceTouched.value = true;
+        muxForm.video = filePath;
+      }),
+    );
   }
 
   async function chooseTranslateConfig(): Promise<void> {
-    assignIfSelected((filePath) => {
-      translateForm.config = filePath;
-    }, await api.selectConfig());
+    await appRuntime.runPromise(
+      pickPath((bridge) => bridge.selectConfig(), (filePath) => {
+        translateForm.config = filePath;
+      }),
+    );
   }
 
   async function chooseTranscribeConfig(): Promise<void> {
-    assignIfSelected((filePath) => {
-      transcribeForm.config = filePath;
-    }, await api.selectConfig());
+    await appRuntime.runPromise(
+      pickPath((bridge) => bridge.selectConfig(), (filePath) => {
+        transcribeForm.config = filePath;
+      }),
+    );
   }
 
   async function chooseDownloadDir(): Promise<void> {
-    assignIfSelected((filePath) => {
-      downloadForm.outputDir = filePath;
-    }, await api.selectDirectory());
+    await appRuntime.runPromise(
+      pickPath((bridge) => bridge.selectDirectory(), (filePath) => {
+        downloadForm.outputDir = filePath;
+      }),
+    );
   }
 
   async function chooseMuxSubtitle(): Promise<void> {
-    assignIfSelected((filePath) => {
-      muxForm.subtitle = filePath;
-    }, await api.selectSubtitle());
+    await appRuntime.runPromise(
+      pickPath((bridge) => bridge.selectSubtitle(), (filePath) => {
+        muxForm.subtitle = filePath;
+      }),
+    );
   }
 
   async function chooseMuxVideo(): Promise<void> {
-    assignIfSelected((filePath) => {
-      muxForm.video = filePath;
-    }, await api.selectVideo());
+    await appRuntime.runPromise(
+      pickPath((bridge) => bridge.selectVideo(), (filePath) => {
+        muxForm.video = filePath;
+      }),
+    );
   }
 
   async function chooseAudio(): Promise<void> {
-    const audio = await api.selectAudio();
-    assignIfSelected((filePath) => {
-      transcribeForm.audio = filePath;
-      if (!cleanString(transcribeForm.output)) {
-        transcribeForm.output = filePath.replace(/\.[^.]+$/, ".srt");
-      }
-    }, audio);
+    await appRuntime.runPromise(
+      pickPath((bridge) => bridge.selectAudio(), (filePath) => {
+        transcribeForm.audio = filePath;
+        if (!cleanString(transcribeForm.output)) {
+          transcribeForm.output = filePath.replace(/\.[^.]+$/, ".srt");
+        }
+      }),
+    );
   }
 
   async function chooseOutput(): Promise<void> {
     const defaultName = cleanString(translateForm.input).replace(/\.[^.]+$/, ".zh.srt") || "output.zh.srt";
-    assignIfSelected((filePath) => {
-      translateForm.output = filePath;
-    }, await api.saveSrt(defaultName));
+    await appRuntime.runPromise(
+      pickPath((bridge) => bridge.saveSrt(defaultName), (filePath) => {
+        translateForm.output = filePath;
+      }),
+    );
   }
 
   async function chooseTranscribeOutput(): Promise<void> {
     const defaultName = cleanString(transcribeForm.audio).replace(/\.[^.]+$/, ".srt") || "transcript.srt";
-    assignIfSelected((filePath) => {
-      transcribeForm.output = filePath;
-    }, await api.saveSrt(defaultName));
+    await appRuntime.runPromise(
+      pickPath((bridge) => bridge.saveSrt(defaultName), (filePath) => {
+        transcribeForm.output = filePath;
+      }),
+    );
   }
 
   function onTranslateInput(): void {

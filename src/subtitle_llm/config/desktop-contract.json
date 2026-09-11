@@ -11,7 +11,7 @@
       "temperature": "0.3",
       "top_p": "0.8",
       "max_tokens": "4096",
-      "rate_limit": "5",
+      "rate_limit": "20",
       "max_retries": "3",
       "retry_delay_seconds": "10"
     }
