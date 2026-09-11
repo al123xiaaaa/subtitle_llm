@@ -82,3 +82,13 @@ pyright
 - `chardet` — encoding detection for SRT files
 - `tiktoken` — token counting
 - `PyYAML` — config parsing
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues (`al123xiaaaa/subtitle_llm`) via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
