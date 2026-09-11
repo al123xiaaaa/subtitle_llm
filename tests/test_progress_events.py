@@ -140,6 +140,42 @@ class TestProgressEvents(unittest.TestCase):
         self.assertEqual(payload["chunk"]["index"], 3)
         self.assertEqual(payload["chunk"]["status"], "repairing")
 
+    def test_task_state_saved_marks_fallback_chunk_status(self):
+        entries = [SubtitleEntry(1, "00:00:00,000", "00:00:01,000", "Hello", "Hello")]
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            payload = ProgressContract(ProgressEmitter("translate")).task_state_saved(
+                entries,
+                chunk_index=2,
+                total_chunks=4,
+                fallback=True,
+            )
+
+        # 回退完成的片段用独立状态，UI 据此区分「真完成」和「回退完成」
+        self.assertEqual(payload["chunk"]["status"], "fallback")
+        self.assertEqual(payload["chunk"]["detail"], "save_task_state")
+
+    def test_task_state_saved_warning_and_done_unchanged(self):
+        entries = [SubtitleEntry(1, "00:00:00,000", "00:00:01,000", "Hello", "你好")]
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            warning_payload = ProgressContract(ProgressEmitter("translate")).task_state_saved(
+                entries,
+                chunk_index=0,
+                total_chunks=2,
+                warning=True,
+            )
+            done_payload = ProgressContract(ProgressEmitter("translate")).task_state_saved(
+                entries,
+                chunk_index=1,
+                total_chunks=2,
+            )
+
+        self.assertEqual(warning_payload["chunk"]["status"], "warning")
+        self.assertEqual(done_payload["chunk"]["status"], "done")
+
 
 if __name__ == "__main__":
     unittest.main()

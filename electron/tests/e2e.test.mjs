@@ -127,6 +127,15 @@ setTimeout(() => {
       chunk: { index: 1, total: 4, status: "done", entry_start: 1, entry_end: 19 },
     });
     progress({
+      stage: "processing_chunks",
+      detail: "save_task_state",
+      status: "done",
+      label: "保存进度",
+      message: "已保存片段 3/4 的进度",
+      total_chunks: 4,
+      chunk: { index: 3, total: 4, status: "fallback", entry_start: 40, entry_end: 58, detail: "save_task_state" },
+    });
+    progress({
       stage: "generate_result",
       detail: "write_srt",
       status: "done",
@@ -242,6 +251,10 @@ async function testYoutubeTranslateWithMkv() {
     await page.locator("#toggleChunkActivity").click();
     await page.locator("#chunkActivity .chunk-cell.is-warning").click();
     await page.locator("#chunkActivityDetail", { hasText: "仍有疑似缺失" }).waitFor();
+    // 回退完成的片段显示为独立的 fallback 格子（虚线红框），与真完成/失败区分
+    await page.locator("#chunkActivity .chunk-cell.is-fallback").waitFor();
+    await page.locator("#chunkActivity .chunk-cell.is-fallback").click();
+    await page.locator("#chunkActivityDetail", { hasText: "已回退" }).waitFor();
     await page.locator("#subtitleResultPath", { hasText: "data/output/youtube.zh.srt" }).waitFor();
     await page.locator("#videoResultPath", { hasText: "data/output/youtube.zh.mkv" }).waitFor();
     await page.locator("#traceResultPath", { hasText: "data/logs/e2e_translate_llm_trace" }).waitFor();

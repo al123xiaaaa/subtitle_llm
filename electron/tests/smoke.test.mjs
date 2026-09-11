@@ -21,6 +21,7 @@ import {
   selectedChunk,
   STAGE_LABELS,
   startProgress,
+  statusLabel,
   tokenThroughputText,
 } from "../../dist/electron/lib/progressModel.js";
 import { getProvider, listProviders, modelsFromApiResponse, resolveModelId } from "../../dist/electron/lib/providerCatalog.js";
@@ -388,6 +389,44 @@ progress = applyProgressEvent(
 progress = selectProgressChunk(progress, 2);
 assert.equal(selectedChunk(progress).issueSummary, "仍有疑似缺失");
 assert.match(chunkSummary(progress.chunks), /1 个带风险/);
+
+// save_task_state 带 fallback chunk 状态 → 归一化为 fallback，标签「已回退」
+progress = applyProgressEvent(
+  progress,
+  {
+    command: "translate",
+    stage: "processing_chunks",
+    detail: "save_task_state",
+    status: "done",
+    label: "保存进度",
+    message: "已保存片段 1/3 的进度",
+    chunk: { index: 1, total: 3, status: "fallback", detail: "save_task_state" },
+  },
+  1450,
+);
+assert.equal(progress.chunks[0].status, "fallback");
+assert.equal(statusLabel("fallback"), "已回退");
+assert.match(chunkSummary(progress.chunks), /1 个已回退/);
+assert.ok(
+  chunkLegendItems(progress.chunks).some((item) => item.status === "fallback" && item.label === "已回退"),
+  "图例应包含 fallback 项",
+);
+// 后续修复成功 → 正常事件覆盖回 done
+progress = applyProgressEvent(
+  progress,
+  {
+    command: "translate",
+    stage: "processing_chunks",
+    detail: "quality",
+    status: "done",
+    label: "质量检查",
+    message: "片段 1 通过",
+    chunk: { index: 1, total: 3, status: "done" },
+  },
+  1460,
+);
+assert.equal(progress.chunks[0].status, "done");
+
 assert.equal(finishProgress(progress, true, 1500).currentStatus, "done");
 assert.equal(createInitialJobProgressState().currentLabel, "等待任务");
 

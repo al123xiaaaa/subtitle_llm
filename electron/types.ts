@@ -82,6 +82,7 @@ export type ChunkProgressStatus =
   | "done"
   | "warning"
   | "failed"
+  | "fallback"
   | "skipped";
 
 export interface ModelSelection {

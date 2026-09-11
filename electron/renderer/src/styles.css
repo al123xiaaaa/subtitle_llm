@@ -1314,6 +1314,12 @@ select {
   border-color: var(--danger);
 }
 
+/* 回退完成：片段失败已填原文兜底。虚线红框空心格，与实心红的彻底失败区分 */
+.chunk-cell.is-fallback {
+  background: transparent;
+  border: 1px dashed var(--danger);
+}
+
 .chunk-cell.is-skipped {
   background: var(--gray-400);
   border-color: var(--gray-400);
@@ -1373,6 +1379,11 @@ select {
 
 .legend-swatch.is-failed {
   background: var(--danger);
+}
+
+.legend-swatch.is-fallback {
+  background: transparent;
+  border: 1px dashed var(--danger);
 }
 
 .legend-swatch.is-skipped {

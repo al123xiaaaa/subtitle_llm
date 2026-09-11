@@ -277,6 +277,7 @@ class ChunkProcessingCoordinator:
             total_chunks=report.total_chunks,
             semantic=semantic,
             warning=bool(planned.entries and any(entry.needs_retranslation for entry in planned.entries)),
+            fallback=any(failed.chunk_index == planned.index for failed in report.failed_chunks),
         )
 
     def _project_chunk_event(

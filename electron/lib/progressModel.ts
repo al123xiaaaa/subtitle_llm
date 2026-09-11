@@ -93,6 +93,7 @@ const CHUNK_STATUS_ORDER: ChunkProgressStatus[] = [
   "review",
   "done",
   "warning",
+  "fallback",
   "failed",
   "skipped",
 ];
@@ -203,6 +204,7 @@ export function chunkSummary(chunks: ChunkActivityItem[]): string {
     ["review", "待复核"],
     ["done", "完成"],
     ["warning", "带风险"],
+    ["fallback", "已回退"],
     ["failed", "失败"],
   ]
     .map(([status, label]) => {
@@ -266,6 +268,7 @@ export function statusLabel(status: ChunkProgressStatus | ProgressStageStatus): 
     done: "完成",
     warning: "带风险",
     failed: "失败",
+    fallback: "已回退",
     skipped: "跳过",
   };
   return labels[status] || status;
@@ -417,7 +420,7 @@ export function tokenThroughputText(runUsage: Required<CliProgressRunUsage>): st
 
 function normalizeChunkStatus(status: unknown): ChunkProgressStatus {
   const cleaned = cleanString(status);
-  if (["waiting", "running", "review", "repairing", "done", "warning", "failed", "skipped"].includes(cleaned)) {
+  if (["waiting", "running", "review", "repairing", "done", "warning", "failed", "fallback", "skipped"].includes(cleaned)) {
     return cleaned as ChunkProgressStatus;
   }
   return "running";

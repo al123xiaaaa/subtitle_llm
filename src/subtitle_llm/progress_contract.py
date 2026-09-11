@@ -222,7 +222,11 @@ class ProgressContract:
         total_chunks: int,
         semantic: bool = False,
         warning: bool = False,
+        fallback: bool = False,
     ) -> dict[str, Any]:
+        # fallback：片段处理失败已回退（填原文/待重译），终态是「回退完成」而非「真完成」，
+        # 用独立状态让 UI 区分，避免与 done/warning 混淆。
+        chunk_status = "fallback" if fallback else ("warning" if warning else "done")
         return self.emitter.emit(
             stage="processing_chunks",
             detail="save_task_state",
@@ -233,7 +237,7 @@ class ProgressContract:
                 entries,
                 chunk_index=chunk_index,
                 total_chunks=total_chunks,
-                status="warning" if warning else "done",
+                status=chunk_status,
                 detail="save_task_state",
             ),
             total_chunks=total_chunks,
