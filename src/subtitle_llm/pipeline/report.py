@@ -65,6 +65,7 @@ class TranslationReport(BaseModel):
     normalized_source_file: str | None = None
     normalization_map_file: str | None = None
     normalization_applied: bool = False
+    model_segmentation_applied: bool = False
     normalization_reason: str | None = None
     normalization_stats: dict = Field(default_factory=dict)
     semantic_translation_applied: bool = False

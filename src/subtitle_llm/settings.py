@@ -65,6 +65,8 @@ class PipelineConfig(BaseModel):
     max_chars: int = 132
     max_duration: float = 10.0
     normalize_subtitles: Literal["auto", "always", "off"] = "auto"
+    # auto：ASR 来源由模型在翻译时断句；always 也适用于已有源字幕。
+    model_segmentation: Literal["auto", "always", "off"] = "auto"
     normalize_max_cue_chars: int = 84
     normalize_max_line_chars: int = 42
     normalize_max_duration: float = 7.0

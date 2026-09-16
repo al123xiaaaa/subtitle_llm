@@ -49,6 +49,33 @@ class ParseSummary:
         }
 
 
+@dataclass(frozen=True)
+class SourceCoverage:
+    """可变数量字幕按源文覆盖诊断，不套用固定 cue 的解析计数。"""
+
+    start: int
+    end: int
+    cue_count: int
+    missing_ranges: list[tuple[int, int]]
+
+    def to_dict(self) -> dict[str, Any]:
+        expected = self.end - self.start + 1
+        missing = sum(right - left + 1 for left, right in self.missing_ranges)
+        return {
+            "position_scope": "global",
+            "source_start": self.start, "source_end": self.end,
+            "response_position_offset": self.start - 1,
+            "expected_positions": expected, "covered_positions": expected - missing,
+            "cue_count": self.cue_count, "missing_ranges": self.missing_ranges,
+        }
+
+    @property
+    def status(self) -> TraceStatus:
+        if not self.cue_count:
+            return "failed"
+        return "suspicious" if self.missing_ranges else "ok"
+
+
 @dataclass
 class _TraceRecord:
     trace_id: str
@@ -90,14 +117,18 @@ class LlmTraceRecorder:
         total_chunks: int | None = None,
         processed_translation: str | None = None,
         expected_count: int | None = None,
+        source_coverage: SourceCoverage | None = None,
         status: TraceStatus | None = None,
         error: str | None = None,
     ) -> str:
-        parse_summary = summarize_processed_translation(
+        parse_summary = None if source_coverage is not None else summarize_processed_translation(
             processed_translation,
             expected_count if expected_count is not None else (len(chunk) if chunk is not None else 0),
         )
-        next_status = status or status_from_parse(parse_summary, error=error)
+        next_status = status or (
+            source_coverage.status if source_coverage is not None and error is None
+            else status_from_parse(parse_summary, error=error)
+        )
 
         with self._lock:
             self._counter += 1
@@ -121,6 +152,7 @@ class LlmTraceRecorder:
                     "usage": usage.to_dict() if usage else CompletionUsage().to_dict(),
                     "duration_ms": duration_ms,
                     "parse": parse_summary.to_dict() if parse_summary else None,
+                    "source_coverage": source_coverage.to_dict() if source_coverage is not None else None,
                     "quality": None,
                     "response_shape": response_shape(response),
                     "error": error,

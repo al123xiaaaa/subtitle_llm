@@ -148,6 +148,8 @@ class RunLedger:
         subtitle: Subtitle,
         translated_entries: list[SubtitleEntry],
         report: TranslationReport,
+        *,
+        reorder: bool = True,
     ) -> None:
         translated_by_index = {
             entry.index: entry
@@ -164,7 +166,8 @@ class RunLedger:
             translated_by_index[entry.index] = entry
 
         subtitle.entries = sorted(translated_by_index.values(), key=lambda item: item.index)
-        subtitle.reorder_entries()
+        if reorder:
+            subtitle.reorder_entries()
         report.stage = "完成"
         report.processed_entries = len(subtitle.entries)
         report.final_output_entries = len(subtitle.entries)

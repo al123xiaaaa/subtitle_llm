@@ -17,6 +17,7 @@ translation_model:
   retry_delay_seconds: 40
 
 pipeline:
+  model_segmentation: "auto"
   normalize_subtitles: "auto"
   normalize_max_cue_chars: 84
   normalize_max_line_chars: 42

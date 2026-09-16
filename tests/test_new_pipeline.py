@@ -1238,8 +1238,10 @@ class TestReuseSubtitle(unittest.TestCase):
                 encoding="utf-8",
             )
             output_path = Path(tmp) / "output.zh.srt"
+            legacy_config = make_config()
+            legacy_config.pipeline.model_segmentation = "off"  # 此用例使用固定 cue 输出的旧协议桩。
             service = TranslationService(
-                make_config(),
+                legacy_config,
                 translation_client=FakeLLMClient(),
                 summary_client=FakeLLMClient(),
             )

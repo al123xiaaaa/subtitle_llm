@@ -8,7 +8,7 @@ TranslationService 只保留任务级编排。
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 from subtitle_llm.domain import SubtitleEntry
 from subtitle_llm.llm.types import CompletionUsage
@@ -281,6 +281,17 @@ class ChunkAcceptance:
             return
         self._accept_semantic_chunk(planned, result, semantic_unit_by_index, translated_entries)
 
+    def accept_generated(
+        self, planned: PlannedChunk, result: ChunkTranslationResult,
+        translated_entries: list[SubtitleEntry],
+    ) -> None:
+        """模型已确定初始结构；后续修复重译仍只修改时间轴字幕的译文。"""
+        from subtitle_llm.pipeline.semantic_units import build_semantic_units
+
+        self._accept_semantic_timed_chunk(
+            planned, result, build_semantic_units(result.chunk), translated_entries, preserve_diagnosis=True,
+        )
+
     def handle_failure(
         self,
         planned: PlannedChunk,
@@ -344,6 +355,8 @@ class ChunkAcceptance:
         result: ChunkTranslationResult,
         semantic_units: list[SemanticUnit],
         translated_entries: list[SubtitleEntry],
+        *,
+        preserve_diagnosis: bool = False,
     ) -> None:
         report = self.report
         report.token_usage.add_usage(result.usage.to_dict())
@@ -353,6 +366,9 @@ class ChunkAcceptance:
             translation=result.translation,
             target_language=self.target_language,
         )
+        quality_record: dict = {"initial": asdict(diagnosis), "review": "not_requested"}
+        if preserve_diagnosis:
+            self._record_generated_quality(planned, source_entries, quality_record, result.final_trace_id)
         if self.translator.trace_recorder:
             self.translator.trace_recorder.update_quality(result.final_trace_id, diagnosis)
         self.quality_gate.apply_diagnosis(source_entries, diagnosis)
@@ -419,6 +435,8 @@ class ChunkAcceptance:
         if review_policy.should_manual_review(source_diagnosis) or (
             review_policy.uses_manual_review and layout_review_indices
         ):
+            quality_record["review"] = "manual"
+            quality_record["before_review"] = asdict(source_diagnosis)
             logger.warning(
                 "语义cue质量诊断命中，进入TUI复核: chunk=%s reliability=%s flagged=%s layout_review=%s summary=%s",
                 planned.index + 1,
@@ -436,6 +454,12 @@ class ChunkAcceptance:
             )
             diagnosis = self.quality_gate.diagnose_chunk(source_entries, target_language=self.target_language)
 
+        if preserve_diagnosis:
+            quality_record["final"] = asdict(diagnosis)
+            quality_record["accepted_with_issues"] = bool(
+                diagnosis.has_issues or any(entry.needs_retranslation for entry in source_entries)
+            )
+            self._record_generated_quality(planned, source_entries, quality_record, result.final_trace_id)
         translated_entries.extend(source_entries)
         self._progress.chunk_accepted(
             source_entries,
@@ -445,6 +469,16 @@ class ChunkAcceptance:
             warning=bool(diagnosis.has_issues or any(entry.needs_retranslation for entry in source_entries)),
         )
         logger.info("语义cue chunk接受完成: chunk=%s entries=%s", planned.index + 1, len(source_entries))
+
+    def _record_generated_quality(
+        self, planned: PlannedChunk, entries: list[SubtitleEntry], diagnosis: dict, trace_id: str | None,
+    ) -> None:
+        if self._chunk_projector is not None and self._chunk_lifecycles is not None:
+            self._chunk_projector.project(
+                self._chunk_lifecycles[planned.index].state, entries,
+                chunk_index=planned.index, total_chunks=self.report.total_chunks,
+                diagnosis=diagnosis, last_trace_id=trace_id, emit_progress=False,
+            )
 
     # ------------------------------------------------------------------
     # 语义单元粒度接受

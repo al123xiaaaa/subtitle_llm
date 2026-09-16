@@ -23,7 +23,7 @@ from subtitle_llm.pipeline.lifecycle.states import (
 from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.settings import AppConfig
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class TranslationTaskStoreError(RuntimeError):
@@ -134,14 +134,25 @@ class TranslationTaskStore:
                 raise TranslationTaskStoreError(
                     f"任务记录数据库版本过新：{version} > {SCHEMA_VERSION}"
                 )
-            if version != SCHEMA_VERSION:
+            if version not in {2, SCHEMA_VERSION}:
                 self._rebuild_schema(connection)
-                connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            # v2 -> v3 只增加模型结果缓存，保留已有任务和复核进度。
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS translation_model_results (
+                    task_id TEXT NOT NULL REFERENCES translation_tasks(task_id) ON DELETE CASCADE,
+                    request_key TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (task_id, request_key)
+                )
+            """)
+            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def _rebuild_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
             """
             DROP TABLE IF EXISTS translation_chunks;
+            DROP TABLE IF EXISTS translation_model_results;
             DROP TABLE IF EXISTS translation_cues;
             DROP TABLE IF EXISTS translation_tasks;
             """
@@ -419,6 +430,9 @@ class TranslationTaskStore:
                     task_id,
                 ),
             )
+            if report.model_segmentation_applied:
+                # 数量和编号由模型决定；删除旧快照里不再存在的条目，事务内整体替换。
+                connection.execute("DELETE FROM translation_cues WHERE task_id = ?", (task_id,))
             for entry in subtitle.entries:
                 connection.execute(
                     """
@@ -498,8 +512,8 @@ class TranslationTaskStore:
                     entry_start = excluded.entry_start,
                     entry_end = excluded.entry_end,
                     entry_count = excluded.entry_count,
-                    diagnosis_json = excluded.diagnosis_json,
-                    last_trace_id = excluded.last_trace_id,
+                    diagnosis_json = COALESCE(excluded.diagnosis_json, translation_chunks.diagnosis_json),
+                    last_trace_id = COALESCE(excluded.last_trace_id, translation_chunks.last_trace_id),
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -509,7 +523,7 @@ class TranslationTaskStore:
                     min(entry_indices) if entry_indices else None,
                     max(entry_indices) if entry_indices else None,
                     len(entry_indices),
-                    json.dumps(diagnosis, ensure_ascii=False) if diagnosis else None,
+                    json.dumps(diagnosis, ensure_ascii=False) if diagnosis is not None else None,
                     last_trace_id,
                     timestamp,
                 ),
@@ -547,6 +561,23 @@ class TranslationTaskStore:
         }
         report_data = json.loads(task["report_json"] or "{}")
         return {"entries": entries, "report": report_data}
+
+    def load_model_result(self, task_id: str, request_key: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM translation_model_results WHERE task_id = ? AND request_key = ?",
+                (task_id, request_key),
+            ).fetchone()
+        return json.loads(row["payload_json"]) if row else None
+
+    def save_model_result(self, task_id: str, request_key: str, payload: dict[str, Any]) -> None:
+        with self._connect() as connection:
+            connection.execute("""
+                INSERT INTO translation_model_results (task_id, request_key, payload_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(task_id, request_key) DO UPDATE SET
+                    payload_json = excluded.payload_json, updated_at = excluded.updated_at
+            """, (task_id, request_key, json.dumps(payload, ensure_ascii=False), now_iso()))
 
     def validate_task(
         self,

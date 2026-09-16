@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass, replace
@@ -9,6 +10,7 @@ from urllib.parse import urlparse
 from subtitle_llm.domain import Subtitle, SubtitleEntry
 from subtitle_llm.io import SubtitleIO
 from subtitle_llm.llm import ChatClient, create_chat_client
+from subtitle_llm.llm.types import CompletionUsage
 from subtitle_llm.llm.token_counter import build_token_encoder
 from subtitle_llm.pipeline.checkpoint import file_fingerprint, sidecar_path
 from subtitle_llm.pipeline.chunk_acceptance import ChunkAcceptance
@@ -27,6 +29,9 @@ from subtitle_llm.pipeline.normalization import (
     normalize_subtitle,
     write_normalization_map,
 )
+from subtitle_llm.pipeline.model_segmentation import SegmentationSource, context_without_cue_ids, plan_model_chunks
+from subtitle_llm.pipeline.model_segmenter import ModelSegmenter, model_request_key
+from subtitle_llm.pipeline.prompts import GENERATE_SUMMARY_PROMPT
 from subtitle_llm.pipeline.quality import QualityGate
 from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.pipeline.run_ledger import RunLedger
@@ -179,7 +184,12 @@ class TranslationService:
         logger.info("字幕读取完成: entries=%s", report.total_entries)
 
         progress_contract.normalization_started()
+        model_segmentation = self.config.pipeline.model_segmentation == "always" or (
+            self.config.pipeline.model_segmentation == "auto" and resolved_input.from_asr
+        )
+        report.model_segmentation_applied = model_segmentation
         normalization_mode = (
+            "off" if model_segmentation else
             "always" if resolved_input.from_asr else self.config.pipeline.normalize_subtitles
         )
         normalization = normalize_subtitle(
@@ -249,7 +259,15 @@ class TranslationService:
             )
             should_restore = request.resume
 
+        if should_restore and task_record is not None and request.task_id is None:
+            self._apply_task_config_snapshot(task_record)
+
         if task_record is None:
+            record_config = self.config
+            if model_segmentation:
+                # 恢复时输入已是本地 SRT，必须记住它原来走的是模型断句。
+                record_config = self.config.model_copy(deep=True)
+                record_config.pipeline.model_segmentation = "always"
             task_record = self.task_store.create_task(
                 input_display=request.input_file,
                 working_directory=os.getcwd(),
@@ -259,7 +277,7 @@ class TranslationService:
                 source_language=request.source_language,
                 output_format=output_format,
                 output_file=output_file_for_record,
-                config=self.config,
+                config=record_config,
                 context_file=str(context_file),
                 llm_trace_dir=str(trace_recorder.trace_dir),
                 source_video_file=resolved_input.video_file,
@@ -271,8 +289,11 @@ class TranslationService:
         task_projector = TaskLifecycleProjector(self.task_store, task_record.task_id, report, progress_contract)
         task_projector.project(task_lifecycle.state)
 
+        if should_restore:
+            model_segmentation = self.config.pipeline.model_segmentation == "always"
+            report.model_segmentation_applied = model_segmentation
         task_state_restore = RunLedger.restore_task_state(
-            resume=should_restore,
+            resume=should_restore and not model_segmentation,
             task_id=task_record.task_id,
             subtitle=subtitle,
             task_store=self.task_store,
@@ -280,7 +301,9 @@ class TranslationService:
         )
         resumed_indices = task_state_restore.resumed_indices
         run_ledger = task_state_restore.ledger
-        run_ledger.save_task_state(self.task_store, task_record.task_id, subtitle, report, [])
+        run_ledger.save_task_state(
+            self.task_store, task_record.task_id, Subtitle([]) if model_segmentation else subtitle, report, [],
+        )
         progress_contract.task_record_restored(len(resumed_indices))
         if resumed_indices:
             logger.info(
@@ -298,9 +321,21 @@ class TranslationService:
                 trace_recorder=trace_recorder,
             )
             context_source = "\n".join(
-                [entry.original_text for entry in subtitle.entries if len(entry.original_text) >= 10]
+                [entry.original_text for entry in subtitle.entries
+                 if model_segmentation or len(entry.original_text) >= 10]
             )
-            context, context_usage = context_service.build_context(context_source, request.target_language)
+            context_key = model_request_key({
+                "stage": "context", "template": GENERATE_SUMMARY_PROMPT,
+                "source": context_source, "language": request.target_language,
+                "model": self.config.summary_model.model_dump(mode="json"),
+            })
+            saved_context = self.task_store.load_model_result(task_record.task_id, context_key) if model_segmentation else None
+            if saved_context:
+                context, context_usage = saved_context["context"], CompletionUsage()
+            else:
+                context, context_usage = context_service.build_context(context_source, request.target_language)
+                if model_segmentation:
+                    self.task_store.save_model_result(task_record.task_id, context_key, {"context": context})
             report.token_usage.add_usage(context_usage.to_dict())
             context_service.save_context(context, context_file)
             progress_contract.context_generated(
@@ -313,19 +348,23 @@ class TranslationService:
                 context_file,
                 context_usage.total_tokens,
             )
-            run_ledger.save_task_state(self.task_store, task_record.task_id, subtitle, report, [])
+            run_ledger.save_task_state(
+                self.task_store, task_record.task_id, Subtitle([]) if model_segmentation else subtitle, report, [],
+            )
         except Exception as exc:
             task_lifecycle = task_lifecycle.apply(TranslationTaskLifecycleEvent.FAILED)
             task_projector.project(task_lifecycle.state, error_summary=str(exc))
             raise
 
         review_mode = request.review_mode or self.config.pipeline.review_mode
+        if model_segmentation:
+            context = context_without_cue_ids(context)
         refine_translation = self._refine_translation_enabled(request)
         semantic_units_list = build_semantic_units(
             subtitle.entries,
             max_cues_per_unit=self.config.pipeline.semantic_max_cues_per_unit,
         )
-        use_semantic_translation = self._use_semantic_translation(review_mode, semantic_units_list)
+        use_semantic_translation = not model_segmentation and self._use_semantic_translation(review_mode, semantic_units_list)
         translation_entries = subtitle.entries
         planner_resumed_indices = resumed_indices
         semantic_unit_by_index: dict[int, SemanticUnit] = {}
@@ -370,18 +409,24 @@ class TranslationService:
         planner = ChunkPlanner(
             chunk_size=self.config.pipeline.chunk_size,
             context_window_size=self.config.pipeline.context_window_size,
-            ignore_subtitle_length=self.config.pipeline.ignore_subtitle_length,
+            ignore_subtitle_length=0 if model_segmentation else self.config.pipeline.ignore_subtitle_length,
             max_output_tokens=self._chunk_output_token_budget(),
             encoder=build_token_encoder(self.config.translation_model.model),
             output_text_resolver=output_text_resolver,
         )
-        planned_chunks = planner.plan(translation_entries, resumed_indices=planner_resumed_indices)
+        if model_segmentation:
+            planned_chunks = plan_model_chunks(
+                subtitle.entries, self.config.pipeline, self._chunk_output_token_budget(),
+                build_token_encoder(self.config.translation_model.model),
+            )
+        else:
+            planned_chunks = planner.plan(translation_entries, resumed_indices=planner_resumed_indices)
         report.total_chunks = len(planned_chunks)
         report.short_entries = len(
             [
                 entry
                 for entry in translation_entries
-                if len(entry.original_text.strip()) <= self.config.pipeline.ignore_subtitle_length
+                if len(entry.original_text.strip()) <= (0 if model_segmentation else self.config.pipeline.ignore_subtitle_length)
                 and entry.index not in planner_resumed_indices
             ]
         )
@@ -430,8 +475,21 @@ class TranslationService:
             threads=self.config.pipeline.threads,
             semantic_output_granularity=self.config.pipeline.semantic_output_granularity,
         )
+        model_source = SegmentationSource(subtitle.entries) if model_segmentation else None
+        if model_segmentation:
+            # 模型生成的字幕与原始 ASR 条目分开保存，不能把二者按旧编号混合。
+            subtitle = Subtitle([])
         try:
-            if use_semantic_translation:
+            if model_source is not None:
+                segmenter = ModelSegmenter(
+                    model_source, translator, self.config.pipeline, context, request.target_language,
+                    self.task_store, task_record.task_id, report,
+                )
+                chunk_processor.run_model_chunks(
+                    planned_chunks, segmenter, acceptance, subtitle, translated_entries,
+                    run_ledger, self.task_store, task_record.task_id, report,
+                )
+            elif use_semantic_translation:
                 chunk_processor.run_semantic_chunks(
                     planned_chunks,
                     semantic_unit_by_index,
@@ -459,13 +517,19 @@ class TranslationService:
 
             task_lifecycle = task_lifecycle.apply(TranslationTaskLifecycleEvent.PROCESS_CHUNKS_COMPLETED)
             task_projector.project(task_lifecycle.state, emit_progress=True)
-            run_ledger.finalize_subtitle(subtitle, translated_entries, report)
+            run_ledger.finalize_subtitle(subtitle, translated_entries, report, reorder=not model_segmentation)
             output_subtitle, source_display_corrections = subtitle_with_source_display_corrections(
                 subtitle,
                 source_corrections_from_context(context),
             )
             if source_display_corrections:
                 logger.info("写出字幕时应用源文展示修正: entries=%s", source_display_corrections)
+            if model_source is not None:
+                self._write_model_normalization_artifacts(
+                    model_source, subtitle, input_file, output_file, request.source_language, report,
+                )
+                output_subtitle = Subtitle([replace(entry) for entry in output_subtitle.entries])
+                output_subtitle.reorder_entries()
             progress_contract.writing_srt(output_file)
             SubtitleIO.write_srt(output_subtitle, output_file, output_format=output_format)
             progress_contract.srt_written(output_file)
@@ -487,7 +551,7 @@ class TranslationService:
                 len(report.failed_chunks),
                 report.token_usage.total_tokens,
             )
-            return TranslationResult(subtitle=subtitle, report=report)
+            return TranslationResult(subtitle=output_subtitle if model_segmentation else subtitle, report=report)
         except Exception as exc:
             task_lifecycle = task_lifecycle.apply(TranslationTaskLifecycleEvent.FAILED)
             task_projector.project(task_lifecycle.state, error_summary=str(exc))
@@ -505,6 +569,36 @@ class TranslationService:
         if request.input_file or request.output_file:
             raise ValueError("--task-id 恢复不能同时指定新的 --input 或 --output")
         return self.task_store.get_task(request.task_id)
+
+    def _write_model_normalization_artifacts(
+        self, source: SegmentationSource, subtitle: Subtitle, input_file: str | Path,
+        output_file: str | Path, source_language: str, report: TranslationReport,
+    ) -> None:
+        normalized_file = self._normalized_source_file(output_file, input_file, source_language)
+        map_file = sidecar_path(output_file, "_normalization_map.json")
+        normalized = Subtitle([replace(entry) for entry in subtitle.entries])
+        normalized.reorder_entries()
+        SubtitleIO.write_srt(normalized, normalized_file, output_format="source-only")
+        cues = []
+        for i, entry in enumerate(subtitle.entries):
+            end = subtitle.entries[i + 1].index - 1 if i + 1 < len(subtitle.entries) else len(source.positions)
+            indices = list(dict.fromkeys(p.source_index for p in source.positions[entry.index - 1:end]))
+            cues.append({
+                "normalized_index": i + 1, "original_indices": indices,
+                "original_start_index": indices[0], "original_end_index": indices[-1],
+                "start_time": entry.start_time, "end_time": entry.end_time,
+                "text": entry.original_text.replace("\n", " "),
+                "source_position_start": entry.index, "source_position_end": end,
+            })
+        report.normalization_applied = True
+        report.normalization_reason = "model segmentation and translation"
+        report.normalization_stats["normalized_entries"] = len(normalized.entries)
+        report.normalized_source_file = str(normalized_file)
+        report.normalization_map_file = str(map_file)
+        Path(map_file).write_text(json.dumps({
+            "applied": True, "reason": report.normalization_reason,
+            "stats": report.normalization_stats, "cues": cues,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _request_from_task_record(
         self,

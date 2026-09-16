@@ -10,7 +10,7 @@ import concurrent.futures
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, TypeVar
 
 from subtitle_llm.domain import Subtitle
 from subtitle_llm.pipeline.chunk_acceptance import ChunkAcceptance, translator_progress_contract
@@ -22,6 +22,7 @@ from subtitle_llm.pipeline.lifecycle import (
     TranslationChunkState,
 )
 from subtitle_llm.pipeline.lifecycle.projectors import ChunkLifecycleProjector
+from subtitle_llm.pipeline.model_segmenter import GeneratedChunk, ModelSegmenter
 from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.pipeline.run_ledger import RunLedger
 from subtitle_llm.pipeline.semantic_units import SemanticUnit
@@ -29,6 +30,7 @@ from subtitle_llm.pipeline.task_store import TranslationTaskStore
 from subtitle_llm.progress_contract import ProgressContract
 
 logger = logging.getLogger(__name__)
+ResultT = TypeVar("ResultT")
 
 
 @dataclass
@@ -53,6 +55,48 @@ class _ChunkTaskContext:
 class ChunkProcessingCoordinator:
     threads: int
     semantic_output_granularity: str
+
+    def run_model_chunks(
+        self, planned_chunks: list[PlannedChunk], segmenter: ModelSegmenter,
+        acceptance: ChunkAcceptance, subtitle: Subtitle, translated_entries: list,
+        run_ledger: RunLedger, task_store: TranslationTaskStore, task_id: str,
+        report: TranslationReport,
+    ) -> None:
+        progress = translator_progress_contract(segmenter.translator)
+        projector = ChunkLifecycleProjector(task_store, task_id, progress)
+        lifecycles = self._queue_chunks(planned_chunks, projector, total_chunks=report.total_chunks)
+        acceptance.bind_lifecycle(lifecycles, projector)
+        context = self._task_context(
+            lifecycles, projector, progress, subtitle, translated_entries,
+            run_ledger, task_store, task_id, report,
+        )
+        sources = {planned.index: list(planned.entries) for planned in planned_chunks}
+
+        def accept(planned: PlannedChunk, result: object) -> None:
+            if not isinstance(result, GeneratedChunk):
+                raise TypeError("模型断句结果类型错误")
+            planned.entries = result.result.chunk
+            accepted: list = []
+            if result.accepted:
+                accepted.extend(result.result.chunk)
+                with context.report_lock:
+                    run_ledger.record_removed_indices(result.removed_indices)
+                    report.resumed_entries += len(accepted)
+            else:
+                acceptance.accept_generated(planned, result.result, accepted)
+                segmenter.accept(result, accepted)
+            translated_entries.extend(accepted)
+            planned.entries = accepted
+
+        def fail(planned: PlannedChunk, exc: Exception) -> None:
+            planned.entries = segmenter.source.fallback_cues(sources[planned.index])
+            acceptance.handle_failure(planned, exc, translated_entries)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.threads) as executor:
+            self._run_chunk_tasks(
+                executor, planned_chunks, context, projector, report,
+                translate=segmenter.translate, accept_result=accept, handle_failure=fail,
+            )
 
     def run_chunks(
         self,
@@ -222,9 +266,9 @@ class ChunkProcessingCoordinator:
         chunk_projector: ChunkLifecycleProjector,
         report: TranslationReport,
         *,
-        translate: Callable[[PlannedChunk], object],
-        accept_result: Callable[[PlannedChunk, object], None],
-        handle_failure: Callable[[PlannedChunk, BaseException], None],
+        translate: Callable[[PlannedChunk], ResultT],
+        accept_result: Callable[[PlannedChunk, ResultT], None],
+        handle_failure: Callable[[PlannedChunk, Exception], None],
     ) -> None:
         future_to_chunk: dict[concurrent.futures.Future, PlannedChunk] = {}
         for planned in planned_chunks:
@@ -257,9 +301,9 @@ class ChunkProcessingCoordinator:
         planned: PlannedChunk,
         context: _ChunkTaskContext,
         *,
-        translate: Callable[[PlannedChunk], object],
-        accept_result: Callable[[PlannedChunk, object], None],
-        handle_failure: Callable[[PlannedChunk, BaseException], None],
+        translate: Callable[[PlannedChunk], ResultT],
+        accept_result: Callable[[PlannedChunk, ResultT], None],
+        handle_failure: Callable[[PlannedChunk, Exception], None],
     ) -> None:
         """worker 线程内的完整片段管线：翻译 → 接受（诊断/修复/复核）→ 收尾。
 

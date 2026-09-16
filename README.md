@@ -130,6 +130,11 @@ summary_model:
 
 Most fallback defaults live in `src/subtitle_llm/settings.py`; `default.yaml` only declares required model settings and project-specific overrides.
 
+ASR translations use a single model call per chunk to choose subtitle boundaries and translate. Set
+`pipeline.model_segmentation: always` to use this with existing subtitle files, or `off` to keep the
+fixed-cue workflow. See [模型断句与翻译](docs/model-segmentation.md) for recovery behavior, timing limits,
+and the offline token benchmark.
+
 Use a custom config with:
 
 ```bash
