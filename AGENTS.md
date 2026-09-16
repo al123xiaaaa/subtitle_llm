@@ -55,6 +55,8 @@ npm run test:desktop       # lint + build + typecheck + smoke + Playwright e2e
 6. `TranslationTaskStore` (`task_store.py`) persists resumable runs in SQLite with input/config snapshots; `checkpoint.py` provides sidecar path and file fingerprint helpers.
 7. `ReviewPolicy` (`review_policy.py`) decides the route for suspicious chunks; `chunk_acceptance.py` runs the (parallelized) acceptance pipeline: quality diagnosis → auto repair/re-translate → semantic layout repair → source correction gate → TUI review.
 
+**Model segmentation** (`pipeline/model_segmentation.py` + `model_segmenter.py`): for ASR sources (config `pipeline.model_segmentation: auto|always|off`, default `auto`), segmentation and translation happen in a single model call — cue boundaries come from model-chosen end positions, validated for contiguous coverage against the source text. Only missing ranges are repaired (max 2 repair calls); generated/reviewed results are persisted and reused across resumes. See `docs/model-segmentation.md`.
+
 **LLM client architecture** (`src/subtitle_llm/llm/`):
 - `types.py` — `ChatClient`, `CompletionResult`, and normalized usage models
 - `clients.py` — OpenAI, Gemini, and custom HTTP provider adapters
