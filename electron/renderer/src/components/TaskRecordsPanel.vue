@@ -176,7 +176,7 @@ function canContinue(status: string, deletedAt?: string | null): boolean {
       <article
         v-for="record in taskRecords"
         :key="record.task_id"
-        :class="['task-record-item', `status-${statusTone(record.status)}`, { 'is-deleted': record.deleted_at }]"
+        :class="['task-record-item', { 'is-deleted': record.deleted_at }]"
       >
         <div class="task-record-main">
           <div class="task-record-title-row">
