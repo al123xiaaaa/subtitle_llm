@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import type { useAppController } from "../composables/useAppController";
 
 type Controller = ReturnType<typeof useAppController>;
@@ -23,6 +24,21 @@ const {
   toggleDeletedTaskRecords,
 } = props.records;
 
+// 头部"⋯"菜单：收拢刷新/已删除两个低频操作，把标题留给内容。
+const menuOpen = ref(false);
+const menuRoot = ref<HTMLElement | null>(null);
+function toggleMenu(): void {
+  menuOpen.value = !menuOpen.value;
+}
+function onMenuRefresh(): void {
+  menuOpen.value = false;
+  refreshTaskRecords();
+}
+function onMenuToggleDeleted(): void {
+  menuOpen.value = false;
+  toggleDeletedTaskRecords();
+}
+
 function recordTitle(input: string): string {
   const parts = input.split(/[\\/]/).filter(Boolean);
   return parts.at(-1) || input || "未命名任务";
@@ -43,7 +59,7 @@ const STATUS_LABELS: Record<string, string> = {  created: "已创建",
   processing_chunks: "翻译中",
   finalizing_output: "生成结果",
   completed: "已完成",
-  completed_with_warnings: "已完成 · 有警告",
+  completed_with_warnings: "有警告",
   failed: "失败",
 };
 
@@ -51,12 +67,37 @@ function statusLabel(status: string): string {
   return STATUS_LABELS[status] || status;
 }
 
-function formatTime(value: string): string {
+type StatusTone = "success" | "warning" | "danger" | "info" | "muted";
+
+const STATUS_TONES: Record<string, StatusTone> = {
+  created: "info",
+  preparing_input: "info",
+  preparing_translation: "info",
+  processing_chunks: "info",
+  finalizing_output: "info",
+  completed: "success",
+  completed_with_warnings: "warning",
+  failed: "danger",
+};
+
+function statusTone(status: string): StatusTone {
+  return STATUS_TONES[status] || "muted";
+}
+
+function relativeTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleString();
+  const elapsed = Date.now() - date.getTime();
+  const minutes = Math.round(elapsed / 60000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.round(hours / 24);
+  if (days < 30) return `${days} 天前`;
+  return date.toLocaleDateString();
 }
 
 function canContinue(status: string, deletedAt?: string | null): boolean {
@@ -89,21 +130,39 @@ function canContinue(status: string, deletedAt?: string | null): boolean {
           继续或回看之前的翻译
         </p>
       </div>
-      <div class="task-record-actions">
+      <div
+        ref="menuRoot"
+        class="task-record-menu"
+      >
         <button
           class="ghost-button"
           type="button"
-          @click="refreshTaskRecords"
+          aria-label="更多任务操作"
+          :aria-expanded="menuOpen"
+          @click="toggleMenu"
         >
-          刷新
+          ⋯
         </button>
-        <button
-          class="ghost-button"
-          type="button"
-          @click="toggleDeletedTaskRecords"
+        <div
+          v-if="menuOpen"
+          class="task-record-menu-list"
+          role="menu"
         >
-          {{ showDeletedTaskRecords ? "隐藏已删除" : "查看已删除" }}
-        </button>
+          <button
+            role="menuitem"
+            type="button"
+            @click="onMenuRefresh"
+          >
+            刷新
+          </button>
+          <button
+            role="menuitem"
+            type="button"
+            @click="onMenuToggleDeleted"
+          >
+            {{ showDeletedTaskRecords ? "隐藏已删除" : "查看已删除" }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -117,52 +176,17 @@ function canContinue(status: string, deletedAt?: string | null): boolean {
       <article
         v-for="record in taskRecords"
         :key="record.task_id"
-        :class="['task-record-item', { 'is-deleted': record.deleted_at }]"
+        :class="['task-record-item', `status-${statusTone(record.status)}`, { 'is-deleted': record.deleted_at }]"
       >
         <div class="task-record-main">
-          <div>
+          <div class="task-record-title-row">
             <strong :title="displayTitle(record)">{{ displayTitle(record) }}</strong>
-            <span>{{ record.target_language }} · {{ statusLabel(record.status) }} · {{ formatTime(record.updated_at) }}</span>
+            <span :class="['status-badge', `is-${statusTone(record.status)}`]">{{ statusLabel(record.status) }}</span>
           </div>
-          <div class="task-record-files">
-            <span class="task-file-actions">
-              <span class="task-file-label">字幕</span>
-              <button
-                class="ghost-button"
-                type="button"
-                @click="openTaskOutput(record)"
-              >
-                打开
-              </button>
-              <button
-                class="ghost-button"
-                type="button"
-                @click="showTaskOutput(record)"
-              >
-                定位
-              </button>
-            </span>
-            <span
-              v-if="record.source_video_file"
-              class="task-file-actions"
-            >
-              <span class="task-file-label">源视频</span>
-              <button
-                class="ghost-button"
-                type="button"
-                @click="openTaskSourceVideo(record)"
-              >
-                打开
-              </button>
-              <button
-                class="ghost-button"
-                type="button"
-                @click="showTaskSourceVideo(record)"
-              >
-                定位
-              </button>
-            </span>
-          </div>
+          <span
+            class="task-record-meta"
+            :title="`${record.target_language} · ${statusLabel(record.status)} · ${new Date(record.updated_at).toLocaleString()}`"
+          >{{ record.target_language }} · {{ relativeTime(record.updated_at) }}</span>
         </div>
         <div class="task-record-buttons">
           <button
@@ -182,14 +206,59 @@ function canContinue(status: string, deletedAt?: string | null): boolean {
           >
             恢复
           </button>
-          <button
-            v-else
-            class="ghost-button danger-ghost"
-            type="button"
-            @click="softDeleteTaskRecord(record)"
-          >
-            删除
-          </button>
+          <details class="task-record-more">
+            <summary
+              class="ghost-button"
+              aria-label="更多操作"
+            >
+              ⋯
+            </summary>
+            <div
+              class="task-record-more-list"
+              role="menu"
+            >
+              <template v-if="!record.deleted_at">
+                <button
+                  role="menuitem"
+                  type="button"
+                  @click="openTaskOutput(record)"
+                >
+                  打开字幕
+                </button>
+                <button
+                  role="menuitem"
+                  type="button"
+                  @click="showTaskOutput(record)"
+                >
+                  定位字幕
+                </button>
+                <template v-if="record.source_video_file">
+                  <button
+                    role="menuitem"
+                    type="button"
+                    @click="openTaskSourceVideo(record)"
+                  >
+                    打开源视频
+                  </button>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    @click="showTaskSourceVideo(record)"
+                  >
+                    定位源视频
+                  </button>
+                </template>
+              </template>
+              <button
+                role="menuitem"
+                type="button"
+                class="danger-ghost"
+                @click="softDeleteTaskRecord(record)"
+              >
+                删除
+              </button>
+            </div>
+          </details>
         </div>
       </article>
     </div>

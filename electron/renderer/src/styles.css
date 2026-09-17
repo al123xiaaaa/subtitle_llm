@@ -1749,14 +1749,31 @@ select {
 
 .task-record-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--space-2);
   align-items: center;
   border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--line-soft);
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-xs);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+}
+
+.task-record-item.status-success {
+  border-left-color: var(--success);
+}
+
+.task-record-item.status-warning {
+  border-left-color: var(--warning);
+}
+
+.task-record-item.status-danger {
+  border-left-color: var(--danger);
+}
+
+.task-record-item.status-info {
+  border-left-color: var(--info);
 }
 
 .task-record-item.is-deleted {
@@ -1764,37 +1781,166 @@ select {
 }
 
 .task-record-main {
+  display: grid;
+  gap: 2px;
   min-width: 0;
 }
 
-.task-record-main > div {
+.task-record-title-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--space-2);
-  flex-wrap: wrap;
+  min-width: 0;
 }
 
-.task-record-main strong,
-.task-record-main p {
+.task-record-title-row strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.task-record-main strong {
   font-size: var(--text-sm);
 }
 
-.task-record-main > div:first-child {
-  display: grid;
-  gap: var(--space-1);
-}
-
-.task-record-main > div:first-child > span {
+.task-record-meta {
+  color: var(--muted);
   font-size: var(--text-xs);
 }
 
+/* 状态徽章：扫一眼区分完成/警告/失败/进行中 */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 18px;
+  border-radius: 999px;
+  padding: 0 7px;
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.status-badge.is-success {
+  color: var(--success);
+  background: var(--success-bg);
+}
+
+.status-badge.is-warning {
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.status-badge.is-danger {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.status-badge.is-info {
+  color: var(--info);
+  background: var(--accent-softter);
+}
+
+.status-badge.is-muted {
+  color: var(--muted);
+  background: var(--gray-100);
+}
+
+/* 头部"⋯"菜单 */
+.task-record-menu {
+  position: relative;
+}
+
+.task-record-menu .ghost-button {
+  min-height: 28px;
+  padding: 0 var(--space-2);
+}
+
+.task-record-menu-list,
+.task-record-more-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  display: grid;
+  min-width: 132px;
+  padding: 4px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.task-record-menu-list button,
+.task-record-more-list button {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  padding: 7px 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.task-record-menu-list button:hover,
+.task-record-more-list button:hover {
+  background: var(--gray-100);
+  color: var(--ink);
+}
+
+.task-record-more-list button.danger-ghost,
+.task-record-more-list button.danger-ghost:hover {
+  color: var(--danger);
+  background: none;
+}
+
+.task-record-more-list button.danger-ghost:hover {
+  background: var(--danger-bg);
+}
+
+/* 卡片"⋯"操作菜单 */
+.task-record-more {
+  position: relative;
+}
+
+.task-record-more summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  min-width: 28px;
+  padding: 0;
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.task-record-more summary::-webkit-details-marker {
+  display: none;
+}
+
+.task-record-more summary:hover,
+.task-record-more[open] summary {
+  color: var(--ink);
+  background: var(--gray-100);
+}
+
+/* 悬停时卡片浮起，操作按钮显现；触屏/键盘仍可 focus 展开 */
+.task-record-item .task-record-buttons {
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.task-record-item:hover .task-record-buttons,
+.task-record-item:focus-within .task-record-buttons {
+  opacity: 1;
+}
+
 .task-record-buttons {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   justify-content: flex-end;
 }
 
