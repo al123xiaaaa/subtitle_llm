@@ -163,19 +163,22 @@ class ChunkTranslator:
             # 响应为空或被 max_tokens 截断时，解析错误只是表象，根因是输出额度耗尽
             # （思考型模型的思考过程也计入输出额度）。换成明确的根因错误再抛出。
             budget_error: OutputBudgetExhaustedError | None = None
-            if not result.content.strip() or result.finish_reason == "length":
+            if result.finish_reason == "length" or (
+                not result.content.strip() and result.finish_reason in {None, "stop"}
+            ):
                 budget_error = output_budget_exhausted(
                     self.operations.model_config.model,
                     self.operations.model_config.max_tokens,
                     truncated=result.finish_reason == "length",
                 )
             reported = budget_error or exc
-            if record_error:
+            if record_error or self.trace_recorder is not None:
                 self.operations.record_trace(
                     stage=stage,
                     prompt=prompt,
                     response=result.content,
                     usage=result.usage,
+                    finish_reason=result.finish_reason,
                     duration_ms=duration_ms,
                     chunk=chunk,
                     chunk_index=chunk_index,
@@ -199,6 +202,7 @@ class ChunkTranslator:
             prompt=prompt,
             response=result.content,
             usage=result.usage,
+            finish_reason=result.finish_reason,
             duration_ms=duration_ms,
             chunk=chunk,
             chunk_index=chunk_index,
@@ -360,6 +364,7 @@ class ChunkTranslator:
                         prompt=prompt,
                         usage=op.completion.usage,
                         duration_ms=op.duration_ms,
+                        finish_reason=op.completion.finish_reason,
                         chunk_index=chunk_index,
                     ),
                 )
@@ -793,6 +798,7 @@ class ChunkTranslator:
         usage: CompletionUsage,
         duration_ms: int,
         chunk_index: int | None,
+        finish_reason: str | None = None,
     ) -> str:
         try:
             return process_timed_cue_json_translation(response, cue_entries)
@@ -818,6 +824,7 @@ class ChunkTranslator:
                     chunk_index=chunk_index,
                     processed_translation="",
                     error=f"timed cue parse failed: {timed_exc}; semantic fallback failed: {semantic_exc}",
+                    finish_reason=finish_reason,
                 )
                 raise timed_exc
 

@@ -263,12 +263,21 @@ p {
 }
 
 .main-workspace {
+  container: workspace / inline-size;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+.task-workbench {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
 /* —— 进度主区（主角）—— */
@@ -283,8 +292,8 @@ p {
   overflow: hidden;
 }
 
-.run-panel.is-idle {
-  flex: 0 0 auto;
+.run-panel {
+  container: run / inline-size;
 }
 
 /* —— 配置抽屉 —— */
@@ -953,13 +962,13 @@ select {
 
 .progress-dashboard {
   display: grid;
-  grid-template-columns: minmax(0, 880px);
+  grid-template-columns: minmax(0, 1fr);
   justify-content: center;
   align-content: start;
   flex: 1 1 auto;
-  gap: var(--space-5);
+  gap: var(--space-4);
   min-height: 0;
-  padding: var(--space-6);
+  padding: var(--space-5);
   overflow: auto;
   overscroll-behavior: contain;
 }
@@ -1412,21 +1421,38 @@ select {
 }
 
 /* —— 结果文件 —— */
+.run-detail-grid {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.run-detail-grid.has-results {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr);
+}
+
+.run-process {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-5);
+}
+
 .result-files {
   display: grid;
-  flex: 0 0 auto;
+  min-width: 0;
   gap: var(--space-2);
-  max-height: min(30vh, 260px);
-  padding: var(--space-4) var(--space-6);
-  border-top: 1px solid var(--line);
-  background: var(--surface-soft);
-  overflow: auto;
+}
+
+.result-heading {
+  display: grid;
+  gap: var(--space-1);
+  margin-bottom: var(--space-1);
 }
 
 .result-file-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  align-items: start;
   gap: var(--space-3);
   min-width: 0;
   padding: var(--space-3) var(--space-4);
@@ -1443,7 +1469,25 @@ select {
 }
 
 .result-file-row strong {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
   font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.result-file-row .result-file-label {
+  margin-bottom: var(--space-1);
+  color: var(--accent-strong);
+  font-weight: var(--weight-semibold);
+}
+
+.result-actions button {
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-xs);
 }
 
 .result-file-row span {
@@ -1471,7 +1515,8 @@ select {
 .log-details summary {
   display: flex;
   align-items: baseline;
-  gap: var(--space-3);
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
   cursor: pointer;
   padding: var(--space-2) var(--space-6);
   color: var(--muted);
@@ -1595,20 +1640,18 @@ select {
 .task-records-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  flex: 0 0 auto;
-  gap: var(--space-4);
+  gap: var(--space-3);
   min-width: 0;
-  max-height: clamp(220px, 32vh, 340px);
-  border-top: 1px solid var(--line-soft);
-  padding: var(--space-5) var(--space-6);
+  min-height: 0;
+  border-right: 1px solid var(--line-soft);
+  background: var(--surface-soft);
+  padding: var(--space-4);
   overflow: hidden;
 }
 
 .task-records-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
 }
 
 .task-records-heading > div {
@@ -1665,6 +1708,8 @@ select {
 
 .task-record-list {
   display: grid;
+  align-content: start;
+  grid-auto-rows: max-content;
   gap: var(--space-2);
   min-height: 0;
   overflow: auto;
@@ -1673,8 +1718,8 @@ select {
 
 .task-record-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--space-3);
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
   align-items: center;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
@@ -1703,6 +1748,34 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.task-record-main strong {
+  font-size: var(--text-sm);
+}
+
+.task-record-main > div:first-child {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.task-record-main > div:first-child > span {
+  font-size: var(--text-xs);
+}
+
+.task-record-buttons {
+  justify-content: flex-end;
+}
+
+.task-record-buttons button,
+.task-record-actions button {
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.task-record-empty {
+  padding: var(--space-5) var(--space-2);
 }
 
 /* ===================== 首次配置（Onboarding）===================== */
@@ -1828,5 +1901,70 @@ select {
 @media (max-width: 1040px) {
   :root {
     --drawer-w: 360px;
+  }
+}
+
+/* 以剩余工作区宽度判断，配置抽屉展开时也能自动收成单列。 */
+@container workspace (max-width: 1000px) {
+  .task-workbench {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(140px, 25%) minmax(0, 1fr);
+  }
+
+  .task-records-panel {
+    border-right: 0;
+    border-bottom: 1px solid var(--line-soft);
+    padding: var(--space-3) var(--space-4);
+    gap: var(--space-2);
+  }
+
+  .task-records-heading {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .task-records-heading .task-records-hint {
+    display: none;
+  }
+
+  .task-record-item {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+@container run (max-width: 700px) {
+  .run-detail-grid.has-results {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .progress-dashboard {
+    padding: var(--space-4);
+  }
+
+  .current-progress {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .current-progress strong {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .log-details summary {
+    padding: var(--space-2) var(--space-4);
+  }
+
+  .log-latest {
+    display: none;
+  }
+
+  .log-card {
+    margin: var(--space-2) var(--space-4);
+  }
+
+  #logBody.log-body {
+    max-height: 20vh;
   }
 }

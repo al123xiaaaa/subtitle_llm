@@ -204,6 +204,7 @@ class ModelSegmenter:
             trace_id = recorder.record_call(
                 stage=stage, prompt=prompt, response=completion.content,
                 model_config=self.translator.model_config, usage=completion.usage,
+                finish_reason=completion.finish_reason,
                 duration_ms=operation.duration_ms, chunk=planned.entries,
                 chunk_index=planned.index, total_chunks=self.report.total_chunks,
                 source_coverage=SourceCoverage(start, end, len(pieces), gaps),

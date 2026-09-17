@@ -49,7 +49,7 @@ export function useAppController() {
     return (
       !isBusy.value &&
       Boolean(selectedProvider) &&
-      (taskForms.translateForm.useYamlConfig || Boolean(selectedProvider?.credential.available))
+      (taskForms.translateForm.useYamlConfig || (Boolean(selectedProvider?.credential.available) && !providerState.outputBudgetError.value))
     );
   });
   const canStartMux = computed(() => !isBusy.value && taskForms.canStartMux.value);
@@ -63,6 +63,10 @@ export function useAppController() {
   }
 
   async function startTranslate(reuse: ReusableSubtitleMatch | null): Promise<void> {
+    if (!taskForms.translateForm.useYamlConfig && providerState.outputBudgetError.value) {
+      jobLifecycle.appendLog(`${providerState.outputBudgetError.value}\n`, "stderr");
+      return;
+    }
     reusableSubtitle.value = null;
     const output = cleanString(taskForms.translateForm.output);
     if (output) {

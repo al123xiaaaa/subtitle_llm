@@ -409,6 +409,15 @@ class TestNewPipeline(unittest.TestCase):
                 for line in stdout.getvalue().splitlines()
                 if line.startswith(PROGRESS_EVENT_PREFIX)
             ]
+            previews = [event["preview"] for event in events if event["stage"] == "subtitle_preview"]
+            self.assertEqual([item["revision"] for item in previews], [1, 2])
+            self.assertEqual([item["final"] for item in previews], [False, True])
+            self.assertEqual(previews[0]["entries"], previews[1]["entries"])
+            self.assertEqual([entry["original_text"] for entry in previews[0]["entries"]],
+                             ["Hello world.", "This is a second line."])
+            self.assertEqual([entry["start"] for entry in previews[0]["entries"]], [1.0, 3.0])
+            preview_position = next(i for i, event in enumerate(events) if "preview" in event)
+            self.assertTrue(any(event["detail"] == "accept_chunk" for event in events[:preview_position]))
             details = {event["detail"] for event in events}
             self.assertIn("prepare_task", details)
             self.assertIn("generate_context", details)

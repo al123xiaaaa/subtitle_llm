@@ -145,6 +145,7 @@ class LlmOperationRunner:
         chunk_index: int | None = None,
         processed_translation: str | None = None,
         error: str | None = None,
+        finish_reason: str | None = None,
     ) -> str | None:
         if self.trace_recorder is None:
             return None
@@ -161,6 +162,7 @@ class LlmOperationRunner:
             processed_translation=processed_translation,
             expected_count=len(chunk),
             error=error,
+            finish_reason=finish_reason,
         )
 
     def emit_chunk_progress(

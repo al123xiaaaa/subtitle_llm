@@ -1,7 +1,8 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import type { Ref } from "vue";
 import { Effect, Fiber, Stream } from "effect";
-import type { CommandName, DesktopJobRequest } from "../../../types";
+import type { CommandName, DesktopJobRequest, SubtitlePreviewSnapshot } from "../../../types";
+import { applySubtitlePreview } from "../../../lib/subtitlePreview";
 import { useJobProgress } from "./useJobProgress";
 import type { LogKind, LogLine, ResultTarget } from "./controllerTypes";
 import { cleanString } from "./controllerUtils";
@@ -43,6 +44,7 @@ export function useJobLifecycle(options: JobLifecycleOptions) {
   let elapsedFiber: Fiber.RuntimeFiber<never, never> | null = null;
 
   const progress = useJobProgress();
+  const subtitlePreview = ref<SubtitlePreviewSnapshot>({ revision: 0, entries: [], final: false });
 
   const program = createJobProgram({
     isBusy: options.isBusy,
@@ -58,8 +60,18 @@ export function useJobLifecycle(options: JobLifecycleOptions) {
     appendLog,
     onSubtitlePath: options.onSubtitlePath,
     onSourceVideoPath: options.onSourceVideoPath,
-    recordProgress: progress.recordProgress,
-    resetProgress: progress.resetProgress,
+    recordProgress: (event) => {
+      if (event.stage === "subtitle_preview") {
+        subtitlePreview.value = applySubtitlePreview(subtitlePreview.value, event.preview);
+      } else {
+        progress.recordProgress(event);
+      }
+    },
+    resetProgress: (command) => {
+      subtitlePreview.value = { revision: 0, entries: [], final: false };
+      activeCommand.value = command;
+      progress.resetProgress(command);
+    },
     finishProgress: progress.finishJobProgress,
   });
 
@@ -215,6 +227,7 @@ export function useJobLifecycle(options: JobLifecycleOptions) {
   });
 
   return {
+    subtitlePreview,
     activeCommand,
     activeJobId,
     appendLog,

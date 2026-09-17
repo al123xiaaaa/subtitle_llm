@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,6 +13,8 @@ from subtitle_llm.llm.types import CompletionUsage
 from subtitle_llm.settings import ModelConfig
 
 PROGRESS_EVENT_PREFIX = "SUBTITLE_LLM_PROGRESS "
+# 全量预览可能大于管道原子写入大小，所有进度行共用锁防止并发交错。
+_STDOUT_LOCK = threading.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +61,8 @@ class ProgressEmitter:
         )
         line = PROGRESS_EVENT_PREFIX + json.dumps(payload, ensure_ascii=False, sort_keys=True)
         try:
-            print(line, flush=True)
+            with _STDOUT_LOCK:
+                print(line, flush=True)
         except BrokenPipeError:
             # 消费端（GUI）已关闭 stdout 管道：不再打印进度，但任务可继续。
             # 不 raise，避免 GUI 关闭/重启时整个翻译进程崩溃。

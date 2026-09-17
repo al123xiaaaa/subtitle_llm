@@ -24,11 +24,13 @@ const { formActions, forms, isBusy, job, onboarding, providerState, records, she
 
     <div class="workspace">
       <main class="main-workspace">
-        <RunPanel :job="job" />
-        <TaskRecordsPanel
-          :is-busy="isBusy"
-          :records="records"
-        />
+        <div class="task-workbench">
+          <TaskRecordsPanel
+            :is-busy="isBusy"
+            :records="records"
+          />
+          <RunPanel :job="job" />
+        </div>
       </main>
       <ConfigDrawer
         :form-actions="formActions"

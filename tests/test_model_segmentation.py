@@ -177,6 +177,22 @@ class TestModelSegmenter(unittest.TestCase):
         self.assertIn("Source positions 1-4:", resumed.prompts[0])
         self.assertEqual(result.result.chunk[0].translated_text, "一二")
 
+    def test_segmentation_and_repair_trace_output_metadata(self):
+        usage = CompletionUsage(total_tokens=50, reasoning_tokens=12)
+        client = FakeClient([
+            CompletionResult('[{"end":2,"text":"一二"}]', usage, "length"),
+            CompletionResult('[{"end":4,"text":"三四五六"}]', CompletionUsage(total_tokens=20), "stop"),
+        ])
+        segmenter = self.segmenter(client)
+        trace_dir = Path(self.tmp.name) / "trace"
+        segmenter.translator.trace_recorder = LlmTraceRecorder(trace_dir)
+        segmenter.translate(self.planned)
+        traces = [json.loads(p.read_text()) for p in sorted(trace_dir.glob("*.json"))]
+        self.assertEqual([t["finish_reason"] for t in traces], ["length", "stop"])
+        self.assertEqual([t["requested_max_tokens"] for t in traces], [None, None])
+        self.assertEqual([t["usage"]["reasoning_tokens"] for t in traces], [12, None])
+        self.assertEqual(self.report.token_usage.total_tokens, 70)
+
     def test_empty_budget_exhaustion_does_not_repeat_full_request(self):
         client = FakeClient([CompletionResult("", CompletionUsage(total_tokens=500), "length")])
         with self.assertRaisesRegex(ValueError, "没有可恢复输出"):
@@ -218,7 +234,8 @@ class TestModelSegmenter(unittest.TestCase):
         self.assertTrue(self.segmenter(FakeClient([])).translate(self.planned).accepted)
 
     def test_v1_accepted_cache_survives_protocol_upgrade_without_calls(self):
-        # v1 固定夹具键：同 setUp 的原文/配置/context；不能随 v2 提示一起重算。
+        # v1 固定夹具含旧的显式预算；恢复快照不能替换成新的厂商默认。
+        self.config.translation_model.max_tokens = 8192
         key = "1737b43821f2948d5883150e5566efa154cdb2e071eb99da5caa7345882a7996"
         pieces = [Piece(1, 2, "一二"), Piece(3, 6, "三四五六")]
         accepted = self.source.to_cues([Piece(1, 6, "人工接受的译文")], self.config.pipeline)
@@ -233,6 +250,7 @@ class TestModelSegmenter(unittest.TestCase):
         self.assertEqual(self.report.token_usage.total_tokens, 0)
 
     def test_v1_partial_cache_only_completes_missing_range_using_local_positions(self):
+        self.config.translation_model.max_tokens = 8192
         key = "1737b43821f2948d5883150e5566efa154cdb2e071eb99da5caa7345882a7996"
         self.store.save_model_result(self.record.task_id, key, {"pieces": [Piece(1, 2, "一二").to_dict()]})
         client = FakeClient(['[{"end":4,"text":"三四五六"}]'])
@@ -352,6 +370,8 @@ class TestModelSegmentationPipeline(unittest.TestCase):
             client = FakeClient(['[{"end":4,"text":"版本就绪。"},{"end":6,"text":"继续。"}]',
                                  '[{"end":1,"text":"是的。"}]'])
             cfg = config(review_mode="tui")
+            # 此恢复夹具的两块响应来自旧预算规划；明确保留旧的请求配置。
+            cfg.translation_model.max_tokens = 8192
             cfg.pipeline.threads = 1
             review = MergeReview()
             store = TranslationTaskStore(root / "tasks.db")
@@ -374,7 +394,8 @@ class TestModelSegmentationPipeline(unittest.TestCase):
             self.assertEqual(set(saved_cues), {"1", "7"})
 
     def test_single_pass_asr_pipeline_and_task_id_resume(self):
-        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(stdout):
             root = Path(tmp)
             input_path = root / "input.srt"
             SubtitleIO.write_srt(Subtitle([
@@ -419,6 +440,18 @@ class TestModelSegmentationPipeline(unittest.TestCase):
             self.assertEqual(resumed.report.resumed_entries, 3)
             self.assertEqual(resumed.report.token_usage.total_tokens, 0)
             self.assertFalse(resumed.report.failed_chunks)
+            events = [json.loads(line.split(" ", 1)[1]) for line in stdout.getvalue().splitlines()
+                      if line.startswith("SUBTITLE_LLM_PROGRESS ")]
+            previews = [event["preview"] for event in events if event["stage"] == "subtitle_preview"]
+            finals = [item for item in previews if item["final"]]
+            self.assertEqual(len(finals), 2)
+            self.assertEqual(finals[0]["entries"], finals[1]["entries"])
+            self.assertEqual([entry["index"] for entry in finals[0]["entries"]], [1, 2, 3])
+            self.assertEqual(finals[0]["entries"][-1]["end"], 7.5)
+            self.assertEqual(sum(item["revision"] == 1 for item in previews), 2)
+            self.assertGreaterEqual(sum(not item["final"] for item in previews), 2)
+            for item in previews:
+                self.assertTrue(all(entry["translated_text"] for entry in item["entries"]))
 
     def test_v2_database_upgrade_preserves_existing_tasks(self):
         with tempfile.TemporaryDirectory() as tmp:

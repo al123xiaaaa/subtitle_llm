@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CredentialStatus, DesktopPreferences, DesktopSettings, ProviderDefinition } from "../types.js";
 import { listProviders } from "./providerCatalog.js";
+import { parseTranslationMaxTokens } from "./outputBudget.js";
 
 const SETTINGS_VERSION = 1;
 
@@ -13,6 +14,7 @@ export function defaultSettings(): DesktopSettings {
       lastProviderId: "deepseek",
       modelsByProvider: {},
       customModelsByProvider: {},
+      translationMaxTokens: null,
     },
   };
 }
@@ -37,6 +39,12 @@ function normalizeSettings(raw: unknown): DesktopSettings {
     settings.preferences.customModelsByProvider && typeof settings.preferences.customModelsByProvider === "object"
       ? settings.preferences.customModelsByProvider
       : {};
+  // 手动输出上限：缺省/非法一律归一化为 auto（不发送 max_tokens）
+  try {
+    settings.preferences.translationMaxTokens = parseTranslationMaxTokens(settings.preferences.translationMaxTokens);
+  } catch {
+    settings.preferences.translationMaxTokens = null;
+  }
   return settings;
 }
 

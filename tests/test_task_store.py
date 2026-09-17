@@ -27,6 +27,36 @@ def make_config() -> AppConfig:
 
 
 class TestTranslationTaskStore(unittest.TestCase):
+    def test_persisted_output_budgets_survive_task_resume(self):
+        import json
+        from unittest.mock import Mock
+        from subtitle_llm.pipeline.service import TranslationService
+        from subtitle_llm.pipeline.task_store import config_from_snapshot
+
+        for budget in (None, 8192, 32768):
+            with self.subTest(budget=budget), tempfile.TemporaryDirectory() as tmp:
+                store = TranslationTaskStore(Path(tmp) / "tasks.sqlite3")
+                config = make_config()
+                config.translation_model.max_tokens = budget
+                record = store.create_task(
+                    input_display="input.srt", working_directory=tmp, source_subtitle_path="input.srt",
+                    normalized_input_fingerprint="fingerprint", target_language="Chinese", source_language="en",
+                    output_format="source-first", output_file="output.srt", config=config,
+                )
+                saved = TranslationTaskStore(store.db_path).get_task(record.task_id)
+                self.assertEqual(json.loads(saved.config_snapshot_json)["translation_model"]["max_tokens"], budget)
+                self.assertEqual(config_from_snapshot(saved.config_snapshot_json).translation_model.max_tokens, budget)
+                current = make_config()
+                current.translation_model.max_tokens = 123
+                service = TranslationService(current, translation_client=Mock(), summary_client=Mock(), task_store=store)
+                service._apply_task_config_snapshot(saved)
+                self.assertEqual(service.config.translation_model.max_tokens, budget)
+                self.assertEqual(service._chunk_output_token_budget(), None if budget is None else int(budget * 0.8))
+                # 没有字段的旧 YAML/快照同样使用厂商默认，不隐式补回 8192。
+                omitted = json.loads(saved.config_snapshot_json)
+                del omitted["translation_model"]["max_tokens"]
+                self.assertIsNone(config_from_snapshot(json.dumps(omitted)).translation_model.max_tokens)
+
     def test_initializes_schema_with_user_version(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "tasks.sqlite3"

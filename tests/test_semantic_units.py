@@ -1,3 +1,6 @@
+import contextlib
+import io
+import json
 import sys
 import tempfile
 import unittest
@@ -746,7 +749,8 @@ class TestSemanticUnits(unittest.TestCase):
         self.assertEqual(parsed, ["第一条", "第二条"])
 
     def test_pipeline_translates_semantic_units_then_maps_to_cues(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(stdout):
             input_path = Path(tmp) / "input.srt"
             output_path = Path(tmp) / "output.srt"
             input_path.write_text(
@@ -776,6 +780,14 @@ class TestSemanticUnits(unittest.TestCase):
             self.assertEqual(result.report.semantic_multi_cue_units, 2)
             self.assertEqual(len(result.subtitle.entries), 5)
             self.assertEqual(len(result.report.auto_layout_repairs), 0)
+            events = [json.loads(line.split(" ", 1)[1]) for line in stdout.getvalue().splitlines()
+                      if line.startswith("SUBTITLE_LLM_PROGRESS ")]
+            previews = [event["preview"] for event in events if event["stage"] == "subtitle_preview"]
+            self.assertEqual([item["final"] for item in previews], [False, True])
+            self.assertEqual(len(previews[0]["entries"]), 5)  # 不是两个规划语义单元
+            self.assertEqual(previews[0]["entries"], previews[1]["entries"])
+            self.assertEqual([entry["original_text"] for entry in previews[0]["entries"]],
+                             [entry.original_text for entry in result.subtitle.entries])
             self.assertEqual(
                 "".join(entry.translated_text for entry in result.subtitle.entries),
                 "几个月前我写了几句话后来影响很大。我把这些句子打包成追问我技能。",

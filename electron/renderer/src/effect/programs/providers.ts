@@ -4,12 +4,14 @@ import type { AppState, DesktopPreferences, ProviderModel, ProviderSummary } fro
 import { Bridge } from "../bridge";
 import type { LogKind } from "../../composables/controllerTypes";
 import { cleanString } from "../utils";
+import { parseTranslationMaxTokens } from "../../../../lib/outputBudget";
 
 export interface ProviderPorts {
   readonly appState: Ref<AppState | null>;
   readonly selectedProviderId: Ref<string>;
   readonly selectedModelId: Ref<string>;
   readonly customModelInput: Ref<string>;
+  readonly translationMaxTokensInput: Ref<string | number>;
   readonly getSelectedProvider: () => ProviderSummary | null;
   readonly hasDynamicModels: (providerId: string) => boolean;
   readonly storeDynamicModels: (providerId: string, models: ProviderModel[]) => void;
@@ -28,6 +30,7 @@ export const persistProviderPreference = (ports: ProviderPorts): Effect.Effect<v
       appState: ports.appState.value,
       modelId: ports.selectedModelId.value,
       customModelId: cleanString(ports.customModelInput.value),
+      translationMaxTokens: parseTranslationMaxTokens(ports.translationMaxTokensInput.value),
     }));
     if (!snapshot.provider || !snapshot.appState) {
       return;
@@ -35,6 +38,7 @@ export const persistProviderPreference = (ports: ProviderPorts): Effect.Effect<v
     const preferences: DesktopPreferences = {
       ...snapshot.appState.preferences,
       lastProviderId: snapshot.provider.id,
+      translationMaxTokens: snapshot.translationMaxTokens,
       modelsByProvider: {
         ...snapshot.appState.preferences?.modelsByProvider,
         [snapshot.provider.id]: snapshot.modelId,

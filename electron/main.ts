@@ -14,6 +14,13 @@ const runtime = createDesktopRuntime({
 });
 let mainWindow: BrowserWindow | null = null;
 
+// e2e 隐藏运行：Electron 没有原生 headless 模式，测试时用不显示窗口 +
+// 隐藏 Dock 代替，避免测试窗口抢占前台焦点；断言与截图走 CDP，不依赖窗口可见。
+const hiddenForE2E = process.env.SUBTITLE_LLM_E2E_HIDDEN === "1";
+if (hiddenForE2E && process.platform === "darwin") {
+  app.dock?.hide();
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1180,
@@ -23,11 +30,14 @@ function createWindow(): void {
     title: "Subtitle LLM",
     titleBarStyle: "hiddenInset",
     backgroundColor: "#f6f4f1",
+    show: !hiddenForE2E,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // 隐藏窗口下保持渲染节拍不被节流，测试计时行为才与可见窗口一致。
+      backgroundThrottling: !hiddenForE2E,
     },
   });
 

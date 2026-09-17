@@ -17,6 +17,8 @@ class CompletionUsage:
     # 非 DeepSeek 厂商（如 Gemini）不返回这两个字段，保持为 0。
     prompt_cache_hit_tokens: int = 0
     prompt_cache_miss_tokens: int = 0
+    # 厂商未提供时保持未知；推理用量是明细，不额外累加到 total_tokens。
+    reasoning_tokens: int | None = None
 
     def add(self, other: "CompletionUsage") -> None:
         self.prompt_tokens += other.prompt_tokens
@@ -24,25 +26,26 @@ class CompletionUsage:
         self.total_tokens += other.total_tokens
         self.prompt_cache_hit_tokens += other.prompt_cache_hit_tokens
         self.prompt_cache_miss_tokens += other.prompt_cache_miss_tokens
+        if other.reasoning_tokens is not None:
+            self.reasoning_tokens = (self.reasoning_tokens or 0) + other.reasoning_tokens
 
     @classmethod
     def from_any(cls, usage) -> "CompletionUsage":
         if usage is None:
             return cls()
-        if isinstance(usage, dict):
-            return cls(
-                prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
-                completion_tokens=int(usage.get("completion_tokens", 0) or 0),
-                total_tokens=int(usage.get("total_tokens", 0) or 0),
-                prompt_cache_hit_tokens=int(usage.get("prompt_cache_hit_tokens", 0) or 0),
-                prompt_cache_miss_tokens=int(usage.get("prompt_cache_miss_tokens", 0) or 0),
-            )
+        def field(value, name):
+            return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+
+        reasoning = field(field(usage, "completion_tokens_details"), "reasoning_tokens")
+        if reasoning is None:
+            reasoning = field(usage, "reasoning_tokens")
         return cls(
-            prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
-            completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
-            total_tokens=int(getattr(usage, "total_tokens", 0) or 0),
-            prompt_cache_hit_tokens=int(getattr(usage, "prompt_cache_hit_tokens", 0) or 0),
-            prompt_cache_miss_tokens=int(getattr(usage, "prompt_cache_miss_tokens", 0) or 0),
+            prompt_tokens=int(field(usage, "prompt_tokens") or 0),
+            completion_tokens=int(field(usage, "completion_tokens") or 0),
+            total_tokens=int(field(usage, "total_tokens") or 0),
+            prompt_cache_hit_tokens=int(field(usage, "prompt_cache_hit_tokens") or 0),
+            prompt_cache_miss_tokens=int(field(usage, "prompt_cache_miss_tokens") or 0),
+            reasoning_tokens=int(reasoning) if reasoning is not None else None,
         )
 
     def to_dict(self) -> dict:
@@ -52,6 +55,7 @@ class CompletionUsage:
             "total_tokens": self.total_tokens,
             "prompt_cache_hit_tokens": self.prompt_cache_hit_tokens,
             "prompt_cache_miss_tokens": self.prompt_cache_miss_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
         }
 
 
@@ -69,11 +73,12 @@ class OutputBudgetExhaustedError(ValueError):
     太小时正文可能一个字都没有。此类错误重试无意义，应直接失败并提示用户。"""
 
 
-def output_budget_exhausted(model: str, max_tokens: int, *, truncated: bool) -> OutputBudgetExhaustedError:
-    detail = "输出被 max_tokens 截断" if truncated else "模型返回为空（思考过程可能耗尽输出额度）"
+def output_budget_exhausted(model: str, max_tokens: int | None, *, truncated: bool) -> OutputBudgetExhaustedError:
+    detail = "厂商报告输出额度耗尽，响应被截断" if truncated else "模型返回为空，可能是输出额度耗尽"
+    budget = str(max_tokens) if max_tokens is not None else "未指定（使用厂商默认）"
     return OutputBudgetExhaustedError(
-        f"输出额度耗尽：{detail}（model={model}，max_tokens={max_tokens}）。"
-        "请调大该模型的 max_tokens，或改用非思考型模型。"
+        f"{detail}（model={model}，max_tokens={budget}）。"
+        "请检查厂商限制、停止原因和用量；可显式设置更大的 max_tokens 或减小翻译片段。"
     )
 
 

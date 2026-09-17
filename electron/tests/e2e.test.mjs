@@ -49,7 +49,7 @@ if (commandLog) {
   }) + "\\n");
 }
 
-setTimeout(() => {
+setTimeout(async () => {
   if (command === "tasks") {
     console.log(process.env.SUBTITLE_LLM_E2E_TASKS_JSON || "[]");
     process.exit(0);
@@ -87,6 +87,19 @@ setTimeout(() => {
       chunk: { index: 2, total: 4, status: "running", entry_start: 20, entry_end: 39, detail: "rough" },
       model: { provider: "deepseek", name: "deepseek-v4-pro" },
     });
+    if (process.env.SUBTITLE_LLM_E2E_PREVIEW_GATE) {
+      const entry = { index: 1, start: 0, end: 2.5, original_text: "A subtitle takes shape.", translated_text: "字幕逐渐成形。", needs_retranslation: false };
+      progress({ stage: "subtitle_preview", preview: { revision: 1, entries: [entry], final: false } });
+      const deadline = Date.now() + 20000;
+      while (!fs.existsSync(process.env.SUBTITLE_LLM_E2E_PREVIEW_GATE)) {
+        if (Date.now() > deadline) throw new Error("preview gate timed out");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+      progress({ stage: "subtitle_preview", preview: { revision: 2, entries: [
+        { ...entry, translated_text: "一条字幕成形了。" },
+        { index: 2, start: 2.5, end: 5, original_text: "The next line follows.", translated_text: "下一句紧随其后。", needs_retranslation: false },
+      ], final: true } });
+    }
     progress({
       stage: "processing_chunks",
       detail: "rough",
@@ -200,6 +213,7 @@ const tests = [
   ["首次启动可以保存 DeepSeek API Key，且不泄露明文", testOnboardingSavesKey],
   ["YouTube URL 翻译会自动启用 MKV，并传递正确 CLI 参数", testYoutubeTranslateWithMkv],
   ["长日志和多条任务记录保持在各自滚动区域", testBusyLayoutKeepsSectionsBounded],
+  ["翻译中逐批显示双语字幕并在完成后校准预览", testLiveSubtitlePreview],
   ["YouTube URL 可以勾选强制 ASR，不下载原字幕", testYoutubeTranslateForceAsr],
   ["重跑同 URL 时提示复用已有字幕", testReuseSubtitleBanner],
   ["翻译默认不二次润色，勾选后传递 refine 参数", testRefineToggle],
@@ -208,7 +222,11 @@ const tests = [
   ["没有 FFmpeg 时 MKV 控件禁用但翻译表单仍可用", testFfmpegMissingDisablesMkvOnly],
 ];
 
-await tests.reduce(async (previous, [name, test]) => {
+const selectedTests = process.env.SUBTITLE_LLM_E2E_FILTER
+  ? tests.filter(([name]) => name.includes(process.env.SUBTITLE_LLM_E2E_FILTER))
+  : tests;
+assert.ok(selectedTests.length > 0, "没有匹配的 e2e 用例");
+await selectedTests.reduce(async (previous, [name, test]) => {
   await previous;
   await test();
   console.log(`✓ ${name}`);
@@ -341,8 +359,85 @@ async function testBusyLayoutKeepsSectionsBounded() {
         layout.taskScrollHeight > layout.taskClientHeight,
         `task list should own record overflow: ${layout.taskScrollHeight} <= ${layout.taskClientHeight}`,
       );
+
+      for (const [width, height] of [[1800, 1000], [1180, 820], [980, 680]]) {
+        await page.setViewportSize({ width, height });
+        const geometry = await page.evaluate(() => {
+          const rect = (selector) => document.querySelector(selector).getBoundingClientRect().toJSON();
+          const main = document.querySelector('.main-workspace');
+          const outputs = document.querySelector('#resultFiles');
+          return {
+            records: rect('#taskRecordsPanel'),
+            run: rect('.run-panel'),
+            process: rect('.run-process'),
+            outputs: rect('#resultFiles'),
+            workbench: rect('.task-workbench'),
+            mainOverflows: main.scrollWidth > main.clientWidth || main.scrollHeight > main.clientHeight,
+            outputsScroll: getComputedStyle(outputs).overflowY,
+            log: rect('#logDetails'),
+          };
+        });
+        assert.equal(geometry.mainOverflows, false, `workspace overflows at ${width}px`);
+        assert.equal(geometry.outputsScroll, 'visible', 'outputs must not create a nested scrollbar');
+        assert.ok(geometry.log.bottom <= height + 1, `log is outside window at ${width}px`);
+        if (width === 1800) {
+          assert.ok(geometry.records.right <= geometry.run.left + 1, 'wide layout has task list on the left');
+        } else {
+          assert.ok(geometry.records.bottom <= geometry.run.top + 1, 'narrow layout has task list above run');
+        }
+        if (geometry.run.width > 700) {
+          assert.ok(geometry.process.right <= geometry.outputs.left + 1, 'wide details have two columns');
+        } else {
+          assert.ok(geometry.process.bottom <= geometry.outputs.top + 1, 'narrow details stack vertically');
+        }
+        if (process.env.SUBTITLE_LLM_E2E_SCREENSHOTS) {
+          fs.mkdirSync(process.env.SUBTITLE_LLM_E2E_SCREENSHOTS, { recursive: true });
+          await page.locator('#logDetails summary').click();
+          await page.screenshot({ path: path.join(process.env.SUBTITLE_LLM_E2E_SCREENSHOTS, `task-layout-${width}.png`) });
+          await page.locator('#logDetails summary').click();
+        }
+      }
+
+      await page.locator('[data-rail-tab="translate"]').click();
+      await page.locator('#translateForm').waitFor({ state: 'visible' });
+      await page.locator('#collapseDrawer').click();
+      await page.locator('#translateForm').waitFor({ state: 'hidden' });
+      await page.locator('#toggleChunkActivity').click();
+      await page.locator('.chunk-cell.is-warning').click();
+      await page.locator('#chunkActivityDetail', { hasText: '仍有疑似缺失' }).waitFor();
     },
   );
+}
+
+async function testLiveSubtitlePreview() {
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "subtitle-preview-gate-"));
+  const gate = path.join(fixtureDir, "continue");
+  try {
+    await withApp({ env: { DEEPSEEK_API_KEY: "env-e2e-deepseek", SUBTITLE_LLM_E2E_PREVIEW_GATE: gate } }, async ({ page }) => {
+      await page.setViewportSize({ width: 1800, height: 1000 });
+      await page.locator("#translateInput").fill("input.srt");
+      await page.locator("#startTranslate").click();
+      const preview = page.locator("#subtitlePreview");
+      await preview.getByText("字幕逐渐成形。", { exact: true }).waitFor();
+      assert.equal(await preview.locator(".subtitle-preview-row").count(), 1);
+      assert.ok((await preview.innerText()).includes("A subtitle takes shape."));
+      assert.notEqual(await page.locator("#runStatus").innerText(), "完成");
+      const geometry = await preview.boundingBox();
+      assert.ok(geometry && geometry.height >= 280, "running preview should occupy meaningful vertical space");
+      if (process.env.SUBTITLE_LLM_E2E_SCREENSHOTS) {
+        fs.mkdirSync(process.env.SUBTITLE_LLM_E2E_SCREENSHOTS, { recursive: true });
+        await page.screenshot({ path: path.join(process.env.SUBTITLE_LLM_E2E_SCREENSHOTS, "subtitle-preview-running.png") });
+      }
+      fs.writeFileSync(gate, "continue");
+      await waitForRunStatus(page, "完成");
+      await preview.getByText("下一句紧随其后。", { exact: true }).waitFor();
+      assert.equal(await preview.locator(".subtitle-preview-row").count(), 2);
+      assert.ok((await preview.innerText()).includes("一条字幕成形了。"));
+      assert.equal((await preview.innerText()).includes("字幕逐渐成形。"), false);
+    });
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
 }
 
 async function testYoutubeTranslateForceAsr() {
@@ -518,6 +613,8 @@ async function withApp(optionsOrCallback, maybeCallback) {
     // e2e 以真实仓库为 projectRoot 启动应用；生成的模型配置必须落在临时目录，
     // 否则会覆盖正在运行的真实任务使用的 data/desktop-configs/latest-model-config.yaml
     SUBTITLE_LLM_DESKTOP_CONFIG_DIR: path.join(tempDir, "desktop-configs"),
+    // 窗口不显示、不进 Dock，e2e 全程不打断前台使用
+    SUBTITLE_LLM_E2E_HIDDEN: "1",
   };
   if (options.disableFfmpeg) {
     env.SUBTITLE_LLM_DISABLE_FFMPEG_DETECT = "1";
@@ -545,6 +642,12 @@ async function withApp(optionsOrCallback, maybeCallback) {
     });
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await waitForAppReady(page);
+    // 隐藏运行契约：e2e 模式下任何窗口都不应显示，防止回退成前台弹窗。
+    const windowsVisible = await electronApp.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows().map((win) => win.isVisible())
+    );
+    assert.ok(windowsVisible.length > 0, "e2e 应至少创建一个窗口");
+    assert.ok(windowsVisible.every((visible) => visible === false), "e2e 窗口不应显示");
     await callback({ electronApp, page, tempDir, userDataDir, commandLogPath, fakeFfmpegPath });
     assert.deepEqual(pageErrors, []);
     assert.deepEqual(consoleErrors, []);

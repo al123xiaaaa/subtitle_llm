@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import threading
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from subtitle_llm.domain import SubtitleEntry
+from subtitle_llm.io.subtitles import srt_time_to_ms
 from subtitle_llm.llm.types import CompletionUsage
 from subtitle_llm.progress_events import ProgressEmitter, chunk_payload
 from subtitle_llm.settings import ModelConfig
@@ -16,6 +19,14 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class ProgressContract:
     emitter: ProgressEmitter
+
+    def subtitle_preview(self, *, revision: int, entries: list[dict[str, Any]], final: bool) -> dict[str, Any]:
+        return self.emitter.emit(
+            stage="subtitle_preview",
+            detail="accepted_snapshot",
+            status="done" if final else "running",
+            preview={"revision": revision, "entries": entries, "final": final},
+        )
 
     def task_prepared(self) -> dict[str, Any]:
         return self.emitter.emit(
@@ -553,6 +564,54 @@ class ProgressContract:
             duration_ms=duration_ms,
             run_usage=run_usage,
         )
+
+
+@dataclass
+class SubtitlePreviewPublisher:
+    """每次 translate 新建；只接收已接受的实际 cue，绝不读取正在翻译的源条目。
+
+    快速连续完成的片段合并为最多每秒四次全量快照；最终快照无条件发送。
+    无后台线程，限流期间的更新在下次接受或最终写出时发送。
+    """
+
+    progress: ProgressContract
+    min_interval: float = 0.25
+    _revision: int = field(default=0, init=False)
+    _last_emitted: float = field(default=float("-inf"), init=False)
+    _entries: dict[int, dict[str, Any]] = field(default_factory=dict, init=False)
+    _lock: Any = field(default_factory=threading.Lock, init=False, repr=False)
+
+    @staticmethod
+    def _snapshot(entries: list[SubtitleEntry]) -> dict[int, dict[str, Any]]:
+        return {entry.index: {
+            "index": entry.index,
+            "start": srt_time_to_ms(entry.start_time) / 1000,
+            "end": srt_time_to_ms(entry.end_time) / 1000,
+            "original_text": entry.original_text,
+            "translated_text": entry.translated_text,
+            "needs_retranslation": entry.needs_retranslation,
+        } for entry in entries}
+
+    def accept(self, entries: list[SubtitleEntry]) -> None:
+        with self._lock:
+            # 转成值快照：后续复核/最终重编号不能更改之前已接受的内容。
+            self._entries.update(self._snapshot(entries))
+            if entries and time.monotonic() - self._last_emitted >= self.min_interval:
+                self._emit(final=False)
+
+    def finish(self, entries: list[SubtitleEntry]) -> None:
+        with self._lock:
+            self._entries = self._snapshot(entries)
+            self._emit(final=True)
+
+    def _emit(self, *, final: bool) -> None:
+        self._revision += 1
+        self.progress.subtitle_preview(
+            revision=self._revision,
+            entries=[self._entries[index] for index in sorted(self._entries)],
+            final=final,
+        )
+        self._last_emitted = time.monotonic()
 
 
 def quality_message(chunk_index: int, total_chunks: int, diagnosis: ChunkDiagnosis) -> str:

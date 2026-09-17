@@ -12,7 +12,7 @@ import threading
 from dataclasses import dataclass
 from typing import Callable, TypeVar
 
-from subtitle_llm.domain import Subtitle
+from subtitle_llm.domain import Subtitle, SubtitleEntry
 from subtitle_llm.pipeline.chunk_acceptance import ChunkAcceptance, translator_progress_contract
 from subtitle_llm.pipeline.chunk_translator import ChunkTranslator
 from subtitle_llm.pipeline.chunks import PlannedChunk
@@ -27,7 +27,7 @@ from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.pipeline.run_ledger import RunLedger
 from subtitle_llm.pipeline.semantic_units import SemanticUnit
 from subtitle_llm.pipeline.task_store import TranslationTaskStore
-from subtitle_llm.progress_contract import ProgressContract
+from subtitle_llm.progress_contract import ProgressContract, SubtitlePreviewPublisher
 
 logger = logging.getLogger(__name__)
 ResultT = TypeVar("ResultT")
@@ -55,6 +55,7 @@ class _ChunkTaskContext:
 class ChunkProcessingCoordinator:
     threads: int
     semantic_output_granularity: str
+    preview: SubtitlePreviewPublisher | None = None
 
     def run_model_chunks(
         self, planned_chunks: list[PlannedChunk], segmenter: ModelSegmenter,
@@ -72,11 +73,10 @@ class ChunkProcessingCoordinator:
         )
         sources = {planned.index: list(planned.entries) for planned in planned_chunks}
 
-        def accept(planned: PlannedChunk, result: object) -> None:
+        def accept(planned: PlannedChunk, result: object, accepted: list[SubtitleEntry]) -> None:
             if not isinstance(result, GeneratedChunk):
                 raise TypeError("模型断句结果类型错误")
             planned.entries = result.result.chunk
-            accepted: list = []
             if result.accepted:
                 accepted.extend(result.result.chunk)
                 with context.report_lock:
@@ -85,12 +85,11 @@ class ChunkProcessingCoordinator:
             else:
                 acceptance.accept_generated(planned, result.result, accepted)
                 segmenter.accept(result, accepted)
-            translated_entries.extend(accepted)
             planned.entries = accepted
 
-        def fail(planned: PlannedChunk, exc: Exception) -> None:
+        def fail(planned: PlannedChunk, exc: Exception, accepted: list[SubtitleEntry]) -> None:
             planned.entries = segmenter.source.fallback_cues(sources[planned.index])
-            acceptance.handle_failure(planned, exc, translated_entries)
+            acceptance.handle_failure(planned, exc, accepted)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.threads) as executor:
             self._run_chunk_tasks(
@@ -145,8 +144,8 @@ class ChunkProcessingCoordinator:
                     planned.index,
                     refine_translation=acceptance.refine_translation,
                 ),
-                accept_result=lambda planned, result: acceptance.accept(planned, result, translated_entries),
-                handle_failure=lambda planned, exc: acceptance.handle_failure(planned, exc, translated_entries),
+                accept_result=lambda planned, result, accepted: acceptance.accept(planned, result, accepted),
+                handle_failure=lambda planned, exc, accepted: acceptance.handle_failure(planned, exc, accepted),
             )
 
     def run_semantic_chunks(
@@ -195,17 +194,17 @@ class ChunkProcessingCoordinator:
                     planned,
                     semantic_unit_by_index,
                 ),
-                accept_result=lambda planned, result: acceptance.accept_semantic(
+                accept_result=lambda planned, result, accepted: acceptance.accept_semantic(
                     planned,
                     result,
                     semantic_unit_by_index,
-                    translated_entries,
+                    accepted,
                 ),
-                handle_failure=lambda planned, exc: acceptance.handle_semantic_failure(
+                handle_failure=lambda planned, exc, accepted: acceptance.handle_semantic_failure(
                     planned,
                     semantic_unit_by_index,
                     exc,
-                    translated_entries,
+                    accepted,
                 ),
             )
 
@@ -267,8 +266,8 @@ class ChunkProcessingCoordinator:
         report: TranslationReport,
         *,
         translate: Callable[[PlannedChunk], ResultT],
-        accept_result: Callable[[PlannedChunk, ResultT], None],
-        handle_failure: Callable[[PlannedChunk, Exception], None],
+        accept_result: Callable[[PlannedChunk, ResultT, list[SubtitleEntry]], None],
+        handle_failure: Callable[[PlannedChunk, Exception, list[SubtitleEntry]], None],
     ) -> None:
         future_to_chunk: dict[concurrent.futures.Future, PlannedChunk] = {}
         for planned in planned_chunks:
@@ -302,8 +301,8 @@ class ChunkProcessingCoordinator:
         context: _ChunkTaskContext,
         *,
         translate: Callable[[PlannedChunk], ResultT],
-        accept_result: Callable[[PlannedChunk, ResultT], None],
-        handle_failure: Callable[[PlannedChunk, Exception], None],
+        accept_result: Callable[[PlannedChunk, ResultT, list[SubtitleEntry]], None],
+        handle_failure: Callable[[PlannedChunk, Exception, list[SubtitleEntry]], None],
     ) -> None:
         """worker 线程内的完整片段管线：翻译 → 接受（诊断/修复/复核）→ 收尾。
 
@@ -311,6 +310,8 @@ class ChunkProcessingCoordinator:
         片段的 worker，不再阻塞其他片段的接受；TUI 复核窗口由
         TuiReviewPort 内部锁保证同一时刻只弹一个。
         """
+        # 接受函数写入 worker 私有列表；只有接受/回退完整返回才提交共享结果。
+        accepted: list[SubtitleEntry] = []
         try:
             result = translate(planned)
             context.chunk_lifecycles[planned.index] = self._project_chunk_event(
@@ -321,7 +322,7 @@ class ChunkProcessingCoordinator:
                 context.report.total_chunks,
                 semantic=context.semantic,
             )
-            accept_result(planned, result)
+            accept_result(planned, result, accepted)
         except Exception as exc:
             logger.exception(
                 "%schunk处理失败: chunk=%s entries=%s",
@@ -329,13 +330,24 @@ class ChunkProcessingCoordinator:
                 planned.index + 1,
                 [entry.index for entry in planned.entries],
             )
-            handle_failure(planned, exc)
+            accepted.clear()
+            try:
+                handle_failure(planned, exc, accepted)
+            except Exception:
+                accepted.clear()
+                raise
         finally:
-            self._save_chunk_progress(planned, context)
+            self._save_chunk_progress(planned, context, accepted)
 
-    def _save_chunk_progress(self, planned: PlannedChunk, context: _ChunkTaskContext) -> None:
+    def _save_chunk_progress(
+        self, planned: PlannedChunk, context: _ChunkTaskContext, accepted: list[SubtitleEntry],
+    ) -> None:
         report = context.report
         with context.report_lock:
+            context.translated_entries.extend(accepted)
+            report.accepted_entry_indices = sorted(
+                set(report.accepted_entry_indices) | {entry.index for entry in accepted}
+            )
             report.completed_chunks += 1
             report.processed_entries = context.run_ledger.processed_entry_count(
                 context.translated_entries
@@ -360,6 +372,8 @@ class ChunkProcessingCoordinator:
                 semantic=context.semantic,
                 emit_progress=False,
             )
+            if self.preview is not None:
+                self.preview.accept(accepted)
         context.progress_contract.task_state_saved(
             planned.entries,
             chunk_index=planned.index,

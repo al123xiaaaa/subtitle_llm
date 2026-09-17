@@ -11,6 +11,7 @@ import {
   saveSettingsKey as saveSettingsKeyProgram,
 } from "../effect/programs/providers";
 import type { ProviderPorts } from "../effect/programs/providers";
+import { parseTranslationMaxTokens } from "../../../lib/outputBudget";
 
 interface ProviderSettingsOptions {
   appendLog: (text: string, kind?: "stdout" | "stderr") => void;
@@ -23,6 +24,24 @@ export function useProviderSettings(options: ProviderSettingsOptions) {
   const selectedProviderId = ref("deepseek");
   const selectedModelId = ref("");
   const customModelInput = ref("");
+  const translationMaxTokensInput = ref<string | number>("");
+  const outputBudgetBadInput = ref(false);
+  const outputBudgetError = computed(() => {
+    try {
+      if (outputBudgetBadInput.value) {
+        throw new Error("翻译输出上限必须为正整数，留空使用服务商默认值");
+      }
+      parseTranslationMaxTokens(translationMaxTokensInput.value);
+      return "";
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  });
+
+  function onOutputBudgetInput(event: Event): void {
+    outputBudgetBadInput.value = (event.target as HTMLInputElement).validity.badInput;
+  }
+
   const selectedOnboardingProviderId = ref("deepseek");
   const onboardingApiKey = ref("");
   const onboardingDismissed = ref(false);
@@ -108,6 +127,10 @@ export function useProviderSettings(options: ProviderSettingsOptions) {
 
   function updateAppState(nextState: AppState): void {
     const previousProviderId = selectedProviderId.value;
+    // 仅首次加载恢复预算；保存密钥/偏好或刷新模型列表不能覆盖正在编辑的值。
+    if (!appState.value) {
+      translationMaxTokensInput.value = nextState.preferences?.translationMaxTokens ?? "";
+    }
     appState.value = nextState;
     selectedProviderId.value =
       (providers.value.some((provider) => provider.id === previousProviderId) && previousProviderId) ||
@@ -126,6 +149,7 @@ export function useProviderSettings(options: ProviderSettingsOptions) {
     selectedProviderId,
     selectedModelId,
     customModelInput,
+    translationMaxTokensInput,
     getSelectedProvider: () => selectedProvider.value,
     hasDynamicModels: (providerId) => Boolean(dynamicModelsByProvider[providerId]),
     storeDynamicModels: (providerId, models) => {
@@ -143,6 +167,9 @@ export function useProviderSettings(options: ProviderSettingsOptions) {
   };
 
   async function persistProviderPreference(): Promise<void> {
+    if (outputBudgetError.value) {
+      return;
+    }
     await appRuntime.runPromise(persistProviderPreferenceProgram(providerPorts));
   }
 
@@ -166,6 +193,7 @@ export function useProviderSettings(options: ProviderSettingsOptions) {
       providerId: provider.id,
       modelId: selectedModelId.value,
       customModelId: cleanString(customModelInput.value),
+      translationMaxTokens: parseTranslationMaxTokens(translationMaxTokensInput.value),
     };
   }
 
@@ -208,6 +236,9 @@ export function useProviderSettings(options: ProviderSettingsOptions) {
     configureProvider,
     configureProviderText,
     customModelInput,
+    translationMaxTokensInput,
+    outputBudgetError,
+    onOutputBudgetInput,
     dismissOnboarding,
     ffmpegAvailable,
     modelSelection,

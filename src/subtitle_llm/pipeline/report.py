@@ -59,6 +59,8 @@ class TranslationReport(BaseModel):
     total_chunks: int = 0
     completed_chunks: int = 0
     resumed_entries: int = 0
+    # 明确完成接受的源编号；旧记录缺少此字段时不提前展示恢复译文。
+    accepted_entry_indices: list[int] = Field(default_factory=list)
     failed_chunks: list[FailedChunk] = Field(default_factory=list)
     boundary_risk_count: int = 0
     boundary_risks: list[dict] = Field(default_factory=list)

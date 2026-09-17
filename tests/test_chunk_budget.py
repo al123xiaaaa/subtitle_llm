@@ -120,6 +120,21 @@ class TestChunkListTokenBudget(unittest.TestCase):
 
 
 class TestChunkPlannerTokenBudget(unittest.TestCase):
+    def test_model_planner_accepts_unknown_budget_without_guessing(self):
+        from subtitle_llm.pipeline.model_segmentation import plan_model_chunks
+        from subtitle_llm.settings import PipelineConfig
+
+        encoder = build_token_encoder("fake-model")
+        entries = long_entries(8, words_per_entry=80)
+        options = PipelineConfig(chunk_size=8, semantic_max_cues_per_unit=1)
+        unbounded = plan_model_chunks(entries, options, None, encoder)
+        bounded = plan_model_chunks(entries, options, 200, encoder)
+        self.assertEqual(len(unbounded), 1)
+        self.assertGreater(len(bounded), len(unbounded))
+        self.assertEqual([e.index for chunk in bounded for e in chunk.entries], list(range(1, 9)))
+        options.chunk_size = 2
+        self.assertGreater(len(plan_model_chunks(entries, options, None, encoder)), 1)
+
     def test_planner_passes_budget_to_chunks(self):
         """ChunkPlanner 透传预算与 encoder，产出受预算约束的块。"""
         encoder = build_token_encoder("fake-model")

@@ -213,7 +213,25 @@ assert.match(deepseekConfig, /model: "deepseek-v4-flash"/);
 assert.match(deepseekConfig, /refine_translation: false/);
 // 默认值来自 desktop-contract.json（单一来源），不再在 TS 内硬编码
 assert.match(deepseekConfig, /temperature: 0\.3/);
-assert.match(deepseekConfig, /max_tokens: 4096/);
+assert.doesNotMatch(deepseekConfig, /max_tokens:/);
+for (const translationMaxTokens of [undefined, null, "", "  "]) {
+  assert.doesNotMatch(buildDesktopModelConfigContent({
+    mode: "service", providerId: "deepseek", translationMaxTokens,
+  }), /max_tokens:/);
+}
+for (const translationMaxTokens of [1, 8192, "16384"]) {
+  const config = buildDesktopModelConfigContent({
+    mode: "service", providerId: "deepseek", translationMaxTokens,
+  });
+  assert.doesNotMatch(config.split("translation_model:")[0], /max_tokens:/);
+  assert.match(config, new RegExp(`max_tokens: ${translationMaxTokens}\\n`));
+  assert.equal(config.match(/max_tokens:/g).length, 1);
+}
+for (const translationMaxTokens of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, "0", "-1", "1.5", "bad", true, {}]) {
+  assert.throws(() => buildDesktopModelConfigContent({
+    mode: "service", providerId: "deepseek", translationMaxTokens,
+  }), /正整数/);
+}
 assert.match(deepseekConfig, /retry_delay_seconds: 10/);
 assert.doesNotMatch(deepseekConfig, /sk-test-secret/);
 
@@ -276,6 +294,23 @@ savePreferences(settingsPath, {
   modelsByProvider: { deepseek: "deepseek-v4-pro" },
 });
 assert.equal(readSettings(settingsPath).preferences.modelsByProvider.deepseek, "deepseek-v4-pro");
+assert.equal(readSettings(settingsPath).preferences.translationMaxTokens, null);
+savePreferences(settingsPath, { translationMaxTokens: 8192 });
+assert.equal(readSettings(settingsPath).preferences.translationMaxTokens, 8192);
+saveApiKey(settingsPath, "deepseek", "sk-budget-test");
+assert.equal(summarizeSettings(settingsPath).preferences.translationMaxTokens, 8192);
+clearApiKey(settingsPath, "deepseek");
+savePreferences(settingsPath, { lastProviderId: "gemini" });
+assert.equal(readSettings(settingsPath).preferences.translationMaxTokens, 8192);
+savePreferences(settingsPath, { translationMaxTokens: null });
+assert.equal(readSettings(settingsPath).preferences.translationMaxTokens, null);
+for (const translationMaxTokens of [0, -2, 1.5, "bad", true]) {
+  savePreferences(settingsPath, { translationMaxTokens });
+  assert.equal(readSettings(settingsPath).preferences.translationMaxTokens, null);
+}
+const legacySettingsPath = path.join(tempDir, "legacy-settings.json");
+fs.writeFileSync(legacySettingsPath, JSON.stringify({ preferences: { modelsByProvider: {} } }));
+assert.equal(readSettings(legacySettingsPath).preferences.translationMaxTokens, null);
 
 saveApiKey(settingsPath, "deepseek", "sk-intent-secret");
 const preparedTranslateIntent = prepareDesktopTaskIntent(
@@ -299,6 +334,24 @@ assert.equal(preparedTranslateIntent.options.config, path.join(tempDir, "data", 
 assert.equal(preparedTranslateIntent.options.ffmpeg, "/tmp/fake-ffmpeg");
 assert.equal(preparedTranslateIntent.envOverrides.DEEPSEEK_API_KEY, "sk-intent-secret");
 assert.match(fs.readFileSync(preparedTranslateIntent.generatedConfigPath, "utf8"), /model: "deepseek-v4-pro"/);
+// YAML 模式即使已有手动偏好也不生成配置、更不改写显式上限。
+savePreferences(settingsPath, { translationMaxTokens: 8192 });
+const yamlPath = path.join(tempDir, "explicit.yaml");
+const explicitYaml = "translation_model:\n  max_tokens: 12345\nsummary_model:\n  max_tokens: 456\n";
+fs.writeFileSync(yamlPath, explicitYaml);
+const generatedBeforeYaml = fs.readFileSync(preparedTranslateIntent.generatedConfigPath, "utf8");
+const preparedYamlIntent = prepareDesktopTaskIntent({
+  command: "translate",
+  options: { input: "input.srt", targetLanguage: "Chinese", config: yamlPath },
+  modelSelection: null,
+}, {
+  projectRoot: tempDir, settingsPath, env: {},
+  detectFfmpeg: () => ({ available: false, executable: "", version: "", error: "" }),
+});
+assert.equal(preparedYamlIntent.options.config, yamlPath);
+assert.equal(preparedYamlIntent.generatedConfigPath, undefined);
+assert.equal(fs.readFileSync(yamlPath, "utf8"), explicitYaml);
+assert.equal(fs.readFileSync(preparedTranslateIntent.generatedConfigPath, "utf8"), generatedBeforeYaml);
 const preparedMuxIntent = prepareDesktopTaskIntent(
   { command: "mux", options: { video: "video.mp4", subtitle: "subtitle.srt" } },
   {

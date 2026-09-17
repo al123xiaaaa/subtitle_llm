@@ -75,7 +75,19 @@ function canContinue(status: string, deletedAt?: string | null): boolean {
         <h2 id="taskRecordsTitle">
           最近任务
         </h2>
-        <p>{{ taskRecordsStatus || "继续或回看之前的翻译" }}</p>
+        <!-- 状态承载加载/错误信息，任何宽度都要保持可见；描述文案可在窄布局隐藏。 -->
+        <p
+          v-if="taskRecordsStatus"
+          class="task-records-status"
+        >
+          {{ taskRecordsStatus }}
+        </p>
+        <p
+          v-else
+          class="task-records-hint"
+        >
+          继续或回看之前的翻译
+        </p>
       </div>
       <div class="task-record-actions">
         <button
@@ -96,6 +108,12 @@ function canContinue(status: string, deletedAt?: string | null): boolean {
     </div>
 
     <div class="task-record-list">
+      <p
+        v-if="taskRecords.length === 0"
+        class="task-record-empty"
+      >
+        {{ showDeletedTaskRecords ? "暂无已删除任务" : "暂无历史任务，完成翻译后会显示在这里。" }}
+      </p>
       <article
         v-for="record in taskRecords"
         :key="record.task_id"
@@ -103,7 +121,7 @@ function canContinue(status: string, deletedAt?: string | null): boolean {
       >
         <div class="task-record-main">
           <div>
-            <strong>{{ displayTitle(record) }}</strong>
+            <strong :title="displayTitle(record)">{{ displayTitle(record) }}</strong>
             <span>{{ record.target_language }} · {{ statusLabel(record.status) }} · {{ formatTime(record.updated_at) }}</span>
           </div>
           <div class="task-record-files">

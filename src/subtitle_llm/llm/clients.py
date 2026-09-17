@@ -47,10 +47,13 @@ class OpenAIChatClient(BaseClient):
 
     def create_completion(self, config: ModelConfig, messages: list[dict[str, str]]) -> CompletionResult:
         self._acquire()
+        budget_params: dict[str, Any] = {}
+        if config.max_tokens is not None:
+            budget_params["max_tokens"] = config.max_tokens
         response = self.client.chat.completions.create(
             model=config.model,
             messages=cast(Any, messages),
-            max_tokens=config.max_tokens,
+            **budget_params,
             temperature=config.temperature,
             top_p=config.top_p,
             frequency_penalty=config.frequency_penalty,
@@ -104,7 +107,9 @@ class CustomHTTPChatClient(BaseClient):
                 content = (choice["message"]["content"] or "").strip()
                 usage = CompletionUsage.from_any(result.get("usage"))
                 if usage.total_tokens == 0:
-                    usage = self._estimated_usage(config, messages, content)
+                    estimated = self._estimated_usage(config, messages, content)
+                    estimated.reasoning_tokens = usage.reasoning_tokens
+                    usage = estimated
                 finish_reason = choice.get("finish_reason")
                 return CompletionResult(
                     content=content,
@@ -128,6 +133,20 @@ class GeminiChatClient(BaseClient):
         self.genai: Any = genai
         self.genai.configure(api_key=api_key)
 
+    @staticmethod
+    def _finish_reason(reason: Any) -> str | None:
+        # SDK 的 FinishReason 是 IntEnum；保留未知原因名称，避免模型名称推断。
+        name = getattr(reason, "name", None)
+        if not name or name == "FINISH_REASON_UNSPECIFIED":
+            return None
+        if name == "MAX_TOKENS":
+            return "length"
+        if name == "STOP":
+            return "stop"
+        if name in {"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY"}:
+            return "content_filter"
+        return name.lower()
+
     def create_completion(self, config: ModelConfig, messages: list[dict[str, str]]) -> CompletionResult:
         from google.api_core import exceptions
         from google.generativeai.types import HarmBlockThreshold, HarmCategory
@@ -136,8 +155,9 @@ class GeminiChatClient(BaseClient):
         generation_config = {
             "temperature": config.temperature,
             "top_p": config.top_p,
-            "max_output_tokens": config.max_tokens,
         }
+        if config.max_tokens is not None:
+            generation_config["max_output_tokens"] = config.max_tokens
         if config.top_k is not None:
             generation_config["top_k"] = config.top_k
 
@@ -158,8 +178,27 @@ class GeminiChatClient(BaseClient):
             try:
                 chat_session = model.start_chat(history=cast(Any, history))
                 response = chat_session.send_message(messages[-1]["content"])
-                content = response.text.strip()
-                return CompletionResult(content=content, usage=self._estimated_usage(config, messages, content))
+                candidates = response.candidates
+                candidate = candidates[0] if candidates else None
+                # 不访问 response.text：被截断/拦截且没有正文时 SDK 会抛错。
+                # 仅取正文 part，绝不把厂商的思考文本写入译文或 trace。
+                content = "".join(
+                    part.text for part in candidate.content.parts
+                    if not getattr(part, "thought", False)
+                ).strip() if candidate is not None else ""
+                finish_reason = self._finish_reason(candidate.finish_reason) if candidate is not None else None
+                metadata = getattr(response, "usage_metadata", None)
+                if metadata is not None:
+                    reasoning = getattr(metadata, "thoughts_token_count", None)
+                    usage = CompletionUsage(
+                        prompt_tokens=metadata.prompt_token_count,
+                        completion_tokens=metadata.candidates_token_count,
+                        total_tokens=metadata.total_token_count,
+                        reasoning_tokens=int(reasoning) if reasoning is not None else None,
+                    )
+                else:
+                    usage = self._estimated_usage(config, messages, content)
+                return CompletionResult(content=content, usage=usage, finish_reason=finish_reason)
             except (exceptions.ResourceExhausted, Exception) as exc:
                 if attempt < config.max_retries - 1:
                     logger.warning("Gemini API error: %s. Retrying in %.1fs", exc, config.retry_delay_seconds)

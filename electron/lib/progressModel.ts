@@ -462,6 +462,10 @@ export function formatProgressLogLine(
   event: CliProgressEvent,
   context: { previousStage: string },
 ): ProgressLogLineResult | null {
+  // 字幕预览有专门面板，不往运行日志里写技术阶段名。
+  if (event.stage === "subtitle_preview") {
+    return null;
+  }
   const stage = cleanString(event.stage) || context.previousStage;
   const chunkIndex = positiveInt(event.chunk?.index);
 

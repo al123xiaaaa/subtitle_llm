@@ -31,6 +31,23 @@ pipeline:
 
 
 class TestNewConfig(unittest.TestCase):
+    def test_optional_positive_output_budget(self):
+        from pydantic import ValidationError
+        from subtitle_llm.settings import ModelConfig
+
+        base = dict(type="openai", model="generic", api_key_env="TEST_KEY")
+        self.assertIsNone(ModelConfig(**base).max_tokens)
+        for budget in (None, 1, 8192, 32768):
+            with self.subTest(budget=budget):
+                model = ModelConfig(**base, max_tokens=budget)
+                self.assertEqual(model.max_tokens, budget)
+                self.assertEqual(ModelConfig.model_validate_json(model.model_dump_json()).max_tokens, budget)
+        for budget in (0, -1, 1.5):
+            with self.subTest(invalid=budget), self.assertRaises(ValidationError):
+                ModelConfig(**base, max_tokens=budget)
+        self.assertIsNone(load_config().translation_model.max_tokens)
+        self.assertIsNone(load_config().summary_model.max_tokens)
+
     def test_load_config_and_resolve_env_api_key(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.yaml"

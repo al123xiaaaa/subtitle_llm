@@ -33,6 +33,7 @@ export interface DesktopPreferences {
   lastProviderId: string;
   modelsByProvider: Record<string, string>;
   customModelsByProvider: Record<string, string>;
+  translationMaxTokens?: number | null;
 }
 
 export interface DesktopSettings {
@@ -91,6 +92,8 @@ export interface ModelSelection {
   modelId: string;
   customModelId?: string;
   endpoint?: string;
+  /** 手动翻译输出上限（max_tokens）；空/未设表示使用服务商默认值 */
+  translationMaxTokens?: number | null;
 }
 
 export interface TranslateJobOptions {
@@ -254,6 +257,21 @@ export interface CliProgressRunUsage {
   call_duration_ms?: number | null;
 }
 
+export interface SubtitlePreviewEntry {
+  index: number;
+  start: number;
+  end: number;
+  original_text: string;
+  translated_text: string;
+  needs_retranslation: boolean;
+}
+
+export interface SubtitlePreviewSnapshot {
+  revision: number;
+  entries: SubtitlePreviewEntry[];
+  final: boolean;
+}
+
 export interface CliProgressEvent {
   command: CommandName;
   stage: string;
@@ -270,6 +288,7 @@ export interface CliProgressEvent {
   run_usage?: CliProgressRunUsage | null;
   trace_id?: string | null;
   total_chunks?: number | null;
+  preview?: SubtitlePreviewSnapshot;
 }
 
 export interface ShellResult {

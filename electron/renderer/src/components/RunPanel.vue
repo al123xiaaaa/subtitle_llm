@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { Languages } from "@lucide/vue";
+import SubtitlePreview from "./SubtitlePreview.vue";
 import type { useAppController } from "../composables/useAppController";
 
 type Controller = ReturnType<typeof useAppController>;
@@ -10,6 +11,8 @@ const props = defineProps<{
 }>();
 
 const {
+  activeCommand,
+  subtitlePreview,
   activeJobId,
   cancelJob,
   chunkStatusLabel,
@@ -58,6 +61,17 @@ const chunksCollapsed = computed(() => isDone.value && !chunkExpanded.value);
 const logAutoOpen = computed(
   () => runStatus.value.startsWith("失败") || runStatus.value.startsWith("退出码"),
 );
+
+const resultFiles = computed(() => [
+  { kind: "subtitle", id: "subtitle", label: "双语字幕", path: lastSubtitlePath.value, visible: hasSubtitleResult.value },
+  { kind: "video", id: "video", label: "带字幕 MKV", path: lastEmbeddedVideoPath.value, visible: hasVideoResult.value },
+  { kind: "source", id: "sourceVideo", label: "下载的视频", path: lastSourceVideoPath.value, visible: hasSourceVideoResult.value },
+  { kind: "trace", id: "trace", label: "LLM 诊断", path: lastLlmTraceDir.value, visible: hasTraceResult.value },
+] as const);
+
+function fileName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
+}
 </script>
 
 <template>
@@ -128,215 +142,162 @@ const logAutoOpen = computed(
       >
         {{ progressLongWaitHint }}
       </p>
-      <div
-        id="progressTimeline"
-        class="progress-timeline"
-        aria-label="任务阶段"
-      >
-        <div
-          v-for="stage in progressStages"
-          :key="stage.id"
-          :class="['progress-stage', `is-${stage.status}`]"
-        >
-          <span class="stage-dot" />
-          <span>{{ stage.label }}</span>
-        </div>
-      </div>
-      <section
-        id="chunkActivity"
-        :class="['chunk-activity', { 'is-hidden': progressChunks.length === 0 }]"
-        aria-labelledby="chunkActivityTitle"
-      >
-        <div class="chunk-activity-heading">
-          <div>
-            <h3 id="chunkActivityTitle">
-              片段活动
-            </h3>
-            <p id="chunkActivitySummary">
-              {{ progressChunkSummary }}
-            </p>
-          </div>
-          <div class="chunk-activity-actions">
-            <span class="status-pill is-env">并发</span>
-            <button
-              v-if="isDone"
-              id="toggleChunkActivity"
-              class="ghost-button"
-              type="button"
-              :aria-expanded="!chunksCollapsed"
-              @click="chunkExpanded = !chunkExpanded"
+      <div :class="['run-detail-grid', { 'has-results': hasAnyResult }]">
+        <div class="run-process">
+          <div
+            id="progressTimeline"
+            class="progress-timeline"
+            aria-label="任务阶段"
+          >
+            <div
+              v-for="stage in progressStages"
+              :key="stage.id"
+              :class="['progress-stage', `is-${stage.status}`]"
             >
-              {{ chunksCollapsed ? "展开" : "收起" }}
-            </button>
-          </div>
-        </div>
-        <template v-if="!chunksCollapsed">
-          <div
-            class="chunk-grid"
-            role="list"
-            aria-label="Chunk activity"
-          >
-            <button
-              v-for="chunk in progressChunks"
-              :key="chunk.index"
-              type="button"
-              :class="['chunk-cell', `is-${chunk.status}`, { 'is-selected': selectedProgressChunk?.index === chunk.index }]"
-              :title="chunkTooltip(chunk)"
-              :aria-label="chunkTooltip(chunk)"
-              @click="selectChunk(chunk.index)"
-            />
-          </div>
-          <div
-            class="chunk-legend"
-            aria-hidden="true"
-          >
-            <span
-              v-for="legend in progressChunkLegendItems"
-              :key="legend.status"
-              class="chunk-legend-item"
-            >
-              <i :class="['legend-swatch', `is-${legend.status}`]" />{{ legend.label }}
-            </span>
-          </div>
-          <div
-            v-if="selectedProgressChunk"
-            id="chunkActivityDetail"
-            class="chunk-detail"
-          >
-            <div>
-              <strong>Chunk {{ selectedProgressChunk.index }} / {{ selectedProgressChunk.total }}</strong>
-              <span>{{ chunkStatusLabel(selectedProgressChunk.status) }}</span>
+              <span class="stage-dot" />
+              <span>{{ stage.label }}</span>
             </div>
-            <p>{{ selectedProgressChunk.message }}</p>
-            <p>
-              字幕
-              {{ selectedProgressChunk.entryStart || "?" }}
-              -
-              {{ selectedProgressChunk.entryEnd || "?" }}
-              <span v-if="selectedProgressChunk.model"> · {{ selectedProgressChunk.model }}</span>
-              <span v-if="selectedProgressChunk.durationMs"> · {{ (selectedProgressChunk.durationMs / 1000).toFixed(1) }}s</span>
-              <span v-if="chunkTokenRateText(selectedProgressChunk)"> · {{ chunkTokenRateText(selectedProgressChunk) }}</span>
-              <span v-if="selectedProgressChunk.traceId"> · trace {{ selectedProgressChunk.traceId }}</span>
-            </p>
-            <p v-if="selectedProgressChunk.issueSummary">
-              {{ selectedProgressChunk.issueSummary }}
-            </p>
           </div>
-        </template>
-      </section>
-      <div
-        id="resultFiles"
-        :class="['result-files', { 'is-hidden': !hasAnyResult }]"
-      >
-      <div
-        id="subtitleResultRow"
-        :class="['result-file-row', { 'is-hidden': !hasSubtitleResult }]"
-      >
-        <div>
-          <strong>字幕文件</strong>
-          <span id="subtitleResultPath">{{ lastSubtitlePath }}</span>
-        </div>
-        <div class="result-actions">
-          <button
-            class="secondary-button"
-            type="button"
-            data-open-result="subtitle"
-            @click="openResult('subtitle')"
+          <section
+            id="chunkActivity"
+            :class="['chunk-activity', { 'is-hidden': progressChunks.length === 0 }]"
+            aria-labelledby="chunkActivityTitle"
           >
-            打开
-          </button>
-          <button
-            class="secondary-button"
-            type="button"
-            data-show-result="subtitle"
-            @click="showResult('subtitle')"
-          >
-            定位
-          </button>
+            <div class="chunk-activity-heading">
+              <div>
+                <h3 id="chunkActivityTitle">
+                  片段活动
+                </h3>
+                <p id="chunkActivitySummary">
+                  {{ progressChunkSummary }}
+                </p>
+              </div>
+              <div class="chunk-activity-actions">
+                <span class="status-pill is-env">并发</span>
+                <button
+                  v-if="isDone"
+                  id="toggleChunkActivity"
+                  class="ghost-button"
+                  type="button"
+                  :aria-expanded="!chunksCollapsed"
+                  @click="chunkExpanded = !chunkExpanded"
+                >
+                  {{ chunksCollapsed ? "展开" : "收起" }}
+                </button>
+              </div>
+            </div>
+            <template v-if="!chunksCollapsed">
+              <div
+                class="chunk-grid"
+                role="list"
+                aria-label="Chunk activity"
+              >
+                <button
+                  v-for="chunk in progressChunks"
+                  :key="chunk.index"
+                  type="button"
+                  :class="['chunk-cell', `is-${chunk.status}`, { 'is-selected': selectedProgressChunk?.index === chunk.index }]"
+                  :title="chunkTooltip(chunk)"
+                  :aria-label="chunkTooltip(chunk)"
+                  @click="selectChunk(chunk.index)"
+                />
+              </div>
+              <div
+                class="chunk-legend"
+                aria-hidden="true"
+              >
+                <span
+                  v-for="legend in progressChunkLegendItems"
+                  :key="legend.status"
+                  class="chunk-legend-item"
+                >
+                  <i :class="['legend-swatch', `is-${legend.status}`]" />{{ legend.label }}
+                </span>
+              </div>
+              <div
+                v-if="selectedProgressChunk"
+                id="chunkActivityDetail"
+                class="chunk-detail"
+              >
+                <div>
+                  <strong>Chunk {{ selectedProgressChunk.index }} / {{ selectedProgressChunk.total }}</strong>
+                  <span>{{ chunkStatusLabel(selectedProgressChunk.status) }}</span>
+                </div>
+                <p>{{ selectedProgressChunk.message }}</p>
+                <p>
+                  字幕
+                  {{ selectedProgressChunk.entryStart || "?" }}
+                  -
+                  {{ selectedProgressChunk.entryEnd || "?" }}
+                  <span v-if="selectedProgressChunk.model"> · {{ selectedProgressChunk.model }}</span>
+                  <span v-if="selectedProgressChunk.durationMs"> · {{ (selectedProgressChunk.durationMs / 1000).toFixed(1) }}s</span>
+                  <span v-if="chunkTokenRateText(selectedProgressChunk)"> · {{ chunkTokenRateText(selectedProgressChunk) }}</span>
+                  <span v-if="selectedProgressChunk.traceId"> · trace {{ selectedProgressChunk.traceId }}</span>
+                </p>
+                <p v-if="selectedProgressChunk.issueSummary">
+                  {{ selectedProgressChunk.issueSummary }}
+                </p>
+              </div>
+            </template>
+          </section>
+          <SubtitlePreview
+            v-if="activeCommand === 'translate'"
+            :snapshot="subtitlePreview"
+            :running="Boolean(activeJobId) || runStatus === '启动中' || runStatus === '运行中'"
+          />
         </div>
+        <section
+          id="resultFiles"
+          :class="['result-files', { 'is-hidden': !hasAnyResult }]"
+          aria-labelledby="resultFilesTitle"
+        >
+          <div class="result-heading">
+            <h3 id="resultFilesTitle">
+              输出文件
+            </h3>
+            <p>打开结果，或在文件夹中查看</p>
+          </div>
+          <template
+            v-for="file in resultFiles"
+            :key="file.kind"
+          >
+            <article
+              v-if="file.visible"
+              :id="`${file.id}ResultRow`"
+              class="result-file-row"
+            >
+              <div>
+                <span class="result-file-label">{{ file.label }}</span>
+                <strong :title="file.path">{{ fileName(file.path) }}</strong>
+                <span
+                  :id="`${file.id}ResultPath`"
+                  :title="file.path"
+                >{{ file.path }}</span>
+              </div>
+              <div class="result-actions">
+                <button
+                  :class="file.kind === 'subtitle' ? 'primary-button' : 'secondary-button'"
+                  type="button"
+                  :data-open-result="file.kind"
+                  :aria-label="`打开${file.label}`"
+                  @click="openResult(file.kind)"
+                >
+                  打开
+                </button>
+                <button
+                  class="ghost-button"
+                  type="button"
+                  :data-show-result="file.kind"
+                  :aria-label="`在文件夹中显示${file.label}`"
+                  @click="showResult(file.kind)"
+                >
+                  定位
+                </button>
+              </div>
+            </article>
+          </template>
+        </section>
       </div>
-      <div
-        id="sourceVideoResultRow"
-        :class="['result-file-row', { 'is-hidden': !hasSourceVideoResult }]"
-      >
-        <div>
-          <strong>下载的视频</strong>
-          <span id="sourceVideoResultPath">{{ lastSourceVideoPath }}</span>
-        </div>
-        <div class="result-actions">
-          <button
-            class="secondary-button"
-            type="button"
-            data-open-result="source"
-            @click="openResult('source')"
-          >
-            打开
-          </button>
-          <button
-            class="secondary-button"
-            type="button"
-            data-show-result="source"
-            @click="showResult('source')"
-          >
-            定位
-          </button>
-        </div>
-      </div>
-      <div
-        id="videoResultRow"
-        :class="['result-file-row', { 'is-hidden': !hasVideoResult }]"
-      >
-        <div>
-          <strong>带字幕 MKV</strong>
-          <span id="videoResultPath">{{ lastEmbeddedVideoPath }}</span>
-        </div>
-        <div class="result-actions">
-          <button
-            class="secondary-button"
-            type="button"
-            data-open-result="video"
-            @click="openResult('video')"
-          >
-            打开
-          </button>
-          <button
-            class="secondary-button"
-            type="button"
-            data-show-result="video"
-            @click="showResult('video')"
-          >
-            定位
-          </button>
-        </div>
-      </div>
-      <div
-        id="traceResultRow"
-        :class="['result-file-row', { 'is-hidden': !hasTraceResult }]"
-      >
-        <div>
-          <strong>LLM 诊断</strong>
-          <span id="traceResultPath">{{ lastLlmTraceDir }}</span>
-        </div>
-        <div class="result-actions">
-          <button
-            class="secondary-button"
-            type="button"
-            data-open-result="trace"
-            @click="openResult('trace')"
-          >
-            打开
-          </button>
-          <button
-            class="secondary-button"
-            type="button"
-            data-show-result="trace"
-            @click="showResult('trace')"
-          >
-            定位
-          </button>
-        </div>
-      </div>
-    </div>
     </div>
     <details
       id="logDetails"

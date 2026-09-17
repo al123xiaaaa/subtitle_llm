@@ -44,6 +44,9 @@ const {
   configureProvider,
   configureProviderText,
   customModelInput,
+  translationMaxTokensInput,
+  outputBudgetError,
+  onOutputBudgetInput,
   onModelChanged,
   onProviderChanged,
   persistProviderPreference,
@@ -191,6 +194,26 @@ const { ffmpegAvailable } = props.providerState;
               :disabled="isBusy"
               @change="persistProviderPreference"
             >
+          </label>
+          <label class="span-2">
+            <span>翻译输出上限（tokens，可选）</span>
+            <input
+              id="translationMaxTokens"
+              v-model="translationMaxTokensInput"
+              type="number"
+              min="1"
+              step="1"
+              :max="Number.MAX_SAFE_INTEGER"
+              placeholder="使用服务商默认值"
+              :disabled="isBusy || translateForm.useYamlConfig"
+              :aria-invalid="Boolean(outputBudgetError)"
+              aria-describedby="outputBudgetHelp"
+              @input="onOutputBudgetInput"
+              @change="persistProviderPreference"
+            >
+            <small id="outputBudgetHelp">
+              {{ translateForm.useYamlConfig ? "使用 YAML 中的输出上限，不覆盖配置文件。" : outputBudgetError || "留空使用服务商默认值；仅限制翻译输出，摘要使用服务商默认值。" }}
+            </small>
           </label>
           <div class="span-2 credential-row">
             <span

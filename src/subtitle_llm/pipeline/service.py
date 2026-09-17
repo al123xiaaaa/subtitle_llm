@@ -49,7 +49,7 @@ from subtitle_llm.pipeline.task_store import (
     TranslationTaskStore,
     config_from_snapshot,
 )
-from subtitle_llm.progress_contract import ProgressContract
+from subtitle_llm.progress_contract import ProgressContract, SubtitlePreviewPublisher
 from subtitle_llm.progress_events import ProgressEmitter
 from subtitle_llm.review import AutoReviewPort, ReviewPort, TuiReviewPort
 from subtitle_llm.settings import AppConfig
@@ -125,6 +125,7 @@ class TranslationService:
 
         progress = progress or ProgressEmitter("translate")
         progress_contract = ProgressContract(progress)
+        preview = SubtitlePreviewPublisher(progress_contract)
         task_lifecycle = TranslationTaskLifecycle().apply(TranslationTaskLifecycleEvent.PREPARE_INPUT_STARTED)
         task_projector: TaskLifecycleProjector | None = None
         progress_contract.task_prepared()
@@ -305,6 +306,8 @@ class TranslationService:
             self.task_store, task_record.task_id, Subtitle([]) if model_segmentation else subtitle, report, [],
         )
         progress_contract.task_record_restored(len(resumed_indices))
+        restored_accepted_indices = set(report.accepted_entry_indices)
+        preview.accept([entry for entry in subtitle.entries if entry.index in restored_accepted_indices])
         if resumed_indices:
             logger.info(
                 "翻译任务记录恢复完成: task_id=%s resumed_entries=%s",
@@ -474,6 +477,7 @@ class TranslationService:
         chunk_processor = ChunkProcessingCoordinator(
             threads=self.config.pipeline.threads,
             semantic_output_granularity=self.config.pipeline.semantic_output_granularity,
+            preview=preview,
         )
         model_source = SegmentationSource(subtitle.entries) if model_segmentation else None
         if model_segmentation:
@@ -533,6 +537,7 @@ class TranslationService:
             progress_contract.writing_srt(output_file)
             SubtitleIO.write_srt(output_subtitle, output_file, output_format=output_format)
             progress_contract.srt_written(output_file)
+            preview.finish(output_subtitle.entries)
             completion_event = (
                 TranslationTaskLifecycleEvent.FINALIZE_OUTPUT_COMPLETED_WITH_WARNINGS
                 if translation_completed_with_warnings(report, subtitle)
@@ -636,13 +641,15 @@ class TranslationService:
             return bool(units)
         return any(len(unit.entries) > 1 for unit in units)
 
-    def _chunk_output_token_budget(self) -> int:
+    def _chunk_output_token_budget(self) -> int | None:
         """每个 chunk 的输出 token 预算：max_tokens × 0.8，留 20% 余量防 JSON 截断。
 
         让 chunk 规划感知模型输出上限，避免单个 chunk 的翻译 JSON 超过 max_tokens
         被强制截断（表现为「Unterminated string」解析失败、整片回退原文）。
         """
-        return int(self.config.translation_model.max_tokens * 0.8)
+        max_tokens = self.config.translation_model.max_tokens
+        # 未指定时不猜测厂商上限，仍按条目数/语义组规划。
+        return max(1, int(max_tokens * 0.8)) if max_tokens is not None else None
 
     def _refine_translation_enabled(self, request: TranslationRequest) -> bool:
         if request.refine_translation is not None:

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ModelSelection } from "../types.js";
 import { getProvider, resolveModelId } from "./providerCatalog.js";
 import { desktopContract } from "./desktopContract.js";
+import { parseTranslationMaxTokens } from "./outputBudget.js";
 
 // 模型参数默认值、provider 覆盖、ASR 段全部来自 desktop-contract.json
 // （Python 侧 settings.py 的 ASR 默认值由 tests/test_config_contract.py 锁定一致）。
@@ -66,6 +67,17 @@ export function buildDesktopModelConfigContent(selection: Partial<ModelSelection
   const summaryModel = translationModel;
   const providerOverrides = PROVIDER_PARAM_OVERRIDES[selection.providerId || ""] || {};
 
+  // 手动输出上限（翻译）：留空即服务商默认值，不写入 max_tokens；
+  // 非法值在配置生成边界直接报错，绝不静默写 0。
+  const translationDefaults: Record<string, string> = {
+    ...MODEL_PARAMS.translation,
+    ...providerOverrides.translation,
+  };
+  const manualMaxTokens = parseTranslationMaxTokens(selection.translationMaxTokens);
+  if (manualMaxTokens !== null) {
+    translationDefaults.max_tokens = String(manualMaxTokens);
+  }
+
   return [
     'config_version: "2"',
     'default_output_format: "source-first"',
@@ -75,10 +87,7 @@ export function buildDesktopModelConfigContent(selection: Partial<ModelSelection
       ...providerOverrides.summary,
     }),
     "",
-    renderModelSection("translation_model", translationModel, {
-      ...MODEL_PARAMS.translation,
-      ...providerOverrides.translation,
-    }),
+    renderModelSection("translation_model", translationModel, translationDefaults),
     "",
     "pipeline:",
     "  refine_translation: false",

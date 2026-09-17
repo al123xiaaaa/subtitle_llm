@@ -120,6 +120,7 @@ class LlmTraceRecorder:
         source_coverage: SourceCoverage | None = None,
         status: TraceStatus | None = None,
         error: str | None = None,
+        finish_reason: str | None = None,
     ) -> str:
         parse_summary = None if source_coverage is not None else summarize_processed_translation(
             processed_translation,
@@ -148,6 +149,9 @@ class LlmTraceRecorder:
                     "provider": model_config.provider.value,
                     "model": model_config.model,
                     "endpoint": model_config.endpoint,
+                    # None 表示请求中省略该参数，不是推测的厂商默认额度。
+                    "requested_max_tokens": model_config.max_tokens,
+                    "finish_reason": finish_reason,
                     "chunk": chunk_summary(chunk, chunk_index, total_chunks),
                     "usage": usage.to_dict() if usage else CompletionUsage().to_dict(),
                     "duration_ms": duration_ms,

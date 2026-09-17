@@ -55,16 +55,23 @@ class RunLedger:
                 restored_entries.append(entry)
                 continue
             saved = entries.get(str(entry.index))
+            # 新记录明确区分已接受与保存时正在复核的源条目；后者必须重新处理。
+            if "accepted_entry_indices" in report_data and entry.index not in report_data["accepted_entry_indices"]:
+                saved = None
             if not saved:
                 restored_entries.append(entry)
                 continue
             restored_entry = SubtitleEntry.from_dict(saved)
             restored_entries.append(restored_entry)
-            if restored_entry.translated_text.strip():
+            # 暂存译文（needs_retranslation）不算恢复完成，重跑时必须重新翻译。
+            if restored_entry.translated_text.strip() and not restored_entry.needs_retranslation:
                 resumed_indices.add(restored_entry.index)
 
         subtitle.entries = restored_entries
         report.resumed_entries = len(resumed_indices)
+        report.accepted_entry_indices = sorted(
+            resumed_indices & {int(index) for index in report_data.get("accepted_entry_indices", [])}
+        )
         report.auto_layout_repairs = [
             AutoLayoutRepair(**item)
             for item in report_data.get("auto_layout_repairs", [])
@@ -100,10 +107,11 @@ class RunLedger:
         return entry_index in self.removed_entry_indices
 
     def processed_entry_count(self, translated_entries: Iterable[SubtitleEntry]) -> int:
+        # 暂存译文（needs_retranslation）尚未通过验收，不计入已处理进度。
         return len({
             entry.index
             for entry in translated_entries
-            if not self.is_removed(entry.index)
+            if not self.is_removed(entry.index) and not entry.needs_retranslation
         })
 
     def save_task_state(
@@ -115,6 +123,9 @@ class RunLedger:
         translated_entries: list[SubtitleEntry],
     ) -> None:
         self.sync_report(report)
+        report.accepted_entry_indices = sorted(
+            set(report.accepted_entry_indices) | {entry.index for entry in translated_entries if not self.is_removed(entry.index)}
+        )
         task_store.save_resume_state(task_id, self.resume_state_subtitle(subtitle, translated_entries), report)
 
     def resume_state_subtitle(

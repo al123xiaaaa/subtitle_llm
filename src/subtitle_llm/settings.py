@@ -25,7 +25,7 @@ class ModelConfig(BaseModel):
 
     provider: ModelProvider = Field(alias="type")
     model: str
-    max_tokens: int = 8192
+    max_tokens: int | None = Field(default=None, gt=0)
     api_key_env: str
     endpoint: str | None = None
     temperature: float = 0.5

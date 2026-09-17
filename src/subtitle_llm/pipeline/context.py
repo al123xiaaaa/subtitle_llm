@@ -73,6 +73,7 @@ class ContextService:
             response=result.content,
             usage=result.usage,
             duration_ms=elapsed_ms(started_at),
+            finish_reason=result.finish_reason,
         )
 
         summary, terms, corrections, source_corrections = parse_context_components(result.content)
@@ -128,6 +129,7 @@ class ContextService:
         duration_ms: int,
         status: str | None = None,
         error: str | None = None,
+        finish_reason: str | None = None,
     ) -> None:
         if self.trace_recorder is None:
             return
@@ -140,6 +142,7 @@ class ContextService:
             duration_ms=duration_ms,
             status=status,  # type: ignore[arg-type]
             error=error,
+            finish_reason=finish_reason,
         )
 
 

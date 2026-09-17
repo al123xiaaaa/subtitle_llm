@@ -13,7 +13,7 @@ if str(SRC_DIR) not in sys.path:
 
 from subtitle_llm.domain import SubtitleEntry
 from subtitle_llm.pipeline.quality import ChunkDiagnosis
-from subtitle_llm.progress_contract import ProgressContract
+from subtitle_llm.progress_contract import ProgressContract, SubtitlePreviewPublisher
 from subtitle_llm.progress_events import PROGRESS_EVENT_PREFIX, ProgressEmitter, chunk_payload
 from subtitle_llm.runtime_logging import configure_run_logging
 
@@ -45,6 +45,34 @@ class TestProgressEvents(unittest.TestCase):
             self.assertEqual(parsed["model"]["name"], "deepseek-v4-flash")
             self.assertEqual(payload["trace_id"], "000001")
             self.assertIn("进度事件", log_path.read_text(encoding="utf-8"))
+
+    def test_accepted_preview_stdout_snapshot_and_run_revisions(self):
+        output = io.StringIO()
+        emitter = ProgressEmitter("translate")
+        preview = SubtitlePreviewPublisher(ProgressContract(emitter), min_interval=0)
+        first = SubtitleEntry(8, "00:01:02,125", "00:01:03,500", "原文\nline", "译文", True)
+        second = SubtitleEntry(2, "00:00:00,000", "00:00:01,000", "", "")
+        with contextlib.redirect_stdout(output):
+            preview.accept([first])
+            first.translated_text = "未接受的新内容"
+            preview.accept([second])
+            preview.finish([second])
+            SubtitlePreviewPublisher(ProgressContract(emitter)).finish([])
+        events = [json.loads(line.removeprefix(PROGRESS_EVENT_PREFIX)) for line in output.getvalue().splitlines()]
+        self.assertTrue(all(event["stage"] == "subtitle_preview" for event in events))
+        self.assertTrue(all("chunk" not in event for event in events))
+        self.assertEqual([event["preview"]["revision"] for event in events], [1, 2, 3, 1])
+        self.assertEqual(events[0]["preview"], {
+            "revision": 1, "final": False, "entries": [{
+                "index": 8, "start": 62.125, "end": 63.5,
+                "original_text": "原文\nline", "translated_text": "译文", "needs_retranslation": True,
+            }],
+        })
+        self.assertEqual([entry["index"] for entry in events[1]["preview"]["entries"]], [2, 8])
+        self.assertEqual(events[1]["preview"]["entries"][1]["translated_text"], "译文")
+        self.assertEqual(events[2]["preview"]["entries"][0]["translated_text"], "")
+        self.assertTrue(events[2]["preview"]["final"])
+        self.assertEqual(events[3]["preview"]["entries"], [])
 
     def test_chunk_payload_uses_user_visible_one_based_index(self):
         entries = [

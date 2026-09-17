@@ -26,7 +26,7 @@ _ATOMS = re.compile(f"[{_CJK}]|[^\\s{_CJK}]+")
 
 
 def plan_model_chunks(
-    entries: list[SubtitleEntry], options: PipelineConfig, max_output_tokens: int, encoder: Encoding,
+    entries: list[SubtitleEntry], options: PipelineConfig, max_output_tokens: int | None, encoder: Encoding,
 ) -> list[PlannedChunk]:
     """按完整语义组装请求，底层 ASR 文本只决定预算，不预先决定字幕切点。"""
     units = build_semantic_units(entries, options.semantic_max_cues_per_unit)
