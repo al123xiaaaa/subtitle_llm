@@ -2,13 +2,18 @@
 import { computed, ref } from "vue";
 import { Languages } from "@lucide/vue";
 import SubtitlePreview from "./SubtitlePreview.vue";
+import { runSilent } from "../effect/runtime";
 import type { useAppController } from "../composables/useAppController";
+import type { TranslationTaskSummary } from "../../../types";
 
 type Controller = ReturnType<typeof useAppController>;
 
 const props = defineProps<{
   job: Controller["job"];
+  inspectedRecord?: TranslationTaskSummary | null;
 }>();
+
+const emit = defineEmits<{ closeInspection: [] }>();
 
 const {
   activeCommand,
@@ -51,6 +56,75 @@ const {
   showResult,
 } = props.job;
 
+// 查看态优先：显示历史记录详情而非实时进度。
+const inspected = computed(() => props.inspectedRecord ?? null);
+
+// 历史详情的输出文件行，与实时结果共用"打开/定位"桥。
+const inspectionFiles = computed(() => {
+  const record = inspected.value;
+  if (!record) {
+    return [];
+  }
+  return [
+    { kind: "subtitle", label: "双语字幕", path: record.output_file, visible: Boolean(record.output_file) },
+    { kind: "source", label: "源视频", path: record.source_video_file, visible: Boolean(record.source_video_file) },
+    { kind: "trace", label: "LLM 诊断", path: record.llm_trace_dir, visible: Boolean(record.llm_trace_dir) },
+  ].filter((file): file is typeof file & { path: string } => Boolean(file.path));
+});
+
+const STATUS_LABELS: Record<string, string> = {
+  created: "已创建",
+  preparing_input: "准备输入",
+  preparing_translation: "准备翻译",
+  processing_chunks: "翻译中",
+  finalizing_output: "生成结果",
+  completed: "已完成",
+  completed_with_warnings: "已完成 · 有警告",
+  failed: "失败",
+};
+
+const STATUS_TONES: Record<string, string> = {
+  created: "info",
+  preparing_input: "info",
+  preparing_translation: "info",
+  processing_chunks: "info",
+  finalizing_output: "info",
+  completed: "success",
+  completed_with_warnings: "warning",
+  failed: "danger",
+};
+
+function inspectionStatus(record: TranslationTaskSummary): string {
+  return STATUS_LABELS[record.status] || record.status;
+}
+
+function inspectionTone(record: TranslationTaskSummary): string {
+  return STATUS_TONES[record.status] || "muted";
+}
+
+function inspectionTitle(record: TranslationTaskSummary): string {
+  if (/^https?:\/\//.test(record.input_display) && record.output_file) {
+    const parts = record.output_file.split(/[\\/]/).filter(Boolean);
+    const outputName = parts.at(-1) || record.output_file;
+    return outputName.replace(/\.[a-z-]+\.srt$/i, "").replace(/\.srt$/i, "") || outputName;
+  }
+  const parts = record.input_display.split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) || record.input_display || "未命名任务";
+}
+
+function inspectionTime(record: TranslationTaskSummary): string {
+  const date = new Date(record.updated_at);
+  return Number.isNaN(date.getTime()) ? record.updated_at : date.toLocaleString();
+}
+
+async function openInspectionFile(path: string): Promise<void> {
+  await runSilent((bridge) => bridge.openPath(path));
+}
+
+async function showInspectionFile(path: string): Promise<void> {
+  await runSilent((bridge) => bridge.showInFolder(path));
+}
+
 // 任务结束后片段网格收成一行摘要（进度区仍是主角，但完成态不再被
 // 满屏绿格子稀释）；用户可展开回看。运行中永远展开。
 const chunkExpanded = ref(false);
@@ -76,20 +150,33 @@ function fileName(path: string): string {
 
 <template>
   <section
-    :class="['run-panel', { 'is-idle': progressIsEmpty }]"
+    :class="['run-panel', { 'is-idle': progressIsEmpty && !inspected }]"
     aria-labelledby="runTitle"
   >
     <div class="run-heading">
       <div>
         <h2 id="runTitle">
-          当前任务
+          {{ inspected ? "历史任务" : "当前任务" }}
         </h2>
         <p id="runStatus">
-          {{ runStatus }}
+          {{ inspected ? inspectionStatus(inspected) : runStatus }}
         </p>
       </div>
       <div
-        v-if="activeJobId"
+        v-if="inspected"
+        class="run-actions"
+      >
+        <button
+          id="closeInspection"
+          class="secondary-button"
+          type="button"
+          @click="emit('closeInspection')"
+        >
+          返回
+        </button>
+      </div>
+      <div
+        v-else-if="activeJobId"
         class="run-actions"
       >
         <button
@@ -103,6 +190,70 @@ function fileName(path: string): string {
       </div>
     </div>
     <div
+      v-if="inspected"
+      id="inspectionView"
+      class="progress-dashboard inspection-view"
+    >
+      <div class="current-progress">
+        <div>
+          <span class="progress-kicker">{{ inspectionTime(inspected) }}</span>
+          <strong>{{ inspectionTitle(inspected) }}</strong>
+        </div>
+        <span :class="['status-badge', `is-${inspectionTone(inspected)}`]">{{ inspectionStatus(inspected) }}</span>
+      </div>
+      <div class="run-detail-grid">
+        <div class="run-process">
+          <section class="inspection-meta">
+            <div class="inspection-meta-row">
+              <span>目标语言</span>
+              <strong>{{ inspected.target_language || "未知" }}</strong>
+            </div>
+            <div class="inspection-meta-row">
+              <span>输入</span>
+              <span
+                class="inspection-path"
+                :title="inspected.input_display"
+              >{{ inspected.input_display }}</span>
+            </div>
+          </section>
+          <section class="result-files">
+            <div class="result-heading">
+              <h3>输出文件</h3>
+              <p>打开结果，或在文件夹中查看</p>
+            </div>
+            <article
+              v-for="file in inspectionFiles"
+              :key="file.kind"
+              class="result-file-row"
+            >
+              <div>
+                <span class="result-file-label">{{ file.label }}</span>
+                <strong :title="file.path">{{ fileName(String(file.path)) }}</strong>
+                <span :title="file.path">{{ file.path }}</span>
+              </div>
+              <div class="result-actions">
+                <button
+                  :class="file.kind === 'subtitle' ? 'primary-button' : 'secondary-button'"
+                  type="button"
+                  @click="openInspectionFile(String(file.path))"
+                >
+                  打开
+                </button>
+                <button
+                  class="ghost-button"
+                  type="button"
+                  @click="showInspectionFile(String(file.path))"
+                >
+                  定位
+                </button>
+              </div>
+            </article>
+          </section>
+        </div>
+      </div>
+    </div>
+    <div
+      v-else
       id="progressDashboard"
       class="progress-dashboard"
     >

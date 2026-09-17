@@ -11,6 +11,7 @@ const props = defineProps<{
 
 const {
   continueTaskRecord,
+  inspectTaskRecord,
   openTaskOutput,
   openTaskSourceVideo,
   refreshTaskRecords,
@@ -176,9 +177,16 @@ function canContinue(status: string, deletedAt?: string | null): boolean {
       <article
         v-for="record in taskRecords"
         :key="record.task_id"
-        :class="['task-record-item', { 'is-deleted': record.deleted_at }]"
+        :class="['task-record-item', { 'is-deleted': record.deleted_at, 'is-inspectable': !isBusy }]"
+        @click="inspectTaskRecord(record)"
       >
-        <div class="task-record-main">
+        <button
+          class="task-record-main task-record-inspect"
+          type="button"
+          :disabled="isBusy"
+          :aria-label="`查看任务：${displayTitle(record)}`"
+          @click.stop="inspectTaskRecord(record)"
+        >
           <div class="task-record-title-row">
             <strong :title="displayTitle(record)">{{ displayTitle(record) }}</strong>
             <span :class="['status-badge', `is-${statusTone(record.status)}`]">{{ statusLabel(record.status) }}</span>
@@ -187,8 +195,11 @@ function canContinue(status: string, deletedAt?: string | null): boolean {
             class="task-record-meta"
             :title="`${record.target_language} · ${statusLabel(record.status)} · ${new Date(record.updated_at).toLocaleString()}`"
           >{{ record.target_language }} · {{ relativeTime(record.updated_at) }}</span>
-        </div>
-        <div class="task-record-buttons">
+        </button>
+        <div
+          class="task-record-buttons"
+          @click.stop
+        >
           <button
             v-if="canContinue(record.status, record.deleted_at)"
             class="primary-button"

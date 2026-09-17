@@ -19,6 +19,9 @@ export function useAppController() {
   const taskRecords = ref<TranslationTaskSummary[]>([]);
   const taskRecordsStatus = ref("加载中");
   const showDeletedTaskRecords = ref(false);
+  // 点历史卡片后的"查看态"：RunPanel 显示该记录的完成态结果。
+  // 运行任务、返回待命时清空，避免详情残留成假状态。
+  const inspectedRecord = ref<TranslationTaskSummary | null>(null);
   const shell = useAppShell(isBusy);
   let taskForms = {} as ReturnType<typeof useTaskForms>;
   let jobLifecycle = {} as ReturnType<typeof useJobLifecycle>;
@@ -55,10 +58,12 @@ export function useAppController() {
   const canStartMux = computed(() => !isBusy.value && taskForms.canStartMux.value);
 
   async function submitTranslate(): Promise<void> {
+    inspectedRecord.value = null;
     await startTranslate(null);
   }
 
   async function submitTranslateReuse(): Promise<void> {
+    inspectedRecord.value = null;
     await startTranslate(reusableSubtitle.value);
   }
 
@@ -100,6 +105,10 @@ export function useAppController() {
       modelSelection: taskForms.translateForm.useYamlConfig ? null : modelSelection(),
     });
   }
+
+  watch(isBusy, (busy) => {
+    if (busy) clearInspectedRecord();
+  });
 
   async function submitMux(): Promise<void> {
     await jobLifecycle.startJob({
@@ -160,6 +169,7 @@ export function useAppController() {
     if (isBusy.value) {
       return;
     }
+    inspectedRecord.value = null;
     await jobLifecycle.startJob({
       command: "translate",
       options: {
@@ -176,6 +186,17 @@ export function useAppController() {
 
   async function restoreTaskRecord(record: TranslationTaskSummary): Promise<void> {
     await appRuntime.runPromise(restoreTaskRecordProgram(record.task_id, recordsPorts));
+  }
+
+  function inspectTaskRecord(record: TranslationTaskSummary): void {
+    if (isBusy.value) {
+      return;
+    }
+    inspectedRecord.value = record;
+  }
+
+  function clearInspectedRecord(): void {
+    inspectedRecord.value = null;
   }
 
   async function openTaskOutput(record: TranslationTaskSummary): Promise<void> {
@@ -258,6 +279,8 @@ export function useAppController() {
 
   const records = {
     continueTaskRecord,
+    clearInspectedRecord,
+    inspectTaskRecord,
     openTaskOutput,
     openTaskSourceVideo,
     refreshTaskRecords,
@@ -284,6 +307,7 @@ export function useAppController() {
   return {
     formActions,
     forms: taskForms,
+    inspectedRecord,
     isBusy,
     job: jobLifecycle,
     onboarding,

@@ -1759,6 +1759,44 @@ select {
   padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
 }
 
+.task-record-item.is-inspectable {
+  cursor: pointer;
+}
+
+.task-record-item.is-inspectable:hover {
+  border-color: var(--accent);
+}
+
+.task-record-inspect {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.inspection-meta {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.inspection-meta-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.inspection-meta-row > span:first-child {
+  color: var(--muted);
+}
+
+.inspection-path {
+  overflow-wrap: anywhere;
+}
+
 .task-record-item.is-deleted {
   opacity: 0.68;
 }

@@ -216,6 +216,7 @@ const tests = [
   ["翻译中逐批显示双语字幕并在完成后校准预览", testLiveSubtitlePreview],
   ["YouTube URL 可以勾选强制 ASR，不下载原字幕", testYoutubeTranslateForceAsr],
   ["重跑同 URL 时提示复用已有字幕", testReuseSubtitleBanner],
+  ["历史任务可查看结果且不启动翻译", testInspectTaskRecord],
   ["翻译默认不二次润色，勾选后传递 refine 参数", testRefineToggle],
   ["已有字幕和视频可以单独生成 MKV", testManualMuxFlow],
   ["API Key 可以从环境变量回退，跳过首次配置", testEnvCredentialFallback],
@@ -485,6 +486,58 @@ async function testYoutubeTranslateForceAsr() {
     assert.equal(commands.length, 1);
     assert.equal(commands[0].args.includes("--force-asr"), true);
   });
+}
+
+async function testInspectTaskRecord() {
+  const record = {
+    task_id: "inspect-task-1",
+    status: "completed",
+    input_display: youtubeUrl,
+    working_directory: projectRoot,
+    target_language: "Chinese",
+    source_language: "en",
+    output_format: "source-first",
+    output_file: "/tmp/History Demo.zh.srt",
+    source_video_file: "/tmp/History Demo.webm",
+    llm_trace_dir: "/tmp/history-trace",
+    created_at: "2026-09-10T15:20:21+00:00",
+    updated_at: "2026-09-10T15:35:13+00:00",
+    deleted_at: null,
+  };
+  await withApp(
+    { env: { SUBTITLE_LLM_E2E_TASKS_JSON: JSON.stringify([record]) } },
+    async ({ page, electronApp, commandLogPath }) => {
+      await saveOnboardingKey(page);
+      await page.locator("#collapseDrawer").click();
+      const card = page.locator(".task-record-item");
+      await card.waitFor();
+      await electronApp.evaluate(({ ipcMain }) => {
+        globalThis.inspectionJobStarts = 0;
+        ipcMain.removeHandler("job:start");
+        ipcMain.handle("job:start", () => {
+          globalThis.inspectionJobStarts += 1;
+          throw new Error("查看历史不应启动任务");
+        });
+      });
+      await card.locator(".task-record-inspect").click();
+      const view = page.locator("#inspectionView");
+      await view.waitFor({ state: "visible" });
+      assert.ok((await view.innerText()).includes("History Demo"));
+      assert.ok((await view.innerText()).includes("已完成"));
+      assert.equal(await view.locator(".result-file-row").count(), 3);
+      await page.locator("#closeInspection").click();
+      await view.waitFor({ state: "hidden" });
+      await page.locator("#progressDashboard").waitFor({ state: "visible" });
+      await card.locator("summary").click();
+      assert.equal(await view.count(), 0, "菜单点击不应打开历史详情");
+      await card.locator("summary").click();
+      await card.locator(".task-record-inspect").focus();
+      await page.keyboard.press("Enter");
+      await view.waitFor({ state: "visible" });
+      assert.equal(await electronApp.evaluate(() => globalThis.inspectionJobStarts), 0);
+      assert.equal(readCommands(commandLogPath).filter((entry) => entry.command !== "tasks").length, 0);
+    },
+  );
 }
 
 async function testReuseSubtitleBanner() {

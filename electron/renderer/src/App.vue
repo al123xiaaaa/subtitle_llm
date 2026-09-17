@@ -7,7 +7,7 @@ import TaskRecordsPanel from "./components/TaskRecordsPanel.vue";
 import { useAppController } from "./composables/useAppController";
 
 const controller = useAppController();
-const { formActions, forms, isBusy, job, onboarding, providerState, records, shell } = controller;
+const { formActions, forms, inspectedRecord, isBusy, job, onboarding, providerState, records, shell } = controller;
 </script>
 
 <template>
@@ -29,7 +29,11 @@ const { formActions, forms, isBusy, job, onboarding, providerState, records, she
             :is-busy="isBusy"
             :records="records"
           />
-          <RunPanel :job="job" />
+          <RunPanel
+            :job="job"
+            :inspected-record="inspectedRecord"
+            @close-inspection="records.clearInspectedRecord"
+          />
         </div>
       </main>
       <ConfigDrawer
