@@ -324,6 +324,7 @@ export interface ReusableSubtitleMatch {
   title: string;
   sourceLanguage: string;
   createdAt: string;
+  completedTasks: TranslationTaskSummary[];
 }
 
 export interface SubtitleLlmBridge {

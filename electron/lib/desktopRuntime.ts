@@ -319,31 +319,37 @@ export function createDesktopRuntime({
 
   // 重跑同 URL 时找到可复用的源字幕（通常是上次 ASR 产物），
   // 让用户跳过下载与转写。取最近一次非删除记录，文件须仍在磁盘上。
+  // 同时带出状态与译文路径：已有完整译文时提示可查看结果而非重翻。
   function findReusableSubtitle(sourceUrl: string): ReusableSubtitleMatch | null {
     const cleaned = cleanText(sourceUrl);
     if (!cleaned) {
       return null;
     }
     const candidates = listTranslationTasks()
-      .filter((task) => task.source_url === cleaned && task.source_subtitle_path)
-      .toSorted((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
-    for (const task of candidates) {
-      const subtitlePath = resolveUserPath(task.source_subtitle_path);
-      if (!subtitlePath || !fs.existsSync(subtitlePath)) {
-        continue;
-      }
-      const videoPath = task.source_video_file ? resolveUserPath(task.source_video_file) : "";
-      return {
-        taskId: task.task_id,
-        sourceUrl: cleaned,
-        subtitlePath,
-        videoPath: videoPath && fs.existsSync(videoPath) ? videoPath : "",
-        title: path.basename(subtitlePath).replace(/\.[^.]+$/, ""),
-        sourceLanguage: task.source_language || "",
-        createdAt: task.created_at || "",
-      };
-    }
-    return null;
+      .filter((task) => !task.deleted_at && task.source_url === cleaned)
+      .toSorted((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+    const existingPath = (value: string): string => {
+      const resolved = value ? resolveUserPath(value) : "";
+      return resolved && fs.existsSync(resolved) ? resolved : "";
+    };
+    const completedTasks = candidates
+      .filter((task) => ["completed", "completed_with_warnings"].includes(task.status))
+      .map((task) => ({ ...task, output_file: existingPath(task.output_file) }))
+      .filter((task) => task.output_file);
+    const sourceTask = candidates.find((task) => existingPath(task.source_subtitle_path));
+    const task = sourceTask || completedTasks[0];
+    if (!task) return null;
+    const subtitlePath = sourceTask ? existingPath(sourceTask.source_subtitle_path) : "";
+    return {
+      taskId: task.task_id,
+      sourceUrl: cleaned,
+      subtitlePath,
+      videoPath: existingPath(task.source_video_file || ""),
+      title: path.basename(subtitlePath || task.output_file).replace(/\.[^.]+$/, ""),
+      sourceLanguage: task.source_language || "",
+      createdAt: task.created_at || "",
+      completedTasks,
+    };
   }
 
   function softDeleteTranslationTask(taskId: string) {

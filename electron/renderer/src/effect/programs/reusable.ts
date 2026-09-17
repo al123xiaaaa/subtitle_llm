@@ -37,23 +37,22 @@ export function makeReusableController(ports: ReusablePorts): ReusableController
       const bridge = yield* Bridge;
       const match = yield* bridge.findReusableSubtitle(url).pipe(Effect.either);
       yield* Effect.sync(() => {
-        if (cleanString(ports.getInput()) !== url) {
+        // 输入已变、正在运行或用户已忽略：一律丢弃过期匹配，避免旧结果闪回。
+        if (cleanString(ports.getInput()) !== url || ports.isBusy() || url === ports.getDismissedFor()) {
           return;
         }
-        if (Either.isRight(match)) {
-          ports.reusableSubtitle.value = match.right && url !== ports.getDismissedFor() ? match.right : null;
-        } else {
-          ports.reusableSubtitle.value = null;
-        }
+        ports.reusableSubtitle.value = Either.isRight(match) ? match.right : null;
       });
     });
 
   return {
     onInputChanged(value: string): void {
       cancelPending();
+      // 输入一变立刻清掉旧匹配：换 URL 期间不允许对旧结果继续操作。
+      ports.reusableSubtitle.value = null;
+      ports.setDismissedFor("");
       const url = cleanString(value);
       if (!looksLikeUrl(url) || ports.isBusy()) {
-        ports.reusableSubtitle.value = null;
         return;
       }
       pending = appRuntime.runFork(query(url));

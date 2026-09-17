@@ -59,51 +59,59 @@ export function useAppController() {
 
   async function submitTranslate(): Promise<void> {
     inspectedRecord.value = null;
-    await startTranslate(null);
+    await startTranslate();
   }
 
-  async function submitTranslateReuse(): Promise<void> {
-    inspectedRecord.value = null;
-    await startTranslate(reusableSubtitle.value);
-  }
+  const translationSubmitting = ref(false);
 
-  async function startTranslate(reuse: ReusableSubtitleMatch | null): Promise<void> {
+  async function startTranslate(): Promise<void> {
+    if (translationSubmitting.value || !canStartTranslate.value) return;
+    const form = { ...taskForms.translateForm };
+    const input = cleanString(form.input);
+    if (!input || !cleanString(form.targetLanguage)) return;
+    const match = reusableSubtitle.value;
+    const reuse = reuseSourceSubtitle.value && match?.sourceUrl === input && match.subtitlePath ? match : null;
     if (!taskForms.translateForm.useYamlConfig && providerState.outputBudgetError.value) {
       jobLifecycle.appendLog(`${providerState.outputBudgetError.value}\n`, "stderr");
       return;
     }
-    reusableSubtitle.value = null;
-    const output = cleanString(taskForms.translateForm.output);
-    if (output) {
-      jobLifecycle.setSubtitlePath(output);
+    const output = cleanString(form.output);
+    const video = cleanString(form.video) || reuse?.videoPath || "";
+    // 复用源字幕时不会下载视频，生成 MKV 必须已有本地视频。
+    const embedVideo = form.embedMkv && providerState.ffmpegAvailable.value
+      && (reuse ? Boolean(video) : looksLikeUrl(input) || Boolean(video));
+    const selection = form.useYamlConfig ? null : modelSelection();
+    translationSubmitting.value = true;
+    reusableController.dismiss();
+    try {
+      await providerState.persistProviderPreference();
+      if (output) jobLifecycle.setSubtitlePath(output);
+      await jobLifecycle.startJob({
+        command: "translate",
+        options: {
+          input,
+          targetLanguage: cleanString(form.targetLanguage),
+          sourceLanguage: cleanString(form.sourceLanguage),
+          output,
+          config: form.useYamlConfig ? cleanString(form.config) : "",
+          outputFormat: form.outputFormat,
+          reviewMode: form.reviewMode,
+          refineTranslation: form.refineTranslation,
+          forceAsr: reuse ? false : form.forceAsr,
+          reuseSubtitle: reuse?.subtitlePath || "",
+          asrModel: form.asrModel,
+          asrDevice: form.asrDevice,
+          resume: form.resume,
+          embedVideo,
+          video,
+        },
+        modelSelection: selection,
+      });
+    } catch (error) {
+      jobLifecycle.appendLog(`${error instanceof Error ? error.message : String(error)}\n`, "stderr");
+    } finally {
+      translationSubmitting.value = false;
     }
-    await providerState.persistProviderPreference();
-    const input = cleanString(taskForms.translateForm.input);
-    const video = reuse?.videoPath || cleanString(taskForms.translateForm.video);
-    // 复用模式下 Python 不参与下载，无法自己解析视频，embed 依赖记录里的视频路径
-    const embedVideo = taskForms.translateForm.embedMkv && providerState.ffmpegAvailable.value
-      && (reuse ? Boolean(reuse.videoPath) : looksLikeUrl(input) || Boolean(video));
-    await jobLifecycle.startJob({
-      command: "translate",
-      options: {
-        input,
-        targetLanguage: cleanString(taskForms.translateForm.targetLanguage),
-        sourceLanguage: cleanString(taskForms.translateForm.sourceLanguage),
-        output,
-        config: taskForms.translateForm.useYamlConfig ? cleanString(taskForms.translateForm.config) : "",
-        outputFormat: taskForms.translateForm.outputFormat,
-        reviewMode: taskForms.translateForm.reviewMode,
-        refineTranslation: taskForms.translateForm.refineTranslation,
-        forceAsr: reuse ? false : taskForms.translateForm.forceAsr,
-        reuseSubtitle: reuse?.subtitlePath || "",
-        asrModel: taskForms.translateForm.asrModel,
-        asrDevice: taskForms.translateForm.asrDevice,
-        resume: taskForms.translateForm.resume,
-        embedVideo,
-        video,
-      },
-      modelSelection: taskForms.translateForm.useYamlConfig ? null : modelSelection(),
-    });
   }
 
   watch(isBusy, (busy) => {
@@ -229,13 +237,14 @@ export function useAppController() {
   }
 
   // 输入 URL 变化时去任务记录里找可复用的源字幕（上次下载/ASR 产物），
-  // 找到就提示用户复用还是重新生成，避免重跑时白白再转写一遍。
+  // 找到就提示复用还是重新获取；选择只是意图，启动统一走"开始翻译"。
+  const reuseSourceSubtitle = ref(true);
   const reusableSubtitle = ref<ReusableSubtitleMatch | null>(null);
   let reusableDismissedFor = "";
   const reusableController = makeReusableController({
     reusableSubtitle,
     getInput: () => taskForms.translateForm.input,
-    isBusy: () => isBusy.value,
+    isBusy: () => isBusy.value || translationSubmitting.value,
     getDismissedFor: () => reusableDismissedFor,
     setDismissedFor: (value) => {
       reusableDismissedFor = value;
@@ -246,9 +255,21 @@ export function useAppController() {
     reusableController.dismiss();
   }
 
+  const existingTranslation = computed(() => reusableSubtitle.value?.completedTasks.find(
+    (task) => cleanString(task.target_language).toLowerCase() === cleanString(taskForms.translateForm.targetLanguage).toLowerCase(),
+  ) ?? null);
+
+  function inspectReusableResult(): void {
+    if (existingTranslation.value && !isBusy.value) {
+      inspectTaskRecord(existingTranslation.value);
+      shell.configDrawerOpen.value = false;
+    }
+  }
+
   watch(
     () => taskForms.translateForm.input,
     (value) => {
+      reuseSourceSubtitle.value = true;
       reusableController.onInputChanged(value);
     },
   );
@@ -257,12 +278,15 @@ export function useAppController() {
     canStartMux,
     canStartTranslate,
     dismissReusableSubtitle,
+    inspectReusableResult,
     reusableSubtitle,
     submitDownload,
     submitMux,
     submitTranscribe,
     submitTranslate,
-    submitTranslateReuse,
+    reuseSourceSubtitle,
+    existingTranslation,
+    translationSubmitting,
   };
 
   const onboarding = {

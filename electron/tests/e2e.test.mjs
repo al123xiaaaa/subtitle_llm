@@ -216,6 +216,8 @@ const tests = [
   ["翻译中逐批显示双语字幕并在完成后校准预览", testLiveSubtitlePreview],
   ["YouTube URL 可以勾选强制 ASR，不下载原字幕", testYoutubeTranslateForceAsr],
   ["重跑同 URL 时提示复用已有字幕", testReuseSubtitleBanner],
+  ["已有字幕提示可查看译文或选择重新获取", testExistingTranslationChoice],
+  ["已有字幕查询乱序返回不会复用旧输入", testStaleReuseLookup],
   ["历史任务可查看结果且不启动翻译", testInspectTaskRecord],
   ["翻译默认不二次润色，勾选后传递 refine 参数", testRefineToggle],
   ["已有字幕和视频可以单独生成 MKV", testManualMuxFlow],
@@ -575,10 +577,17 @@ async function testReuseSubtitleBanner() {
 
         const banner = page.locator("#reuseSubtitleBanner");
         await banner.waitFor({ state: "visible" });
-        await banner.locator("strong", { hasText: "发现可复用的字幕" }).waitFor();
+        await banner.locator("strong", { hasText: "发现历史字幕" }).waitFor();
         assert.ok((await banner.innerText()).includes("Demo Video"));
-
-        await page.locator("#reuseSubtitleUse").click();
+        assert.equal(await page.locator("#reuseSubtitleView").count(), 0);
+        await page.locator("#reuseSubtitleRegenerate").check();
+        await page.locator("#reuseSubtitleUse").check();
+        assert.equal(readCommands(commandLogPath).filter((entry) => entry.command === "translate").length, 0);
+        await page.locator("#targetLanguage").fill("");
+        await page.locator("#startTranslate").click();
+        assert.equal(readCommands(commandLogPath).filter((entry) => entry.command === "translate").length, 0);
+        await page.locator("#targetLanguage").fill("Chinese");
+        await page.locator("#startTranslate").click();
         await waitForRunStatus(page, "完成");
         await banner.waitFor({ state: "hidden" });
 
@@ -593,6 +602,90 @@ async function testReuseSubtitleBanner() {
   } finally {
     fs.rmSync(fixtureDir, { recursive: true, force: true });
   }
+}
+
+async function testExistingTranslationChoice() {
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "subtitle-llm-existing-"));
+  try {
+    const source = path.join(fixtureDir, "source.srt");
+    const output = path.join(fixtureDir, "result.zh.srt");
+    fs.writeFileSync(source, "1\n00:00:00,000 --> 00:00:01,000\nHello\n");
+    fs.writeFileSync(output, "1\n00:00:00,000 --> 00:00:01,000\n你好\n");
+    const record = {
+      task_id: "existing-1", status: "completed", input_display: youtubeUrl,
+      source_url: youtubeUrl, source_subtitle_path: source, output_file: output,
+      working_directory: projectRoot, target_language: "Chinese", source_language: "en",
+      output_format: "source-first", created_at: "2026-09-10T15:20:21+00:00",
+      updated_at: "2026-09-10T15:35:13+00:00", deleted_at: null,
+    };
+    await withApp({ env: { SUBTITLE_LLM_E2E_TASKS_JSON: JSON.stringify([record]) } }, async ({ page, commandLogPath }) => {
+      await saveOnboardingKey(page);
+      await page.locator("#translateInput").fill(youtubeUrl);
+      await page.locator("#reuseSubtitleView").waitFor({ state: "visible" });
+      await page.locator("#reuseSubtitleView").click();
+      await page.locator("#inspectionView").waitFor({ state: "visible" });
+      assert.ok((await page.locator("#inspectionView").innerText()).includes("result.zh.srt"));
+      assert.equal(readCommands(commandLogPath).filter((entry) => entry.command === "translate").length, 0);
+      await page.locator("#closeInspection").click();
+      await page.locator('[data-rail-tab="translate"]').click();
+      await page.locator("#targetLanguage").fill("Japanese");
+      await page.locator("#reuseSubtitleView").waitFor({ state: "hidden" });
+      await page.locator("#targetLanguage").fill("Chinese");
+      await page.locator("#reuseSubtitleView").waitFor({ state: "visible" });
+      await page.locator("#translateInput").fill("https://example.com/video-b");
+      await page.locator("#reuseSubtitleBanner").waitFor({ state: "hidden" });
+      await page.locator("#translateInput").fill(youtubeUrl);
+      await page.locator("#reuseSubtitleView").waitFor({ state: "visible" });
+      await page.locator("#reuseSubtitleRegenerate").check();
+      assert.equal(readCommands(commandLogPath).filter((entry) => entry.command === "translate").length, 0);
+      await page.locator("#forceAsr").check();
+      await page.locator("#startTranslate").click();
+      await waitForRunStatus(page, "完成");
+      const commands = readCommands(commandLogPath).filter((entry) => entry.command === "translate");
+      assert.equal(commands.length, 1);
+      assert.equal(commands[0].args.includes("--reuse-subtitle"), false);
+      assert.equal(commands[0].args.includes("--force-asr"), true);
+    });
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+}
+
+async function testStaleReuseLookup() {
+  await withApp(async ({ page, electronApp, commandLogPath }) => {
+    await saveOnboardingKey(page);
+    await electronApp.evaluate(({ ipcMain }) => {
+      globalThis.pendingReuse = {};
+      ipcMain.removeHandler("tasks:find-reusable-subtitle");
+      ipcMain.handle("tasks:find-reusable-subtitle", (_, url) => new Promise((resolve) => {
+        globalThis.pendingReuse[url] = resolve;
+      }));
+    });
+    const a = "https://example.com/video-a";
+    const b = "https://example.com/video-b";
+    await page.locator("#translateInput").fill(a);
+    await electronApp.evaluate(async (_, url) => {
+      while (!globalThis.pendingReuse[url]) await new Promise((resolve) => setTimeout(resolve, 20));
+    }, a);
+    await page.locator("#translateInput").fill(b);
+    await electronApp.evaluate(async (_, url) => {
+      while (!globalThis.pendingReuse[url]) await new Promise((resolve) => setTimeout(resolve, 20));
+      globalThis.pendingReuse[url]({ taskId: "b", sourceUrl: url, subtitlePath: "/tmp/b.srt", videoPath: "", title: "Video B", sourceLanguage: "en", createdAt: "2026-09-10", completedTasks: [] });
+    }, b);
+    await page.locator("#reuseSubtitleBanner", { hasText: "Video B" }).waitFor();
+    await electronApp.evaluate((_, url) => {
+      globalThis.pendingReuse[url]({ taskId: "a", sourceUrl: url, subtitlePath: "/tmp/a.srt", videoPath: "", title: "Video A", sourceLanguage: "en", createdAt: "2026-09-10", completedTasks: [] });
+    }, a);
+    await page.locator("#translateInput").fill("https://example.com/video-c");
+    await page.locator("#reuseSubtitleBanner").waitFor({ state: "hidden" });
+    await page.locator("#startTranslate").click();
+    await waitForRunStatus(page, "完成");
+    const commands = readCommands(commandLogPath).filter((entry) => entry.command === "translate");
+    assert.equal(commands.length, 1);
+    assertHasArg(commands[0].args, "--input", "https://example.com/video-c");
+    assert.equal(commands[0].args.includes("--reuse-subtitle"), false);
+    assert.equal(await page.locator("#reuseSubtitleBanner").count(), 0);
+  });
 }
 
 async function testRefineToggle() {

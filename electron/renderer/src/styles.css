@@ -737,9 +737,24 @@ select {
 
 .reuse-banner-actions {
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
+}
+
+.reuse-options {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.reuse-options legend {
+  margin-bottom: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--muted);
 }
 
 .reuse-banner-actions .primary-button {

@@ -29,16 +29,21 @@ const {
   onTranslateInput,
   translateForm,
 } = props.forms;
-const { canStartMux, canStartTranslate, dismissReusableSubtitle, reusableSubtitle, submitMux, submitTranslate, submitTranslateReuse } = props.formActions;
+const {
+  canStartMux,
+  canStartTranslate,
+  inspectReusableResult,
+  reusableSubtitle,
+  submitMux,
+  submitTranslate,
+  reuseSourceSubtitle,
+  existingTranslation,
+  translationSubmitting,
+} = props.formActions;
 
 function formatReuseTime(createdAt: string): string {
   const time = new Date(createdAt);
   return Number.isNaN(time.getTime()) ? createdAt : time.toLocaleString();
-}
-
-function regenerateFromScratch(): void {
-  dismissReusableSubtitle();
-  void submitTranslate();
 }
 const {
   configureProvider,
@@ -97,37 +102,49 @@ const { ffmpegAvailable } = props.providerState;
             class="reuse-banner span-2"
           >
             <div class="reuse-banner-text">
-              <strong>发现可复用的字幕</strong>
-              <span>《{{ reusableSubtitle.title }}》生成于 {{ formatReuseTime(reusableSubtitle.createdAt) }}，复用可跳过下载与 ASR 转写</span>
+              <strong>{{ existingTranslation ? "这个视频已有译文" : "发现历史字幕" }}</strong>
+              <span>《{{ reusableSubtitle.title }}》生成于 {{ formatReuseTime(reusableSubtitle.createdAt) }}{{ existingTranslation ? "，可直接查看已有结果" : "，选择源字幕处理方式后点开始翻译" }}</span>
             </div>
             <div class="reuse-banner-actions">
               <button
-                id="reuseSubtitleUse"
+                v-if="existingTranslation"
+                id="reuseSubtitleView"
                 class="primary-button"
                 type="button"
-                :disabled="isBusy || !canStartTranslate"
-                @click="submitTranslateReuse"
-              >
-                复用并继续
-              </button>
-              <button
-                id="reuseSubtitleRegenerate"
-                class="ghost-button"
-                type="button"
                 :disabled="isBusy"
-                @click="regenerateFromScratch"
+                @click="inspectReusableResult"
               >
-                重新生成
+                查看结果
               </button>
-              <button
-                id="reuseSubtitleDismiss"
-                class="ghost-button reuse-dismiss"
-                type="button"
-                aria-label="忽略"
-                @click="dismissReusableSubtitle"
+              <fieldset
+                v-if="reusableSubtitle.subtitlePath"
+                class="reuse-options"
               >
-                ×
-              </button>
+                <legend>重新翻译时使用</legend>
+                <label class="check-row">
+                  <input
+                    id="reuseSubtitleUse"
+                    v-model="reuseSourceSubtitle"
+                    type="radio"
+                    name="subtitleSource"
+                    :value="true"
+                    :disabled="isBusy || translationSubmitting"
+                  >
+                  <span>复用源字幕（跳过下载与 ASR）</span>
+                </label>
+                <label class="check-row">
+                  <input
+                    id="reuseSubtitleRegenerate"
+                    v-model="reuseSourceSubtitle"
+                    type="radio"
+                    name="subtitleSource"
+                    :value="false"
+                    :disabled="isBusy || translationSubmitting"
+                  >
+                  <span>重新获取源字幕</span>
+                </label>
+              </fieldset>
+              <span v-else>源字幕已不存在，重新翻译时将重新获取。</span>
             </div>
           </div>
           <label>
@@ -303,9 +320,9 @@ const { ffmpegAvailable } = props.providerState;
               id="forceAsr"
               v-model="translateForm.forceAsr"
               type="checkbox"
-              :disabled="isBusy"
+              :disabled="isBusy || Boolean(reusableSubtitle?.subtitlePath && reuseSourceSubtitle)"
             >
-            <span>不下载原字幕，改用 ASR</span>
+            <span>{{ reusableSubtitle?.subtitlePath && reuseSourceSubtitle ? "复用源字幕时不执行 ASR" : "不下载原字幕，改用 ASR" }}</span>
           </label>
           <label
             v-if="translateForm.forceAsr"
@@ -475,7 +492,7 @@ const { ffmpegAvailable } = props.providerState;
           id="startTranslate"
           class="primary-button"
           type="submit"
-          :disabled="!canStartTranslate"
+          :disabled="!canStartTranslate || translationSubmitting"
         >
           开始翻译
         </button>
