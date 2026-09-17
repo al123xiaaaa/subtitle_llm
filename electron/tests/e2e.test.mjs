@@ -380,6 +380,37 @@ async function testBusyLayoutKeepsSectionsBounded() {
         assert.equal(geometry.mainOverflows, false, `workspace overflows at ${width}px`);
         assert.equal(geometry.outputsScroll, 'visible', 'outputs must not create a nested scrollbar');
         assert.ok(geometry.log.bottom <= height + 1, `log is outside window at ${width}px`);
+        const preview = await page.locator('#subtitlePreview').count();
+        const previewList = await page.locator('.subtitle-preview-list').count();
+        const previewGeometry = preview ? await page.locator('#subtitlePreview').boundingBox() : null;
+        const dashboard = await page.locator('#progressDashboard').evaluate((node) => ({
+          bottom: node.getBoundingClientRect().bottom,
+          scrolls: node.scrollHeight > node.clientHeight + 1,
+        }));
+        if (previewGeometry && previewList) {
+          const listScrolls = await page.locator('.subtitle-preview-list').evaluate((node) => ({
+            scrolls: node.scrollHeight > node.clientHeight,
+            height: node.clientHeight,
+          }));
+          if (width >= 1180 && height >= 800) {
+            assert.ok(
+              dashboard.bottom - previewGeometry.bottom <= 1,
+              `preview should fill remaining height at ${width}x${height}`,
+            );
+            assert.equal(dashboard.scrolls, false, `dashboard should not scroll at ${width}x${height}`);
+          } else if (dashboard.scrolls) {
+            assert.ok(
+              previewGeometry.height >= 180,
+              `preview should keep usable height when dashboard scrolls at ${width}x${height}`,
+            );
+          }
+          if (listScrolls.scrolls) {
+            assert.ok(
+              listScrolls.height <= previewGeometry.height,
+              `preview list must scroll internally at ${width}x${height}`,
+            );
+          }
+        }
         if (width === 1800) {
           assert.ok(geometry.records.right <= geometry.run.left + 1, 'wide layout has task list on the left');
         } else {

@@ -293,7 +293,7 @@ p {
 }
 
 .run-panel {
-  container: run / inline-size;
+  container: run / size;
 }
 
 /* —— 配置抽屉 —— */
@@ -971,6 +971,37 @@ select {
   padding: var(--space-5);
   overflow: auto;
   overscroll-behavior: contain;
+}
+
+@container run (min-width: 701px) and (min-height: 800px) {
+  .progress-dashboard:has(.subtitle-preview) {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .progress-dashboard:has(.subtitle-preview) > :not(.run-detail-grid) {
+    flex-shrink: 0;
+  }
+
+  .progress-dashboard:has(.subtitle-preview) .run-detail-grid {
+    flex: 1;
+    min-height: 0;
+    align-items: stretch;
+  }
+
+  .progress-dashboard:has(.subtitle-preview) .run-process {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .progress-dashboard:has(.subtitle-preview) .run-process > :not(.subtitle-preview) {
+    flex-shrink: 0;
+  }
+
+  .progress-dashboard:has(.subtitle-preview) .result-files {
+    align-content: start;
+  }
 }
 
 .run-panel.is-idle .progress-dashboard {

@@ -90,11 +90,11 @@ function timestamp(seconds: number): string {
 </template>
 
 <style scoped>
-.subtitle-preview { min-width: 0; min-height: min(48vh, 620px); display: flex; flex-direction: column; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--surface); overflow: hidden; }
+.subtitle-preview { min-width: 0; min-height: 180px; flex: 1 1 auto; display: flex; flex-direction: column; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--surface); overflow: hidden; }
 .subtitle-preview-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line-soft); }
 .subtitle-preview-heading p, .subtitle-preview-time, .subtitle-preview-empty p { color: var(--muted); font-size: var(--text-sm); }
 .subtitle-preview-empty { display: grid; align-content: center; justify-items: center; gap: 8px; flex: 1; padding: 32px 20px; text-align: center; }
-.subtitle-preview-list { max-height: 55vh; overflow: auto; }
+.subtitle-preview-list { min-height: 0; flex: 1 1 auto; overflow: auto; }
 .subtitle-preview-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 24px; padding: 18px 20px; border-bottom: 1px solid var(--line-soft); }
 .subtitle-preview-time { grid-column: 1 / -1; display: flex; justify-content: space-between; }
 .subtitle-preview-row p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
