@@ -73,15 +73,17 @@ function buildTranslateArgs(options: TranslateJobOptions): string[] {
   addOption(args, "--reuse-subtitle", options.reuseSubtitle);
   addOption(args, "--material-id", options.materialId);
   addOption(args, "--origin-url", options.originUrl);
-  addOption(args, "--video", options.video);
 
   addOption(args, "--asr-model", options.asrModel);
   addOption(args, "--asr-device", options.asrDevice);
 
   if (options.embedVideo) {
     args.push("--embed-video");
+    addOption(args, "--video", options.video);
     addOption(args, "--video-output", options.videoOutput);
     addOption(args, "--ffmpeg", options.ffmpeg);
+  } else {
+    addOption(args, "--video", options.video);
   }
 
   return args;

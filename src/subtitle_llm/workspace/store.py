@@ -814,16 +814,16 @@ class WorkspaceStore:
             )
             if material_id and not found:
                 raise ValueError("目标素材不存在")
-            material_id = found[0] if found else str(uuid.uuid4())
+            resolved_material_id = str(found[0]) if found else str(uuid.uuid4())
             if not found:
                 anchor = original or media_file
                 assert anchor is not None
                 title = anchor.stem
                 connection.execute(
                     "INSERT INTO workspace_materials VALUES (?, ?, ?, ?, ?)",
-                    (material_id, identity, title, "{}", timestamp()),
+                    (resolved_material_id, identity, title, "{}", timestamp()),
                 )
             connection.execute(
-                "INSERT INTO workspace_sources VALUES (?, ?, ?, ?)", (source_id, material_id, encode(doc), timestamp())
+                "INSERT INTO workspace_sources VALUES (?, ?, ?, ?)", (source_id, resolved_material_id, encode(doc), timestamp())
             )
-        return self.material(material_id)
+        return self.material(resolved_material_id)

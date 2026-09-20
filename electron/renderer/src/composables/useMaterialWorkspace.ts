@@ -35,7 +35,12 @@ export function useMaterialWorkspace() {
   }
   async function refresh() {
     loading.value = true;
-    try { materials.value = await request<Material[]>({action: 'library'}); }
+    try {
+      const generation = selectionGeneration;
+      materials.value = await request<Material[]>({action: 'library'});
+      const current = materials.value.find(entry => entry.material_id === materialId.value);
+      if (generation === selectionGeneration && current?.tasks.length && !version.value) await openMaterial(current);
+    }
     finally { loading.value = false; }
   }
   async function openVersion(taskId: string) {
