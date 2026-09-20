@@ -72,6 +72,9 @@ class TranslationRequest:
     task_id: str | None = None
     # URL 输入时复用已有字幕（通常是上次 ASR 产物），跳过下载与转写
     reuse_subtitle: str | None = None
+    material_id: str | None = None
+    origin_url: str | None = None
+    source_media: str | None = None
 
 
 @dataclass
@@ -289,11 +292,15 @@ class TranslationService:
                 config=record_config,
                 context_file=str(context_file),
                 llm_trace_dir=str(trace_recorder.trace_dir),
-                source_video_file=resolved_input.video_file,
-                source_url=request.input_file if self._is_url(request.input_file) else None,
+                source_video_file=resolved_input.video_file or request.source_media,
+                source_url=request.input_file if self._is_url(request.input_file) else request.origin_url,
                 status=task_lifecycle.state,
             )
         workspace = WorkspaceStore(self.task_store)
+        if request.material_id:
+            workspace.sync_task(task_record.task_id, material_id=request.material_id)
+        if request.source_media and not report.source_video_file:
+            report.source_video_file = request.source_media
         report.workspace_recorded = True
         report.task_id = task_record.task_id
         report.task_db_file = str(self.task_store.db_path)
@@ -303,6 +310,10 @@ class TranslationService:
         if should_restore:
             model_segmentation = self.config.pipeline.model_segmentation == "always"
             report.model_segmentation_applied = model_segmentation
+        if should_restore:
+            previous_report = self.task_store.load_resume_state(task_record.task_id).get('report', {})
+            report.first_pass_tokens = int(previous_report.get('first_pass_tokens', 0))
+            report.summary_tokens_total = int(previous_report.get('summary_tokens_total', previous_report.get('summary_tokens', 0)))
         task_state_restore = RunLedger.restore_task_state(
             resume=should_restore and not model_segmentation,
             task_id=task_record.task_id,
@@ -316,9 +327,6 @@ class TranslationService:
             self.task_store, task_record.task_id, Subtitle([]) if model_segmentation else subtitle, report, [],
         )
         progress_contract.task_record_restored(len(resumed_indices))
-        if should_restore:
-            previous_report = self.task_store.load_resume_state(task_record.task_id).get('report', {})
-            report.first_pass_tokens = int(previous_report.get('first_pass_tokens', 0))
         restored_accepted_indices = set(report.accepted_entry_indices)
         preview.accept([entry for entry in subtitle.entries if entry.index in restored_accepted_indices])
         if resumed_indices:

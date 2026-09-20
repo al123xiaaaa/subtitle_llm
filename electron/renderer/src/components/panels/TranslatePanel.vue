@@ -164,7 +164,7 @@ const { ffmpegAvailable } = props.providerState;
       </div>
 
       <details class="span-2 translate-options">
-        <summary>本次设置 · {{ selectedModelId || '选择翻译模型' }} · {{ translateForm.semanticCheck ? 'Jev 检查' : '稍后补查' }} · {{ translateForm.embedMkv ? '双语字幕 + 视频' : '字幕文件' }}</summary>
+        <summary>本次设置 · {{ translateForm.useYamlConfig ? '按 YAML 配置' : (showCustomModelInput ? customModelInput : selectedModelId) || '选择翻译模型' }} · {{ translateForm.semanticCheck ? 'Jev 检查' : '稍后补查' }} · {{ translateForm.embedMkv ? '双语字幕 + 视频' : '字幕文件' }}</summary>
         <div class="form-group">
           <h3 class="form-group-title">
             模型

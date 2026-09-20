@@ -157,6 +157,39 @@ class WorkspaceTest(unittest.TestCase):
 
 
 class WorkspaceIntegrationTest(WorkspaceTest):
+    def test_v3_upgrade_rolls_back_all_new_tables_on_interruption(self):
+        import sqlite3
+        from unittest.mock import patch
+        from subtitle_llm.pipeline.workspace_storage import create_workspace_schema
+
+        task_id = self.task()["task_id"]
+        with sqlite3.connect(self.tasks.db_path) as connection:
+            for name in [
+                "workspace_budget_calls",
+                "workspace_budgets",
+                "workspace_sources",
+                "workspace_versions",
+                "workspace_materials",
+            ]:
+                connection.execute(f"DROP TABLE {name}")
+            connection.execute("PRAGMA user_version=3")
+
+        def interrupted(connection):
+            create_workspace_schema(connection)
+            raise RuntimeError("simulated v3 interruption")
+
+        with (
+            patch("subtitle_llm.pipeline.workspace_storage.create_workspace_schema", interrupted),
+            self.assertRaises(RuntimeError),
+        ):
+            TranslationTaskStore(self.tasks.db_path)
+        with sqlite3.connect(self.tasks.db_path) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+            self.assertIsNone(
+                connection.execute("SELECT name FROM sqlite_master WHERE name='workspace_versions'").fetchone()
+            )
+        self.assertEqual(TranslationTaskStore(self.tasks.db_path).get_task(task_id).task_id, task_id)
+
     def test_independent_source_is_visible_before_translation_and_preserves_its_snapshot(self):
         source = self.root / "downloaded.srt"
         source.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n")
@@ -172,6 +205,10 @@ class WorkspaceIntegrationTest(WorkspaceTest):
         task_id = self.task()["task_id"]
         self.workspace.record_check(task_id, [1], [], status="checked")
         self.assertEqual(self.workspace.version(task_id)["check_state"], "incomplete")
+        uncovered = self.workspace.review_items(task_id)
+        self.assertEqual(uncovered[0]["indices"], [2])
+        self.assertEqual([entry["index"] for entry in uncovered[0]["context"]], [1, 2])
+        self.assertFalse(uncovered[0]["can_accept"])
         saved = self.tasks.load_resume_state(task_id)
         entries = [SubtitleEntry.from_dict(e) for e in saved["entries"].values()]
         entries[0].translated_text = "恢复后的新内容"

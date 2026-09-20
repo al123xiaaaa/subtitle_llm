@@ -68,6 +68,7 @@ try {
   assert.match(fs.readFileSync(path.join(temp, subtitle), 'utf8'), /我们可以试试/);
   await page.getByRole('button', {name:'新建翻译', exact:true}).click();
   await page.locator('.translate-options > summary').click();
+  const originalModel = await page.locator('#modelSelect').inputValue();
   await page.locator('#modelSelect').selectOption('deepseek-v4-pro');
   // 本次选择不能自动写入默认。只有明确保存按钮才持久化。
   const settingsPath = path.join(temp, 'settings.json');
@@ -75,11 +76,18 @@ try {
   await page.locator('#translationMaxTokens').fill('4096');
   await page.locator('#targetLanguage').click();
   assert.equal(fs.existsSync(settingsPath) ? fs.readFileSync(settingsPath, 'utf8') : '', before);
+  await page.locator('[data-workspace="materials"]').click();
+  await page.getByRole('button', {name:'新建翻译', exact:true}).click();
+  assert.equal(await page.locator('#modelSelect').inputValue(), originalModel);
+  assert.equal(await page.locator('#translationMaxTokens').inputValue(), '');
+  await page.locator('#modelSelect').selectOption('deepseek-v4-pro');
+  await page.locator('#translationMaxTokens').fill('4096');
+  await page.getByLabel('使用 Jev 语义检查', {exact:false}).uncheck();
   await page.getByRole('button', {name:'将模型选择明确保存为默认'}).click();
-  await page.waitForFunction(() => window.subtitleLLM.getState().then(state => state.preferences.translationMaxTokens === 4096));
+  await page.waitForFunction(() => window.subtitleLLM.getState().then(state => state.preferences.translationMaxTokens === 4096 && state.preferences.semanticQuality === 'off'));
   await page.locator('[data-workspace="materials"]').click();
   await page.locator('[data-workspace="materials"].is-active').waitFor();
-  await page.screenshot({path:path.join('/tmp/subtitle-app-implementation', 'workspace-verified.png'), fullPage:true});
+  await page.screenshot({path:path.join('/tmp/subtitle-app-implementation', 'workspace-verified.png'), fullPage:true, animations:'disabled'});
   assert.deepEqual(errors, []);
   await app.close(); app = null;
   app = await electron.launch({executablePath: require('electron'), args:[root], env});

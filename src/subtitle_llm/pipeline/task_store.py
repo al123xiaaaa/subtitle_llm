@@ -141,6 +141,8 @@ class TranslationTaskStore:
                         connection.backup(target)
             if version not in {2, 3, SCHEMA_VERSION}:
                 self._rebuild_schema(connection)
+            else:
+                connection.execute('BEGIN IMMEDIATE')
             # v2 -> v3 只增加模型结果缓存，保留已有任务和复核进度。
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS translation_model_results (

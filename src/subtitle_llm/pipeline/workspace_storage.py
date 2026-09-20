@@ -20,7 +20,7 @@ def create_workspace_schema(connection):
                     source_id TEXT PRIMARY KEY, material_id TEXT NOT NULL REFERENCES workspace_materials(material_id),
                     document_json TEXT NOT NULL, created_at TEXT NOT NULL
                 );
-            
+
                 CREATE TABLE IF NOT EXISTS workspace_budgets (
                     bucket TEXT PRIMARY KEY, baseline INTEGER NOT NULL, ratio REAL NOT NULL, token_limit INTEGER NOT NULL
                 );

@@ -13,6 +13,39 @@ from subtitle_llm.workspace.budget import BudgetLedger
 
 
 class WorkspacePipelineTest(unittest.TestCase):
+    def test_independent_source_translation_keeps_explicit_material_and_origin(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "downloaded.srt"
+            source.write_text("1\n00:00:01,000 --> 00:00:03,000\nThis is a complete source sentence.\n")
+            tasks = TranslationTaskStore(root / "tasks.sqlite3")
+            workspace = WorkspaceStore(tasks)
+            material = workspace.import_source(str(source), language="en", source_url="https://youtu.be/example")
+            snapshot = material["sources"][0]["path"]
+            config = make_config()
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = TranslationService(
+                    config, translation_client=FakeLLMClient(), summary_client=FakeLLMClient(), task_store=tasks
+                ).translate(
+                    TranslationRequest(
+                        snapshot,
+                        str(root / "translated.srt"),
+                        "Chinese",
+                        material_id=material["material_id"],
+                        origin_url="https://youtu.be/example",
+                    )
+                )
+            assert result.report.task_id is not None
+            version = workspace.version(result.report.task_id)
+            self.assertEqual(version["material_id"], material["material_id"])
+            self.assertEqual(version["source_url"], "https://youtu.be/example")
+            self.assertEqual(len(workspace.list_materials()), 1)
+            reidentified = root / "different-source.srt"
+            reidentified.write_text("1\n00:00:01,000 --> 00:00:03,000\nA changed source sentence.\n")
+            workspace.import_source(str(reidentified), language="en", material_id=material["material_id"])
+            self.assertEqual(len(workspace.list_materials()), 1)
+            self.assertEqual(len(workspace.material(material["material_id"])["sources"]), 2)
+
     def test_all_first_pass_chunks_finish_before_reserved_extra_checks_and_resume_keeps_budget(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

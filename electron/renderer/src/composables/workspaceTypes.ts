@@ -16,6 +16,7 @@ export interface VersionSummary {
     created_at: string;
 }
 export interface Source {
+    material_id?: string;
     source_id?: string;
     path?: string;
     source_url?: string;

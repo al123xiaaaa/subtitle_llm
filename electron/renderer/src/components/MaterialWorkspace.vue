@@ -26,7 +26,7 @@ const pendingCount = computed(() => version.value?.review_items.filter(i => !i.o
 const usage = computed(() => {
   const doc = version.value;
   const operations = doc?.operations || [];
-  const known = (items: typeof operations) => items.reduce((sum, item) => sum + (typeof item.usage === 'number' ? item.usage : 0), 0);
+  const known = (calls: typeof operations) => calls.reduce((sum, item) => sum + (typeof item.usage === 'number' ? item.usage : 0), 0);
   return {manual: known(operations.filter(item => !item.automatic)), automatic: known(operations.filter(item => item.automatic)),
     total: (doc?.report.first_pass_tokens || 0) + (doc?.report.summary_tokens_total || 0) + known(operations),
     unknown: operations.some(item => typeof item.usage !== 'number') || Boolean(doc?.report.token_usage?.unknown_usage_calls)};
@@ -39,7 +39,7 @@ function chooseVersion(event: Event) { void ws.guarded(() => ws.openVersion((eve
 function checkDetails(id: string) { return version.value?.checks.find(c => c.check_id === id)?.details; }
 function openFile(path: string) { void window.subtitleLLM.openPath(path); }
 function checkScope(doc: Version) { return doc.checks.filter(c => !c.outdated).map(c => c.indices); }
-function sourceForVersion(doc: Version): Source { return {path:doc.source, source_url:doc.source_url, source_video:doc.source_video, language:doc.source_language}; }
+function sourceForVersion(doc: Version): Source { return {material_id:doc.material_id, path:doc.source, source_url:doc.source_url, source_video:doc.source_video, language:doc.source_language}; }
 </script>
 <template>
   <section
@@ -103,13 +103,13 @@ function sourceForVersion(doc: Version): Source { return {path:doc.source, sourc
         <p>{{ source.language }} · {{ source.path || source.source_video }}</p>
         <button
           v-if="source.path"
-          @click="emit('source', source)"
+          @click="emit('source', {...source, material_id:materialId})"
         >
           使用此源字幕翻译
         </button>
         <button
           v-if="source.source_video"
-          @click="emit('tool', 'transcribe', source)"
+          @click="emit('tool', 'transcribe', {...source, material_id:materialId})"
         >
           系统转写此素材
         </button>

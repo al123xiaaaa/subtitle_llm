@@ -106,6 +106,8 @@ export interface ModelSelection {
 }
 
 export interface TranslateJobOptions {
+  materialId?: string;
+  originUrl?: string;
   input?: string;
   targetLanguage?: string;
   taskId?: string;
@@ -133,6 +135,7 @@ export interface DownloadJobOptions {
 }
 
 export interface TranscribeJobOptions {
+  materialId?: string;
   audio: string;
   output: string;
   language?: string;

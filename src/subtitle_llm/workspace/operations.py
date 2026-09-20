@@ -347,11 +347,20 @@ class WorkspaceOperations:
             if doc.get("context_file") and Path(doc["context_file"]).is_file():
                 context = Path(doc["context_file"]).read_text(encoding="utf-8")
             objects = [SubtitleEntry.from_dict(entry) for entry in entries]
+            from subtitle_llm.pipeline.text import build_boundary_context
+
+            boundary = build_boundary_context([SubtitleEntry.from_dict(entry) for entry in doc["entries"]], objects)[
+                "text"
+            ]
             payload = build_request(
                 objects,
                 doc["language"],
                 context,
-                translation_context={"stage": "manual_recheck", "source_language": doc["source_language"]},
+                translation_context={
+                    "stage": "manual_recheck",
+                    "source_language": doc["source_language"],
+                    "readonly_boundary_context": boundary,
+                },
             )
             if len(encode(payload).encode()) > CONTEXT_BYTES:
                 raise ValueError("完整上下文超限，未裁剪")
@@ -371,7 +380,7 @@ class WorkspaceOperations:
                 indices,
                 issues,
                 status="checked",
-                details={"judgments": judgments},
+                details={"judgments": judgments, "boundary_context": boundary},
                 expected_revision=doc["revision"],
             )
             operation["status"] = "checked"

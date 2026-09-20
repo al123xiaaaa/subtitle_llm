@@ -21,6 +21,9 @@ export interface TaskTabMeta {
 }
 
 export interface TranslateFormState {
+  materialId?: string;
+  materialInput?: string;
+  originUrl?: string;
   semanticCheck: boolean;
   input: string;
   targetLanguage: string;
@@ -52,6 +55,8 @@ export interface DownloadFormState {
 }
 
 export interface TranscribeFormState {
+  materialId?: string;
+  materialInput?: string;
   audio: string;
   language: string;
   output: string;

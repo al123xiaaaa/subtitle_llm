@@ -95,6 +95,8 @@ def _load_service(
 
 @app.command()
 def translate(
+    material_id: Annotated[str | None, typer.Option('--material-id', help='关联到已有素材')] = None,
+    origin_url: Annotated[str | None, typer.Option('--origin-url', help='本地源字幕所属的视频 URL')] = None,
     input_file: Annotated[
         str | None,
         typer.Option("--input", "-i", help="Input .srt/.json file or video URL."),
@@ -216,6 +218,9 @@ def translate(
                 force_asr=force_asr,
                 reuse_subtitle=str(reuse_subtitle) if reuse_subtitle else None,
                 task_id=task_id,
+                material_id=material_id,
+                origin_url=origin_url,
+                source_media=str(video_file) if video_file else None,
             ),
             progress=progress,
             emit_complete=not embed_video,
@@ -380,6 +385,7 @@ def download(
 def transcribe(
     audio: Annotated[Path, typer.Argument(help="Audio file path.")],
     output: Annotated[Path, typer.Option("--output", "-o", help="Output .srt file.")],
+    material_id: Annotated[str | None, typer.Option('--material-id', help='关联到已有素材')] = None,
     language: Annotated[str, typer.Option("--language", "-l", help="Spoken language.")] = "English",
     config: Annotated[Path | None, typer.Option("--config", "-c", help="Config YAML path.")] = None,
     asr_model: Annotated[
@@ -419,7 +425,7 @@ def transcribe(
     logger.info("命令完成: transcribe output=%s", output)
     if output.is_file():
         from subtitle_llm.workspace import WorkspaceStore
-        WorkspaceStore(TranslationTaskStore()).import_source(str(output), language=language, media=str(audio))
+        WorkspaceStore(TranslationTaskStore()).import_source(str(output), language=language, media=str(audio), material_id=material_id)
     emit_result_event('transcribe', output_file=str(output), source_video_file=str(audio))
     progress.emit(
         stage="complete",

@@ -21,11 +21,12 @@ async function resumeWorkspaceTask(taskId: string) {
 function translateSource(source: Source) {
   formActions.newTranslation();
   Object.assign(forms.translateForm, {input:source.path || source.source_url || '', sourceLanguage:source.language,
+    materialId:source.material_id, originUrl:source.source_url, materialInput:source.path || source.source_url || '',
     video:source.source_video || '', embedMkv:Boolean(source.source_video && /\.(mp4|mkv|mov|webm)$/i.test(source.source_video))});
 }
 function useMaterialTool(kind: 'download' | 'transcribe', source: Source) {
   if (kind === 'download') Object.assign(forms.downloadForm, {url:source.source_url || '', sourceLanguage:source.language});
-  else Object.assign(forms.transcribeForm, {audio:source.source_video || '', language:source.language});
+  else Object.assign(forms.transcribeForm, {audio:source.source_video || '', language:source.language, materialId:source.material_id, materialInput:source.source_video || ''});
   shell.setActiveTab(kind);
 }
 </script>

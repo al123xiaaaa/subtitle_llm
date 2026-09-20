@@ -98,6 +98,8 @@ export function useAppController() {
         command: "translate",
         options: {
           input,
+          materialId: form.materialInput === input ? form.materialId : undefined,
+          originUrl: form.materialInput === input ? form.originUrl : undefined,
           targetLanguage: cleanString(form.targetLanguage),
           sourceLanguage: cleanString(form.sourceLanguage),
           output,
@@ -155,6 +157,7 @@ export function useAppController() {
       command: "transcribe",
       options: {
         audio: cleanString(taskForms.transcribeForm.audio),
+        materialId: taskForms.transcribeForm.materialInput === taskForms.transcribeForm.audio ? taskForms.transcribeForm.materialId : undefined,
         output,
         language: cleanString(taskForms.transcribeForm.language),
         config: cleanString(taskForms.transcribeForm.config),
@@ -284,10 +287,8 @@ export function useAppController() {
 
   const formActions = {
     newTranslation: () => {
-      const preferences = providerState.appState.value?.preferences;
       providerState.restoreTaskDefaults();
-      Object.assign(taskForms.translateForm, {input:'', output:'', video:'', useYamlConfig:false,
-        semanticCheck:preferences?.semanticQuality !== 'off', asrModel:preferences?.asrModel || '', asrDevice:preferences?.asrDevice || ''});
+      taskForms.resetForNewTask();
       shell.setActiveTab('translate');
     },
     canStartMux,

@@ -71,13 +71,15 @@ function buildTranslateArgs(options: TranslateJobOptions): string[] {
   }
 
   addOption(args, "--reuse-subtitle", options.reuseSubtitle);
+  addOption(args, "--material-id", options.materialId);
+  addOption(args, "--origin-url", options.originUrl);
+  addOption(args, "--video", options.video);
 
   addOption(args, "--asr-model", options.asrModel);
   addOption(args, "--asr-device", options.asrDevice);
 
   if (options.embedVideo) {
     args.push("--embed-video");
-    addOption(args, "--video", options.video);
     addOption(args, "--video-output", options.videoOutput);
     addOption(args, "--ffmpeg", options.ffmpeg);
   }
@@ -97,6 +99,7 @@ function buildTranscribeArgs(options: TranscribeJobOptions): string[] {
   const audio = required(options.audio, "音频文件");
   const output = required(options.output, "输出文件");
   const args = ["main.py", "transcribe", audio, "--output", output];
+  addOption(args, "--material-id", options.materialId);
   addOption(args, "--language", options.language || "English");
   addOption(args, "--config", options.config);
   addOption(args, "--asr-model", options.asrModel);

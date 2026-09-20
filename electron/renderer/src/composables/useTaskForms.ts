@@ -104,6 +104,15 @@ export function useTaskForms(options: TaskFormsOptions) {
     translateForm.embedMkv = looksLikeUrl(cleanString(translateForm.input));
   }
 
+  function resetForNewTask(): void {
+    const defaults = options.appState.value?.preferences;
+    embedPreferenceTouched.value = false;
+    Object.assign(translateForm, {input:'', output:'', video:'', embedMkv:false, resume:false, forceAsr:false,
+      targetLanguage:'Chinese', sourceLanguage:'en', outputFormat:'', useYamlConfig:false, refineTranslation:false, reviewMode:'auto',
+      materialId:undefined, materialInput:undefined, originUrl:undefined,
+      semanticCheck:defaults?.semanticQuality !== 'off', asrModel:defaults?.asrModel || '', asrDevice:defaults?.asrDevice || ''});
+  }
+
   async function chooseInput(): Promise<void> {
     await appRuntime.runPromise(
       pickPath((bridge) => bridge.selectInput(), (filePath) => {
@@ -202,6 +211,7 @@ export function useTaskForms(options: TaskFormsOptions) {
   }
 
   return {
+    resetForNewTask,
     asrModels,
     canStartMux,
     chooseAudio,

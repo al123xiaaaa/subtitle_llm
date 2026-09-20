@@ -392,8 +392,36 @@ class WorkspaceStore:
 
     def review_items(self, task_id: str, *, include_all: bool = False) -> list[dict]:
         from .review import review_items
+        from subtitle_llm.domain import SubtitleEntry
+        from subtitle_llm.pipeline.chunks import ChunkPlanner
+        from subtitle_llm.pipeline.task_store import config_from_snapshot
 
-        return review_items(self.version(task_id), include_all=include_all)
+        doc = self.version(task_id)
+        result = review_items(doc, include_all=include_all)
+        covered = {i for check in doc["checks"] if not check["outdated"] for i in check["indices"]}
+        missing = {entry["index"] for entry in doc["entries"]} - covered
+        if missing:
+            config = config_from_snapshot(self.tasks.get_task(task_id).config_snapshot_json).pipeline
+            planned = ChunkPlanner(config.chunk_size, config.context_window_size, -1).plan(
+                [SubtitleEntry.from_dict(entry) for entry in doc["entries"]]
+            )
+            for chunk in planned:
+                indices = [entry.index for entry in chunk.entries]
+                if missing.intersection(indices):
+                    result.append(
+                        {
+                            "item_id": f"uncovered:{task_id}:{doc['revision']}:{chunk.index}",
+                            "check_id": "",
+                            "indices": sorted(missing.intersection(indices)),
+                            "issues": [],
+                            "state": "check_pending",
+                            "outdated": False,
+                            "context": [entry.to_dict() for entry in chunk.entries],
+                            "check_status": "not_checked",
+                            "can_accept": False,
+                        }
+                    )
+        return result
 
     def accept_items(self, task_id: str, item_ids: list[str]) -> dict:
         if not item_ids:
@@ -737,7 +765,13 @@ class WorkspaceStore:
         return self.version(task_id)
 
     def import_source(
-        self, path: str | None, *, language: str, source_url: str | None = None, media: str | None = None
+        self,
+        path: str | None,
+        *,
+        language: str,
+        source_url: str | None = None,
+        media: str | None = None,
+        material_id: str | None = None,
     ) -> dict:
         """独立下载和转写的结果也属于素材；字幕复制为不可变来源后再进入翻译。"""
         import shutil
@@ -769,12 +803,22 @@ class WorkspaceStore:
         }
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            found = connection.execute(
-                "SELECT material_id FROM workspace_materials WHERE identity=?", (identity,)
-            ).fetchone()
+            found = (
+                connection.execute(
+                    "SELECT material_id FROM workspace_materials WHERE material_id=?", (material_id,)
+                ).fetchone()
+                if material_id
+                else connection.execute(
+                    "SELECT material_id FROM workspace_materials WHERE identity=?", (identity,)
+                ).fetchone()
+            )
+            if material_id and not found:
+                raise ValueError("目标素材不存在")
             material_id = found[0] if found else str(uuid.uuid4())
             if not found:
-                title = (original or media_file).stem
+                anchor = original or media_file
+                assert anchor is not None
+                title = anchor.stem
                 connection.execute(
                     "INSERT INTO workspace_materials VALUES (?, ?, ?, ?, ?)",
                     (material_id, identity, title, "{}", timestamp()),
