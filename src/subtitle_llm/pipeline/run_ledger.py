@@ -40,6 +40,14 @@ class RunLedger:
             int(index)
             for index in report_data.get("removed_entry_indices", [])
         )
+        protected = set(report_data.get('human_protected_indices', []))
+        from subtitle_llm.workspace import WorkspaceStore
+        try:
+            protected.update(WorkspaceStore(task_store).version(task_id)['protected_indices'])
+        except ValueError:
+            pass
+        report.human_protected_indices = sorted(protected)
+        report.first_pass_tokens = int(report_data.get('first_pass_tokens', 0))
         failed_entry_indices = {
             int(index)
             for failed in report_data.get("failed_chunks", [])
@@ -51,12 +59,12 @@ class RunLedger:
         for entry in subtitle.entries:
             if ledger.is_removed(entry.index):
                 continue
-            if entry.index in failed_entry_indices:
+            if entry.index in failed_entry_indices and entry.index not in protected:
                 restored_entries.append(entry)
                 continue
             saved = entries.get(str(entry.index))
             # 新记录明确区分已接受与保存时正在复核的源条目；后者必须重新处理。
-            if "accepted_entry_indices" in report_data and entry.index not in report_data["accepted_entry_indices"]:
+            if "accepted_entry_indices" in report_data and entry.index not in report_data["accepted_entry_indices"] and entry.index not in protected:
                 saved = None
             if not saved:
                 restored_entries.append(entry)
@@ -64,7 +72,7 @@ class RunLedger:
             restored_entry = SubtitleEntry.from_dict(saved)
             restored_entries.append(restored_entry)
             # 暂存译文（needs_retranslation）不算恢复完成，重跑时必须重新翻译。
-            if restored_entry.translated_text.strip() and not restored_entry.needs_retranslation:
+            if restored_entry.translated_text.strip() and (not restored_entry.needs_retranslation or restored_entry.index in protected or report_data.get("workspace_recorded")):
                 resumed_indices.add(restored_entry.index)
 
         subtitle.entries = restored_entries
@@ -173,7 +181,8 @@ class RunLedger:
             if entry.index in translated_by_index:
                 continue
             if not entry.translated_text.strip():
-                entry.set_translated_text(entry.original_text.strip())
+                entry.set_needs_retranslation(True)
+                report.mark_failed(-1, [entry.index], "该范围尚无译文")
             translated_by_index[entry.index] = entry
 
         subtitle.entries = sorted(translated_by_index.values(), key=lambda item: item.index)

@@ -5,7 +5,8 @@ import type { TaskTab, TaskTabMeta } from "./controllerTypes";
 
 export function useAppShell(isBusy: Ref<boolean>) {
   const activeTab = ref<TaskTab>("translate");
-  const configDrawerOpen = ref(true);
+  const configDrawerOpen = ref(false);
+  const workspacePage = ref<"materials" | "jobs">("materials");
   const taskTabs: TaskTabMeta[] = [
     { id: "translate", label: "翻译字幕", subtitle: "SRT、转写 JSON 或视频 URL", icon: Languages },
     { id: "download", label: "下载字幕", subtitle: "视频地址与字幕语言", icon: Download },
@@ -16,6 +17,7 @@ export function useAppShell(isBusy: Ref<boolean>) {
 
   function setActiveTab(tab: TaskTab): void {
     activeTab.value = tab;
+    workspacePage.value = "jobs";
     if (!isBusy.value) {
       configDrawerOpen.value = true;
     }
@@ -30,6 +32,7 @@ export function useAppShell(isBusy: Ref<boolean>) {
   }
 
   return {
+    workspacePage,
     activeTab,
     activeTaskTab,
     collapseConfigDrawer,

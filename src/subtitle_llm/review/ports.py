@@ -12,6 +12,7 @@ class ReviewResult:
     entries_to_retranslate: list[SubtitleEntry]
     alignment_drift_start_index: int | None = None
     cascade_start_index: int | None = None
+    additional_token_limit: int = 0
     removed_entry_indices: list[int] = field(default_factory=list)
 
 

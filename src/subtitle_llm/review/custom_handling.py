@@ -7,7 +7,7 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
-from textual.widgets import DataTable, Footer, Header, LoadingIndicator, ProgressBar, Static
+from textual.widgets import DataTable, Footer, Header, Input, LoadingIndicator, ProgressBar, Static
 
 from subtitle_llm.domain import SubtitleEntry
 
@@ -58,6 +58,8 @@ class CustomHandlingApp(App):
             ProgressBar(total=self.total_chunks, show_eta=False, id="chunk_progress"),
             id="progress_bar",
         )
+        yield Static("追加重译在首轮完成后核验。单独 token 额度（含修复与验收），0 表示保留到素材页处理：")
+        yield Input(value="0", type="integer", id="additional_budget")
         yield Container(DataTable(id="subtitles_table"), id="table_panel")
         yield Container(Static("", id="current_detail"), id="detail_panel")
         yield Footer()
@@ -66,10 +68,11 @@ class CustomHandlingApp(App):
         self.apply_default_cascade_for_broad_failure()
         table = self.query_one("#subtitles_table", DataTable)
         table.cursor_type = "row"
+        table.focus()
         self.rebuild_table()
         self.update_progress()
         self.update_detail()
-        self.update_status("准备就绪，按 Enter 确认当前标记。")
+        self.update_status("系统标记仅为复核候选；Enter 按标记处理，y 接受全部。")
         logger.info(
             "TUI审核界面已打开: chunk=%s/%s completed=%s entries=%s pending=%s",
             self.chunk_index + 1,
@@ -123,6 +126,8 @@ class CustomHandlingApp(App):
         self.rebuild_table(keep_row=self.current_row())
 
     async def on_key(self, event: events.Key) -> None:
+        if isinstance(self.focused, Input):
+            return
         handlers = {
             "enter": self.action_confirm,
             "space": self.action_cascade_retranslate,
@@ -146,6 +151,7 @@ class CustomHandlingApp(App):
         self.write_data_to_temp_file(
             {
                 "selected_subtitle_entries": [entry.to_dict() for entry in selected_entries],
+                "additional_token_limit": int(self.query_one("#additional_budget", Input).value or "0"),
                 "tui_completed": True,
                 "merge_map": self.merge_map.copy(),
                 "alignment_drift_start_index": self.alignment_drift_start_index(),
@@ -238,6 +244,7 @@ class CustomHandlingApp(App):
         self.write_data_to_temp_file(
             {
                 "selected_subtitle_entries": [entry.to_dict() for entry in self.subtitle_entries],
+                "additional_token_limit": int(self.query_one("#additional_budget", Input).value or "0"),
                 "tui_completed": True,
                 "merge_map": self.merge_map.copy(),
                 "alignment_drift_start_index": None,

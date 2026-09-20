@@ -77,15 +77,17 @@ export function useAppController() {
     }
     const output = cleanString(form.output);
     const video = cleanString(form.video) || reuse?.videoPath || "";
+    if (form.embedMkv && (!providerState.ffmpegAvailable.value || (reuse && !video))) {
+      jobLifecycle.appendLog('视频生成条件不足，请补齐视频和 FFmpeg，或明确选择“本次仅翻译字幕”。\n', 'stderr');
+      return;
+    }
     // 复用源字幕时不会下载视频，生成 MKV 必须已有本地视频。
     const embedVideo = form.embedMkv && providerState.ffmpegAvailable.value
       && (reuse ? Boolean(video) : looksLikeUrl(input) || Boolean(video));
-    const selection = form.useYamlConfig ? null : modelSelection();
+    const selection = form.useYamlConfig ? null : {...modelSelection(), semanticQuality: form.semanticCheck ? "jev" as const : "off" as const};
     translationSubmitting.value = true;
     reusableController.dismiss();
     try {
-      await providerState.persistProviderPreference();
-      if (output) jobLifecycle.setSubtitlePath(output);
       await jobLifecycle.startJob({
         command: "translate",
         options: {

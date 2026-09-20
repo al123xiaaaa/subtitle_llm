@@ -827,7 +827,7 @@ class TestSemanticUnits(unittest.TestCase):
             self.assertIn('"cue_id": 1', translation_prompt)
             self.assertIn('"source_index": 1', translation_prompt)
 
-    def test_pipeline_repairs_unadopted_hard_source_correction_without_tui(self):
+    def test_pipeline_preserves_uncertain_source_and_translation_until_separate_verification(self):
         with tempfile.TemporaryDirectory() as tmp:
             input_path = Path(tmp) / "input.srt"
             output_path = Path(tmp) / "output.srt"
@@ -857,17 +857,18 @@ class TestSemanticUnits(unittest.TestCase):
 
             self.assertEqual(
                 [entry.translated_text for entry in result.subtitle.entries],
-                ["我到达了都铎伦敦，", "所以，齐普赛街。都铎伦敦的主要市场大街。"],
+                ["我到达了都铎伦敦，", "所以，这边便宜。都铎伦敦的主要市场大街。"],
             )
             self.assertEqual(
                 result.subtitle.entries[1].original_text,
                 "so cheap side.The main market street of Tudor London",
             )
             output_text = output_path.read_text(encoding="utf-8")
-            self.assertIn("so Cheapside. The main market street of Tudor London", output_text)
-            self.assertNotIn("so cheap side.The main market street of Tudor London", output_text)
-            self.assertTrue(any("Repair the timed subtitle cues listed below" in prompt for prompt in client.prompts))
-            self.assertEqual(result.report.token_usage.total_tokens, 11)
+            self.assertNotIn("so Cheapside. The main market street of Tudor London", output_text)
+            self.assertIn("so cheap side.The main market street of Tudor London", output_text)
+            self.assertFalse(any("Repair the timed subtitle cues listed below" in prompt for prompt in client.prompts))
+            self.assertEqual(result.report.token_usage.total_tokens, 6)
+            self.assertTrue(result.report.source_review_requests)
 
     def test_tui_mode_still_translates_with_semantic_units(self):
         with tempfile.TemporaryDirectory() as tmp:

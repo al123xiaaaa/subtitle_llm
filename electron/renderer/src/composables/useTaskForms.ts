@@ -14,6 +14,7 @@ interface TaskFormsOptions {
 export function useTaskForms(options: TaskFormsOptions) {
   const embedPreferenceTouched = reactive({ value: false });
   const translateForm = reactive<TranslateFormState>({
+    semanticCheck: true,
     input: "",
     targetLanguage: "Chinese",
     sourceLanguage: "en",
@@ -90,7 +91,7 @@ export function useTaskForms(options: TaskFormsOptions) {
   );
 
   function syncEmbedDefault(): void {
-    if (embedPreferenceTouched.value || !options.ffmpegAvailable.value) {
+    if (embedPreferenceTouched.value) {
       return;
     }
     translateForm.embedMkv = looksLikeUrl(cleanString(translateForm.input));

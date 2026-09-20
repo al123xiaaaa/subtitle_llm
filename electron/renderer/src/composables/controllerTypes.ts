@@ -21,6 +21,7 @@ export interface TaskTabMeta {
 }
 
 export interface TranslateFormState {
+  semanticCheck: boolean;
   input: string;
   targetLanguage: string;
   sourceLanguage: string;

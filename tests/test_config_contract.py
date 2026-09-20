@@ -17,7 +17,7 @@ from subtitle_llm.media.asr_models import (
     resolve_asr_config,
 )
 from subtitle_llm.media.downloader import _common_ffmpeg_paths
-from subtitle_llm.settings import ASRConfig
+from subtitle_llm.settings import ASRConfig, load_config
 
 
 def load_contract() -> dict:
@@ -25,6 +25,9 @@ def load_contract() -> dict:
 
 
 class ConfigContractParityTest(unittest.TestCase):
+    def test_semantic_quality_default_matches_desktop(self) -> None:
+        self.assertEqual(load_config().pipeline.semantic_quality, load_contract()["semanticQuality"])
+
     def test_asr_defaults_match_contract(self) -> None:
         contract_asr = load_contract()["asr"]
         asr = ASRConfig()

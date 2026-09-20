@@ -104,11 +104,15 @@ class ModelSegmenter:
         return GeneratedChunk(self._result(entries, trace_id), key, pieces)
 
     def _request_key(self, planned: PlannedChunk, prompt: str, version: int) -> str:
+        # 关闭语义复核时保持既有缓存键；启用后不能复用未经此检查的接受结果。
+        layout = self.options.model_dump(mode="json", exclude={"model_segmentation", "semantic_quality", "automatic_extra_ratio"})
+        if self.options.semantic_quality != "off":
+            layout["semantic_quality"] = self.options.semantic_quality
         return model_request_key({
             "version": version, "prompt": prompt,
             "source": [e.to_dict() for e in planned.entries],
             "model": self.translator.model_config.model_dump(mode="json"),
-            "layout": self.options.model_dump(mode="json", exclude={"model_segmentation"}),
+            "layout": layout,
         })
 
     def accept(self, generated: GeneratedChunk, entries: list[SubtitleEntry]) -> None:

@@ -26,6 +26,9 @@ export function prepareDesktopTaskIntent(
   if (nextRequest.command === "translate" && nextRequest.modelSelection?.mode === "service") {
     const provider = getProvider(nextRequest.modelSelection.providerId);
     const credential = resolveCredential(context.settingsPath, provider, context.env);
+    const summaryCredential = nextRequest.modelSelection.summaryModelId
+      ? resolveCredential(context.settingsPath, getProvider(nextRequest.modelSelection.summaryProviderId || provider.id), context.env)
+      : credential;
     nextRequest.generatedConfigPath = writeDesktopModelConfig(context.projectRoot, nextRequest.modelSelection, {
       configDir: context.env.SUBTITLE_LLM_DESKTOP_CONFIG_DIR || undefined,
     });
@@ -33,6 +36,7 @@ export function prepareDesktopTaskIntent(
     nextRequest.envOverrides = {
       ...nextRequest.envOverrides,
       ...credential.envOverrides,
+      ...summaryCredential.envOverrides,
     };
   }
 

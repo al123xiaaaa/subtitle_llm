@@ -1,5 +1,6 @@
 {
   "$schema": "桌面端配置契约：Electron 与 Python 两侧的单一来源。改这里，两侧同时生效。",
+  "semanticQuality": "jev",
   "modelParams": {
     "summary": {
       "temperature": "0.5",

@@ -297,6 +297,33 @@ export function createDesktopRuntime({
     };
   }
 
+  // 长操作使用异步子进程；检查、编辑和视频导出互不阻塞桌面主线程。
+  function workspaceRequest(request: Record<string, unknown>): Promise<unknown> {
+    const overrides: Record<string, string> = {};
+    for (const provider of getAppState().providers) {
+      try { Object.assign(overrides, resolveCredential(getSettingsPath(), getProvider(provider.id), env).envOverrides); }
+      catch { /* 未配置的可选服务由具体操作返回未完成状态。 */ }
+    }
+    const ffmpeg = detectFfmpeg();
+    if (ffmpeg.available) overrides.SUBTITLE_LLM_FFMPEG = ffmpeg.executable;
+    return new Promise((resolve, reject) => {
+      const child = spawnFn(resolvePythonExecutable(), ["main.py", "workspace"], {
+        cwd: projectRoot, env: withUserDataEnv(buildEnv(env, overrides)), stdio: ["pipe", "pipe", "pipe"],
+      });
+      let output = "";
+      child.stdout?.on("data", (data: Buffer) => { output += data.toString(); });
+      child.stderr?.resume();
+      child.once("error", () => reject(new Error("无法启动素材服务")));
+      child.once("close", (code) => {
+        if (code !== 0) { reject(new Error("素材服务意外退出，操作状态可在重新打开后查看")); return; }
+        try { resolve(JSON.parse(output)); }
+        catch { reject(new Error("素材服务未返回有效结果")); }
+      });
+      child.stdin?.on("error", () => { /* 进程退出由 close 事件统一报告。 */ });
+      child.stdin?.end(JSON.stringify(request));
+    });
+  }
+
   function runTasksCommand(args: string[]) {
     const result = spawnSyncFn(resolvePythonExecutable(), ["main.py", "tasks", ...args], {
       cwd: projectRoot,
@@ -320,13 +347,29 @@ export function createDesktopRuntime({
   // 重跑同 URL 时找到可复用的源字幕（通常是上次 ASR 产物），
   // 让用户跳过下载与转写。取最近一次非删除记录，文件须仍在磁盘上。
   // 同时带出状态与译文路径：已有完整译文时提示可查看结果而非重翻。
+  function canonicalSource(value: string): string {
+    try {
+      const parsed = new URL(value);
+      const host = parsed.hostname.replace(/^www\./, "");
+      if (["youtube.com", "m.youtube.com"].includes(host)) {
+        const id = parsed.searchParams.get("v") || (/^\/(shorts|embed)\//.test(parsed.pathname) ? parsed.pathname.split("/")[2] : "");
+        if (id) return `youtube:${id}`;
+      }
+      if (host === "youtu.be") return `youtube:${parsed.pathname.slice(1)}`;
+      parsed.hash = "";
+      for (const key of new Set(parsed.searchParams.keys())) if (key.startsWith("utm_")) parsed.searchParams.delete(key);
+      parsed.searchParams.sort();
+      return parsed.toString();
+    } catch { return value; }
+  }
+
   function findReusableSubtitle(sourceUrl: string): ReusableSubtitleMatch | null {
     const cleaned = cleanText(sourceUrl);
     if (!cleaned) {
       return null;
     }
     const candidates = listTranslationTasks()
-      .filter((task) => !task.deleted_at && task.source_url === cleaned)
+      .filter((task) => !task.deleted_at && canonicalSource(task.source_url || "") === canonicalSource(cleaned))
       .toSorted((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
     const existingPath = (value: string): string => {
       const resolved = value ? resolveUserPath(value) : "";
@@ -464,6 +507,7 @@ export function createDesktopRuntime({
     getAppState,
     listProviderModels,
     listTranslationTasks,
+    workspaceRequest,
     resolveUserPath,
     restoreTranslationTask,
     saveProviderApiKey,

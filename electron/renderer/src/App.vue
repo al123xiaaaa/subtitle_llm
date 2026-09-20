@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { watch } from "vue";
+import MaterialWorkspace from "./components/MaterialWorkspace.vue";
 import ConfigDrawer from "./components/ConfigDrawer.vue";
 import OnboardingDialog from "./components/OnboardingDialog.vue";
 import RunPanel from "./components/RunPanel.vue";
@@ -8,6 +10,13 @@ import { useAppController } from "./composables/useAppController";
 
 const controller = useAppController();
 const { formActions, forms, inspectedRecord, isBusy, job, onboarding, providerState, records, shell } = controller;
+const { workspacePage } = shell;
+watch(isBusy, busy => { if (busy) workspacePage.value = 'jobs'; });
+async function resumeWorkspaceTask(taskId: string) {
+  await records.refreshTaskRecords();
+  const record = records.taskRecords.value.find(item => item.task_id === taskId);
+  if (record) { workspacePage.value = 'jobs'; await records.continueTaskRecord(record); }
+}
 </script>
 
 <template>
@@ -24,7 +33,15 @@ const { formActions, forms, inspectedRecord, isBusy, job, onboarding, providerSt
 
     <div class="workspace">
       <main class="main-workspace">
-        <div class="task-workbench">
+        <MaterialWorkspace
+          v-show="workspacePage === 'materials'"
+          @create="shell.setActiveTab('translate')"
+          @resume="resumeWorkspaceTask"
+        />
+        <div
+          v-show="workspacePage === 'jobs'"
+          class="task-workbench"
+        >
           <TaskRecordsPanel
             :is-busy="isBusy"
             :records="records"
@@ -37,6 +54,7 @@ const { formActions, forms, inspectedRecord, isBusy, job, onboarding, providerSt
         </div>
       </main>
       <ConfigDrawer
+        v-show="workspacePage === 'jobs'"
         :form-actions="formActions"
         :forms="forms"
         :is-busy="isBusy"

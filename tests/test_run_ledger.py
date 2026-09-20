@@ -56,7 +56,7 @@ class ResumeAcceptedEntryTest(unittest.TestCase):
 
 
 class RunLedgerTest(unittest.TestCase):
-    def test_finalize_subtitle_applies_removed_rows_and_fallback_text(self):
+    def test_finalize_subtitle_keeps_missing_translation_explicit(self):
         subtitle = Subtitle([
             SubtitleEntry(1, "00:00:00,000", "00:00:01,000", "First"),
             SubtitleEntry(2, "00:00:01,000", "00:00:02,000", "Second"),
@@ -84,7 +84,9 @@ class RunLedgerTest(unittest.TestCase):
         self.assertEqual(subtitle.entries[0].original_text, "First Second")
         self.assertEqual(subtitle.entries[0].translated_text, "第一第二")
         self.assertEqual(subtitle.entries[1].original_text, "Third")
-        self.assertEqual(subtitle.entries[1].translated_text, "Third")
+        self.assertEqual(subtitle.entries[1].translated_text, "")
+        self.assertTrue(subtitle.entries[1].needs_retranslation)
+        self.assertEqual(report.failed_chunks[0].entry_indices, [3])
         self.assertEqual(report.stage, "完成")
         self.assertEqual(report.removed_entry_indices, [2])
         self.assertEqual(report.final_output_entries, 2)

@@ -8,7 +8,7 @@ const props = defineProps<{
   shell: Controller["shell"];
 }>();
 
-const { activeTab, setActiveTab, taskTabs } = props.shell;
+const { workspacePage, activeTab, setActiveTab, taskTabs } = props.shell;
 const { appState, providers, runtimeInfo, statusPillClass } = props.providerState;
 </script>
 
@@ -34,9 +34,24 @@ const { appState, providers, runtimeInfo, statusPillClass } = props.providerStat
       aria-label="任务类型"
     >
       <button
+        class="tab"
+        :class="{'is-active': workspacePage === 'materials'}"
+        data-workspace="materials"
+        @click="workspacePage = 'materials'"
+      >
+        素材库
+      </button>
+      <button
+        class="tab"
+        data-workspace="jobs"
+        @click="workspacePage = 'jobs'"
+      >
+        任务与工具
+      </button>
+      <button
         v-for="tab in taskTabs"
         :key="tab.id"
-        :class="['tab', { 'is-active': activeTab === tab.id }]"
+        :class="['tab', { 'is-active': workspacePage === 'jobs' && activeTab === tab.id }]"
         type="button"
         :data-tab="tab.id"
         @click="setActiveTab(tab.id)"

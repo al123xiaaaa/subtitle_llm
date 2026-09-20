@@ -775,7 +775,7 @@ class ChunkTranslator:
             if not isinstance(item, dict):
                 continue
             try:
-                cue_id = int(item.get("cue_id"))
+                cue_id = int(item.get("cue_id") or 0)
             except (TypeError, ValueError):
                 continue
             translation = str(item.get("translation", "")).strip()

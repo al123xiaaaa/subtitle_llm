@@ -22,6 +22,8 @@ interface ProviderSettingsOptions {
 export function useProviderSettings(options: ProviderSettingsOptions) {
   const appState = ref<AppState | null>(null);
   const selectedProviderId = ref("deepseek");
+  const summaryProviderId = ref("");
+  const summaryModelId = ref("");
   const selectedModelId = ref("");
   const customModelInput = ref("");
   const translationMaxTokensInput = ref<string | number>("");
@@ -130,6 +132,8 @@ export function useProviderSettings(options: ProviderSettingsOptions) {
     // 仅首次加载恢复预算；保存密钥/偏好或刷新模型列表不能覆盖正在编辑的值。
     if (!appState.value) {
       translationMaxTokensInput.value = nextState.preferences?.translationMaxTokens ?? "";
+      summaryProviderId.value = nextState.preferences?.summaryProviderId || "";
+      summaryModelId.value = nextState.preferences?.summaryModelId || "";
     }
     appState.value = nextState;
     selectedProviderId.value =
@@ -171,17 +175,17 @@ export function useProviderSettings(options: ProviderSettingsOptions) {
       return;
     }
     await appRuntime.runPromise(persistProviderPreferenceProgram(providerPorts));
+    const saved = await window.subtitleLLM.savePreferences(JSON.parse(JSON.stringify({...appState.value!.preferences,
+      summaryProviderId: summaryProviderId.value, summaryModelId: summaryModelId.value})));
+    updateAppState(saved);
   }
 
   async function onProviderChanged(): Promise<void> {
     syncModelSelection();
     void appRuntime.runPromise(loadDynamicModelsProgram(selectedProvider.value, providerPorts));
-    await persistProviderPreference();
   }
 
-  async function onModelChanged(): Promise<void> {
-    await persistProviderPreference();
-  }
+  function onModelChanged(): void { /* 本次模型选择只有明确保存才改变默认。 */ }
 
   function modelSelection(): ModelSelection {
     const provider = selectedProvider.value;
@@ -191,6 +195,8 @@ export function useProviderSettings(options: ProviderSettingsOptions) {
     return {
       mode: "service",
       providerId: provider.id,
+      summaryProviderId: summaryProviderId.value || provider.id,
+      summaryModelId: summaryModelId.value,
       modelId: selectedModelId.value,
       customModelId: cleanString(customModelInput.value),
       translationMaxTokens: parseTranslationMaxTokens(translationMaxTokensInput.value),
@@ -241,6 +247,8 @@ export function useProviderSettings(options: ProviderSettingsOptions) {
     onOutputBudgetInput,
     dismissOnboarding,
     ffmpegAvailable,
+    summaryProviderId,
+    summaryModelId,
     modelSelection,
     onboardingApiKey,
     onboardingKeyLabel,

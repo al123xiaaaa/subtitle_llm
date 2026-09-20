@@ -149,21 +149,48 @@ class TranslationTaskStore:
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def _rebuild_schema(self, connection: sqlite3.Connection) -> None:
-        connection.executescript(
-            """
-            DROP TABLE IF EXISTS translation_chunks;
-            DROP TABLE IF EXISTS translation_model_results;
-            DROP TABLE IF EXISTS translation_cues;
-            DROP TABLE IF EXISTS translation_tasks;
-            """
-        )
+        existing = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'translation_%'").fetchall()
+        if not existing:
+            self._create_schema(connection)
+            return
+        # 旧状态约束可能不同，先备份并保留原表，再迁移共同字段；不删除旧记录。
+        backup = self.db_path.with_suffix('.before-migration.sqlite3')
+        if not backup.exists():
+            with sqlite3.connect(backup) as target:
+                connection.backup(target)
+        connection.execute('BEGIN IMMEDIATE')
+        names = [row[0] for row in existing]
+        for name in names:
+            connection.execute(f'ALTER TABLE "{name}" RENAME TO "legacy_{name}"')
+        connection.execute('DROP INDEX IF EXISTS idx_translation_tasks_resume')
         self._create_schema(connection)
+        for name in ('translation_tasks', 'translation_cues', 'translation_chunks'):
+            if name not in names:
+                continue
+            old_columns = {row[1] for row in connection.execute(f'PRAGMA table_info("legacy_{name}")')}
+            new_columns = [row[1] for row in connection.execute(f'PRAGMA table_info("{name}")')]
+            columns = [column for column in new_columns if column in old_columns]
+            for row in connection.execute(f'SELECT * FROM "legacy_{name}"').fetchall():
+                data = {column: row[column] for column in columns}
+                if 'status' in data:
+                    try:
+                        data['status'] = (coerce_task_state(data['status']) if name == 'translation_tasks' else coerce_chunk_state(data['status'])).value
+                    except ValueError:
+                        data['status'] = 'failed'
+                if name == 'translation_tasks':
+                    for column in new_columns:
+                        if column not in data and column not in {'context_file', 'llm_trace_dir', 'source_video_file', 'source_url', 'embedded_video_file', 'report_json', 'error_summary', 'deleted_at'}:
+                            data[column] = '{}' if column == 'config_snapshot_json' else ''
+                fields = ','.join('"' + key + '"' for key in data)
+                placeholders = ','.join('?' for _ in data)
+                connection.execute(f'INSERT INTO "{name}" ({fields}) VALUES ({placeholders})', list(data.values()))
 
     def _create_schema(self, connection: sqlite3.Connection) -> None:
         task_status_values = ", ".join(f"'{state.value}'" for state in TranslationTaskState)
         chunk_status_values = ", ".join(f"'{state.value}'" for state in TranslationChunkState)
-        connection.executescript(
-            f"""
+        if not connection.in_transaction:
+            connection.execute('BEGIN IMMEDIATE')
+        schema = f"""
             CREATE TABLE translation_tasks (
                 task_id TEXT PRIMARY KEY,
                 status TEXT NOT NULL CHECK (status IN ({task_status_values})),
@@ -228,7 +255,10 @@ class TranslationTaskStore:
                 FOREIGN KEY (task_id) REFERENCES translation_tasks(task_id) ON DELETE CASCADE
             );
             """
-        )
+        # executescript 会提前提交，逐条执行才能让表重命名、复制和版本号原子完成。
+        for statement in schema.split(';'):
+            if statement.strip():
+                connection.execute(statement)
 
     def create_task(
         self,
@@ -430,10 +460,19 @@ class TranslationTaskStore:
                     task_id,
                 ),
             )
+            protected = {}
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='workspace_versions'").fetchone():
+                row = connection.execute('SELECT document_json FROM workspace_versions WHERE task_id=?', (task_id,)).fetchone()
+                if row:
+                    doc = json.loads(row[0])
+                    protected = {e['index']: e for e in doc['entries'] if e['index'] in doc['protected_indices']}
             if report.model_segmentation_applied:
                 # 数量和编号由模型决定；删除旧快照里不再存在的条目，事务内整体替换。
                 connection.execute("DELETE FROM translation_cues WHERE task_id = ?", (task_id,))
-            for entry in subtitle.entries:
+            saved_entries = {entry.index: entry for entry in subtitle.entries}
+            saved_entries.update({index: SubtitleEntry.from_dict(entry) for index, entry in protected.items()})
+            removed_indices.difference_update(protected)
+            for entry in saved_entries.values():
                 connection.execute(
                     """
                     INSERT INTO translation_cues (

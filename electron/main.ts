@@ -44,6 +44,8 @@ function createWindow(): void {
   void mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
+ipcMain.handle("workspace:request", async (_event, request: Record<string, unknown>) => runtime.workspaceRequest(request));
+
 ipcMain.handle("app:get-state", async () => runtime.getAppState());
 
 ipcMain.handle("settings:save-api-key", async (_event, providerId: string, apiKey: string) => {

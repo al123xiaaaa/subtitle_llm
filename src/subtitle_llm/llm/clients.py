@@ -35,6 +35,7 @@ class BaseClient:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
+            estimated=True,
         )
 
 
@@ -50,7 +51,8 @@ class OpenAIChatClient(BaseClient):
         budget_params: dict[str, Any] = {}
         if config.max_tokens is not None:
             budget_params["max_tokens"] = config.max_tokens
-        response = self.client.chat.completions.create(
+        client = self.client.with_options(max_retries=0, timeout=config.request_timeout_seconds) if config.bounded_operation else self.client
+        response = client.chat.completions.create(
             model=config.model,
             messages=cast(Any, messages),
             **budget_params,
@@ -177,7 +179,11 @@ class GeminiChatClient(BaseClient):
         for attempt in range(config.max_retries):
             try:
                 chat_session = model.start_chat(history=cast(Any, history))
-                response = chat_session.send_message(messages[-1]["content"])
+                request_options = {"retry": None, "timeout": config.request_timeout_seconds} if config.bounded_operation else None
+                if request_options is None:
+                    response = chat_session.send_message(messages[-1]["content"])
+                else:
+                    response = chat_session.send_message(messages[-1]["content"], request_options=request_options)
                 candidates = response.candidates
                 candidate = candidates[0] if candidates else None
                 # 不访问 response.text：被截断/拦截且没有正文时 SDK 会抛错。

@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from subtitle_llm.domain import SubtitleEntry
+from subtitle_llm.pipeline.chunks import PlannedChunk
 
 
 @dataclass
@@ -115,6 +116,7 @@ class QualityGate:
         chunk: list[SubtitleEntry],
         translation: str | None = None,
         target_language: str | None = None,
+        *, planned: PlannedChunk | None = None,
     ) -> ChunkDiagnosis:
         issues: list[TranslationIssue] = []
         if translation is not None:

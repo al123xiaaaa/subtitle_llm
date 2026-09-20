@@ -14,12 +14,17 @@ class TokenUsage(BaseModel):
     completion_tokens: int = 0
     total_tokens: int = 0
     # prompt 缓存命中情况（DeepSeek 等厂商支持）。命中部分计费更低。
+    estimated_tokens: int = 0
+    unknown_usage_calls: int = 0
     prompt_cache_hit_tokens: int = 0
     prompt_cache_miss_tokens: int = 0
 
     def add_usage(self, usage) -> None:
         data = usage.to_dict() if hasattr(usage, "to_dict") else usage
         with _TOKEN_USAGE_LOCK:
+            if data.get("estimated"):
+                self.estimated_tokens += int(data.get("total_tokens", 0))
+                self.unknown_usage_calls += 1
             self.prompt_tokens += int(data.get("prompt_tokens", 0))
             self.completion_tokens += int(data.get("completion_tokens", 0))
             self.total_tokens += int(data.get("total_tokens", 0))
@@ -77,6 +82,15 @@ class TranslationReport(BaseModel):
     final_output_entries: int = 0
     auto_layout_repairs: list[AutoLayoutRepair] = Field(default_factory=list)
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
+    workspace_recorded: bool = False
+    translation_complete: bool | None = None
+    source_review_requests: list[dict] = Field(default_factory=list)
+    manual_review_requests: list[dict] = Field(default_factory=list)
+    human_protected_indices: list[int] = Field(default_factory=list)
+    summary_tokens: int = 0
+    first_pass_tokens: int = 0
+    automatic_budget: dict = Field(default_factory=dict)
+    semantic_quality_checks: list[dict] = Field(default_factory=list)
     output_format: str = "source-first"
     llm_trace_dir: str | None = None
     source_video_file: str | None = None

@@ -23,6 +23,7 @@ class ModelProvider(str, Enum):
 class ModelConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    bounded_operation: bool = Field(default=False, exclude=True)
     provider: ModelProvider = Field(alias="type")
     model: str
     max_tokens: int | None = Field(default=None, gt=0)
@@ -58,6 +59,9 @@ class ModelConfig(BaseModel):
 
 
 class PipelineConfig(BaseModel):
+    # jev：经 AI Gateway 进行语义复核；概率判断不单独触发自动重译。
+    automatic_extra_ratio: float = Field(default=0.3, ge=0, le=1)
+    semantic_quality: Literal["off", "jev"] = "off"
     chunk_size: int = 34
     context_window_size: int = 4
     threads: int = 5

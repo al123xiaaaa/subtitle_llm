@@ -64,7 +64,8 @@ export function buildDesktopModelConfigContent(selection: Partial<ModelSelection
   }
 
   const translationModel = buildModelFromSelection(selection);
-  const summaryModel = translationModel;
+  const summaryModel = selection.summaryModelId ? buildModelFromSelection({providerId: selection.summaryProviderId || selection.providerId, modelId: "custom", customModelId: selection.summaryModelId}) : translationModel;
+  const summaryOverrides = PROVIDER_PARAM_OVERRIDES[selection.summaryProviderId || selection.providerId || ""] || {};
   const providerOverrides = PROVIDER_PARAM_OVERRIDES[selection.providerId || ""] || {};
 
   // 手动输出上限（翻译）：留空即服务商默认值，不写入 max_tokens；
@@ -84,12 +85,13 @@ export function buildDesktopModelConfigContent(selection: Partial<ModelSelection
     "",
     renderModelSection("summary_model", summaryModel, {
       ...MODEL_PARAMS.summary,
-      ...providerOverrides.summary,
+      ...summaryOverrides.summary,
     }),
     "",
     renderModelSection("translation_model", translationModel, translationDefaults),
     "",
     "pipeline:",
+    `  semantic_quality: ${yamlString(selection.semanticQuality || desktopContract.semanticQuality)}`,
     "  refine_translation: false",
     "",
   ].join("\n");

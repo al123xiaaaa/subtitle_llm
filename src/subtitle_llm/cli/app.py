@@ -495,6 +495,25 @@ def _embed_translated_subtitle(
     ffmpeg: str,
     progress: ProgressEmitter | None = None,
 ) -> None:
+    if report.workspace_recorded and report.task_id and report.task_db_file:
+        from subtitle_llm.workspace import WorkspaceStore
+        from subtitle_llm.workspace.media import export_video
+        import uuid
+        store = TranslationTaskStore(report.task_db_file)
+        workspace = WorkspaceStore(store)
+        destination = video_output or Path(report.output_file).with_suffix('.mkv')
+        if destination.exists():
+            destination = destination.with_name(f'{destination.stem}.{uuid.uuid4().hex[:8]}.mkv')
+        try:
+            artifact = export_video(workspace, report.task_id, str(destination), video=str(video_file) if video_file else None)
+            report.embedded_video_file = artifact['path']
+        except Exception:
+            report.embedded_video_error = '视频未生成，已有字幕仍可使用；可从素材页单独重试视频'
+        with store._connect() as connection:
+            connection.execute('UPDATE translation_tasks SET report_json=?,embedded_video_file=? WHERE task_id=?',
+                               (report.model_dump_json(), report.embedded_video_file, report.task_id))
+        workspace.sync_task(report.task_id)
+        return
     source_video = str(video_file) if video_file else report.source_video_file
     if not source_video:
         report.embedded_video_error = "未选择视频，跳过生成 MKV"
@@ -551,8 +570,11 @@ def _embed_translated_subtitle(
 
 def _print_report(report) -> None:
     successful_chunks = report.completed_chunks - len(report.failed_chunks)
-    typer.echo("\n===== 翻译完成 =====")
-    typer.echo(f"输出文件：{report.output_file}")
+    typer.echo("\n===== 翻译执行结束 =====")
+    if report.translation_complete is False:
+        typer.echo('译文未完成：已保存已完成部分，可在素材页明确导出；未生成完整字幕文件')
+    else:
+        typer.echo(f"输出文件：{report.output_file}")
     if report.source_video_file:
         typer.echo(f"源视频：{report.source_video_file}")
     if report.embedded_video_file:
@@ -594,7 +616,8 @@ def _print_report(report) -> None:
             typer.echo(f"- #{failed.chunk_index + 1}: {failed.error}")
     emit_result_event(
         "translate",
-        output_file=report.output_file,
+        output_file=report.output_file if report.translation_complete is not False else None,
+        translation_complete=report.translation_complete,
         source_video_file=report.source_video_file,
         embedded_video_file=report.embedded_video_file,
         embedded_video_error=report.embedded_video_error,
@@ -604,6 +627,26 @@ def _print_report(report) -> None:
         llm_trace_dir=report.llm_trace_dir,
         output_format=report.output_format,
     )
+
+
+@app.command('workspace')
+def workspace_command() -> None:
+    """从标准输入读取一个 JSON 请求，返回素材、版本和复核操作结果。"""
+    import contextlib
+    import io
+    import sys
+    from subtitle_llm.workspace import WorkspaceStore
+    from subtitle_llm.workspace.api import respond
+    try:
+        request = json.load(sys.stdin)
+        if not isinstance(request, dict):
+            raise ValueError('请求应为对象')
+        # 模型与媒体库的普通输出不能破坏 JSON 协议，也不能意外透出服务异常。
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            response = respond(WorkspaceStore(TranslationTaskStore()), request)
+    except Exception:
+        response = {'ok': False, 'code': 'invalid', 'error': '无法读取素材请求或打开任务数据库'}
+    typer.echo(json.dumps(response, ensure_ascii=False))
 
 
 if __name__ == "__main__":

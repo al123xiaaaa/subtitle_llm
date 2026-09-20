@@ -102,6 +102,7 @@ class TuiReviewPort:
             alignment_drift_start_index=drift_start,
             cascade_start_index=cascade_start,
             removed_entry_indices=sorted(removed_indices),
+            additional_token_limit=max(0, int(data.get("additional_token_limit", 0))),
         )
 
     def stop(self) -> None:

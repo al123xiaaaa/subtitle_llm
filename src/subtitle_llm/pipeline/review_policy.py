@@ -28,10 +28,13 @@ class ReviewPolicy:
         return self.mode == "tui"
 
     def quality_visual_auto_repair(self, diagnosis: ChunkDiagnosis) -> bool:
-        return diagnosis.has_issues and self.uses_auto_repair
+        return self.should_auto_repair(diagnosis)
 
     def should_auto_repair(self, diagnosis: ChunkDiagnosis) -> bool:
-        return diagnosis.has_issues and self.uses_auto_repair
+        # Jev 的疑似问题、低确定性和服务失败都需要复核，不独立触发自动重译。
+        deterministic = any(not group.issue_type.startswith("semantic_") for group in diagnosis.issue_groups)
+        deterministic = deterministic or any(not issue.issue_type.startswith("semantic_") for issue in diagnosis.issues)
+        return deterministic and self.uses_auto_repair
 
     def should_manual_review(self, diagnosis: ChunkDiagnosis) -> bool:
         return diagnosis.has_issues and self.uses_manual_review

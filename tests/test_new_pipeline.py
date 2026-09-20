@@ -551,7 +551,7 @@ class TestNewPipeline(unittest.TestCase):
             self.assertEqual(result.report.resumed_entries, 1)
             self.assertTrue(output_path.exists())
 
-    def test_failed_auto_repair_replaces_partial_placeholders_with_source_fallback(self):
+    def test_incomplete_translation_is_preserved_without_silent_complete_export(self):
         with tempfile.TemporaryDirectory() as tmp:
             input_path = Path(tmp) / "input.srt"
             output_path = Path(tmp) / "output.srt"
@@ -574,11 +574,15 @@ class TestNewPipeline(unittest.TestCase):
                 )
             )
 
-            output_text = output_path.read_text(encoding="utf-8")
-            self.assertNotIn("Translation missing line", output_text)
-            self.assertIn("Hello there.", output_text)
-            self.assertIn("Second sentence.", output_text)
+            self.assertFalse(output_path.exists())
+            self.assertFalse(result.report.translation_complete)
             self.assertEqual(len(result.report.failed_chunks), 1)
+            from subtitle_llm.workspace import WorkspaceStore
+            workspace = WorkspaceStore(service.task_store)
+            assert isinstance(result.report.task_id, str)
+            partial = workspace.export_subtitle(result.report.task_id, Path(tmp) / 'partial.srt', partial=True)
+            self.assertIn('未完成', partial['path'])
+            self.assertNotIn('Translation missing line', Path(partial['path']).read_text())
 
     def test_review_port_stops_when_translation_aborts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -635,8 +639,8 @@ class TestNewPipeline(unittest.TestCase):
                 )
 
                 output_path = Path("data/output/Demo Video.zh.srt")
-                self.assertEqual(result.report.output_file, str(output_path))
-                self.assertTrue(output_path.exists())
+                self.assertTrue(result.report.output_file.startswith(str(output_path.with_suffix("")) + "."))
+                self.assertTrue(Path(result.report.output_file).exists())
             finally:
                 os.chdir(previous_cwd)
 
@@ -764,7 +768,7 @@ class TestNewPipeline(unittest.TestCase):
         self.assertIn("Quality diagnosis of the previous translation", prompt)
         self.assertIn(quality_report, prompt)
 
-    def test_tui_alignment_drift_uses_anchor_prompt_and_updates_chunk(self):
+    def test_tui_alignment_request_waits_for_separate_budget_after_first_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             input_path = Path(tmp) / "input.srt"
             output_path = Path(tmp) / "output.srt"
@@ -795,16 +799,15 @@ class TestNewPipeline(unittest.TestCase):
                 )
             )
 
-            output_text = output_path.read_text(encoding="utf-8")
-            drift_prompt = next(prompt for prompt in client.prompts if "alignment drift point" in prompt)
-            self.assertIn("Stable alignment anchors", drift_prompt)
-            self.assertIn("[global 1]", drift_prompt)
-            self.assertIn("Previous flawed translation for the drift range", drift_prompt)
-            self.assertIn("漂移修复一", output_text)
-            self.assertIn("漂移修复二", output_text)
+            self.assertFalse(any('alignment drift point' in prompt for prompt in client.prompts))
+            self.assertEqual(result.report.manual_review_requests[0]['indices'], [2, 3])
+            self.assertEqual(result.report.manual_review_requests[0]['token_limit'], 0)
             self.assertEqual(review_port.calls, 1)
             self.assertTrue(review_port.stopped)
-            self.assertEqual(result.report.failed_chunks, [])
+            from subtitle_llm.workspace import WorkspaceStore
+            assert isinstance(result.report.task_id, str)
+            items = WorkspaceStore(service.task_store).review_items(result.report.task_id)
+            self.assertTrue(any(any(issue['type'] == 'manual_request' for issue in item['issues']) for item in items))
 
     def test_tui_merge_accept_removes_merged_rows_from_final_subtitle(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -50,6 +50,9 @@ if (commandLog) {
 }
 
 setTimeout(async () => {
+  if (command === "workspace") {
+    console.log(JSON.stringify({ok:true, value:[]})); process.exit(0);
+  }
   if (command === "tasks") {
     console.log(process.env.SUBTITLE_LLM_E2E_TASKS_JSON || "[]");
     process.exit(0);
@@ -537,7 +540,7 @@ async function testInspectTaskRecord() {
       await page.keyboard.press("Enter");
       await view.waitFor({ state: "visible" });
       assert.equal(await electronApp.evaluate(() => globalThis.inspectionJobStarts), 0);
-      assert.equal(readCommands(commandLogPath).filter((entry) => entry.command !== "tasks").length, 0);
+      assert.equal(readCommands(commandLogPath).filter((entry) => !["tasks", "workspace"].includes(entry.command)).length, 0);
     },
   );
 }
@@ -835,7 +838,11 @@ async function withApp(optionsOrCallback, maybeCallback) {
 }
 
 async function waitForAppReady(page) {
+  await page.locator('.material-workspace').waitFor({ state: 'visible' });
+  // 旧任务面板用例从素材入口进入；素材入口本身由真实数据库用例覆盖。
+  await page.locator('[data-tab="translate"]').evaluate(button => button.click());
   await page.locator("#translateForm").waitFor({ state: "visible" });
+  await page.locator('.translate-options').evaluate(details => { details.open = true; });
   await page.waitForFunction(() => document.querySelector("#runtimeInfo")?.textContent !== "加载中");
 }
 

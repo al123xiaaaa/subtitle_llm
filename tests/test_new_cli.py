@@ -63,7 +63,7 @@ class TestNewCLI(unittest.TestCase):
                 )
 
             self.assertEqual(result.exit_code, 0, result.output)
-            self.assertIn("翻译完成", result.output)
+            self.assertIn("翻译执行结束", result.output)
             self.assertIn("LLM诊断：data/logs/demo_llm_trace", result.output)
             self.assertIn('"llm_trace_dir": "data/logs/demo_llm_trace"', result.output)
             self.assertIn("日志文件：", result.output)

@@ -30,6 +30,8 @@ export interface ProviderSummary extends ProviderDefinition {
 }
 
 export interface DesktopPreferences {
+  summaryProviderId?: string;
+  summaryModelId?: string;
   lastProviderId: string;
   modelsByProvider: Record<string, string>;
   customModelsByProvider: Record<string, string>;
@@ -87,6 +89,9 @@ export type ChunkProgressStatus =
   | "skipped";
 
 export interface ModelSelection {
+  semanticQuality?: "off" | "jev";
+  summaryProviderId?: string;
+  summaryModelId?: string;
   mode: "service";
   providerId: string;
   modelId: string;
@@ -213,6 +218,7 @@ export type JobEvent =
     };
 
 export interface CliResultEvent {
+  translation_complete?: boolean | null;
   command: CommandName;
   output_file?: string | null;
   source_video_file?: string | null;
@@ -328,6 +334,7 @@ export interface ReusableSubtitleMatch {
 }
 
 export interface SubtitleLlmBridge {
+  workspaceRequest: (request: Record<string, unknown>) => Promise<{ ok: boolean; value?: unknown; error?: string; code?: string }>;
   getState: () => Promise<AppState>;
   saveApiKey: (providerId: string, apiKey: string) => Promise<AppState>;
   clearApiKey: (providerId: string) => Promise<AppState>;

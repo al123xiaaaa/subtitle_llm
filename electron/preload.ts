@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { DesktopJobRequest, DesktopPreferences, JobEvent, SubtitleLlmBridge } from "./types.js";
 
 const bridge: SubtitleLlmBridge = {
+  workspaceRequest: (request) => ipcRenderer.invoke("workspace:request", request),
   getState: () => ipcRenderer.invoke("app:get-state"),
   saveApiKey: (providerId: string, apiKey: string) => ipcRenderer.invoke("settings:save-api-key", providerId, apiKey),
   clearApiKey: (providerId: string) => ipcRenderer.invoke("settings:clear-api-key", providerId),

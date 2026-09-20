@@ -46,6 +46,8 @@ function formatReuseTime(createdAt: string): string {
   return Number.isNaN(time.getTime()) ? createdAt : time.toLocaleString();
 }
 const {
+  summaryProviderId,
+  summaryModelId,
   configureProvider,
   configureProviderText,
   customModelInput,
@@ -161,332 +163,379 @@ const { ffmpegAvailable } = props.providerState;
         </div>
       </div>
 
-      <div class="form-group">
-        <h3 class="form-group-title">
-          模型
-        </h3>
-        <div class="form-fields">
-          <label>
-            <span>翻译服务</span>
-            <select
-              id="providerSelect"
-              v-model="selectedProviderId"
-              :disabled="isBusy"
-              @change="onProviderChanged"
-            >
-              <option
-                v-for="provider in providers"
-                :key="provider.id"
-                :value="provider.id"
-              >{{ provider.name }}</option>
-            </select>
-          </label>
-          <label>
-            <span>模型</span>
-            <select
-              id="modelSelect"
-              v-model="selectedModelId"
-              :disabled="isBusy"
-              @change="onModelChanged"
-            >
-              <option
-                v-for="model in providerModels"
-                :key="model.id"
-                :value="model.id"
+      <details class="span-2 translate-options">
+        <summary>本次设置 · {{ selectedModelId || '选择翻译模型' }} · {{ translateForm.semanticCheck ? 'Jev 检查' : '稍后补查' }} · {{ translateForm.embedMkv ? '双语字幕 + 视频' : '字幕文件' }}</summary>
+        <div class="form-group">
+          <h3 class="form-group-title">
+            模型
+          </h3>
+          <div class="form-fields">
+            <label>
+              <span>翻译服务</span>
+              <select
+                id="providerSelect"
+                v-model="selectedProviderId"
+                :disabled="isBusy"
+                @change="onProviderChanged"
               >
-                {{ model.description ? `${model.label} - ${model.description}` : model.label }}
-              </option>
-            </select>
-          </label>
-          <label
-            id="customModelRow"
-            :class="['span-2', { 'is-hidden': !showCustomModelInput }]"
-          >
-            <span>自定义模型 ID</span>
-            <input
-              id="customModelInput"
-              v-model="customModelInput"
-              type="text"
-              autocomplete="off"
-              :disabled="isBusy"
-              @change="persistProviderPreference"
+                <option
+                  v-for="provider in providers"
+                  :key="provider.id"
+                  :value="provider.id"
+                >{{ provider.name }}</option>
+              </select>
+            </label>
+            <label>
+              <span>模型</span>
+              <select
+                id="modelSelect"
+                v-model="selectedModelId"
+                :disabled="isBusy"
+                @change="onModelChanged"
+              >
+                <option
+                  v-for="model in providerModels"
+                  :key="model.id"
+                  :value="model.id"
+                >
+                  {{ model.description ? `${model.label} - ${model.description}` : model.label }}
+                </option>
+              </select>
+            </label>
+            <label
+              id="customModelRow"
+              :class="['span-2', { 'is-hidden': !showCustomModelInput }]"
             >
-          </label>
-          <label class="span-2">
-            <span>翻译输出上限（tokens，可选）</span>
-            <input
-              id="translationMaxTokens"
-              v-model="translationMaxTokensInput"
-              type="number"
-              min="1"
-              step="1"
-              :max="Number.MAX_SAFE_INTEGER"
-              placeholder="使用服务商默认值"
-              :disabled="isBusy || translateForm.useYamlConfig"
-              :aria-invalid="Boolean(outputBudgetError)"
-              aria-describedby="outputBudgetHelp"
-              @input="onOutputBudgetInput"
-              @change="persistProviderPreference"
-            >
-            <small id="outputBudgetHelp">
-              {{ translateForm.useYamlConfig ? "使用 YAML 中的输出上限，不覆盖配置文件。" : outputBudgetError || "留空使用服务商默认值；仅限制翻译输出，摘要使用服务商默认值。" }}
-            </small>
-          </label>
-          <div class="span-2 credential-row">
-            <span
-              id="providerCredentialStatus"
-              :class="providerCredentialStatus.className"
-            >{{ providerCredentialStatus.text }}</span>
-            <button
-              id="configureProvider"
-              :class="['ghost-button', 'credential-action', { 'is-hidden': !showConfigureProvider }]"
-              type="button"
-              :disabled="isBusy"
-              @click="configureProvider"
-            >
-              {{ configureProviderText }}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <h3 class="form-group-title">
-          输出
-        </h3>
-        <div class="form-fields">
-          <label class="span-2">
-            <span>输出文件</span>
-            <div class="inline-control">
+              <span>自定义模型 ID</span>
               <input
-                id="translateOutput"
-                v-model="translateForm.output"
-                name="output"
+                id="customModelInput"
+                v-model="customModelInput"
                 type="text"
-                placeholder="留空自动命名：data/output/<标题>.<语言>.srt"
+                autocomplete="off"
                 :disabled="isBusy"
               >
+            </label>
+            <label class="span-2">
+              <span>翻译输出上限（tokens，可选）</span>
+              <input
+                id="translationMaxTokens"
+                v-model="translationMaxTokensInput"
+                type="number"
+                min="1"
+                step="1"
+                :max="Number.MAX_SAFE_INTEGER"
+                placeholder="使用服务商默认值"
+                :disabled="isBusy || translateForm.useYamlConfig"
+                :aria-invalid="Boolean(outputBudgetError)"
+                aria-describedby="outputBudgetHelp"
+                @input="onOutputBudgetInput"
+              >
+              <small id="outputBudgetHelp">
+                {{ translateForm.useYamlConfig ? "使用 YAML 中的输出上限，不覆盖配置文件。" : outputBudgetError || "留空使用服务商默认值；仅限制翻译输出，摘要使用服务商默认值。" }}
+              </small>
+            </label>
+            <label class="span-2"><span>摘要模型服务（可独立选择）</span><select
+              v-model="summaryProviderId"
+              :disabled="isBusy"
+            ><option value="">沿用本次翻译服务</option><option
+              v-for="provider in providers"
+              :key="provider.id"
+              :value="provider.id"
+            >{{ provider.name }}</option></select></label>
+            <label class="span-2"><span>摘要模型 ID（留空沿用翻译模型）</span><input
+              v-model="summaryModelId"
+              :disabled="isBusy"
+              placeholder="只负责摘要和术语上下文"
+            ></label>
+            <div class="span-2 credential-row">
+              <span
+                id="providerCredentialStatus"
+                :class="providerCredentialStatus.className"
+              >{{ providerCredentialStatus.text }}</span>
               <button
-                id="chooseOutput"
-                class="secondary-button"
+                id="configureProvider"
+                :class="['ghost-button', 'credential-action', { 'is-hidden': !showConfigureProvider }]"
                 type="button"
                 :disabled="isBusy"
-                @click="chooseOutput"
-              >选择</button>
-            </div>
-          </label>
-          <label>
-            <span>输出格式</span>
-            <select
-              id="outputFormat"
-              v-model="translateForm.outputFormat"
-              name="outputFormat"
-              :disabled="isBusy"
-            >
-              <option value="">默认（双语 · 原文在前）</option>
-              <option value="source-first">双语 · 原文在前</option>
-              <option value="target-first">双语 · 译文在前</option>
-              <option value="target-only">仅译文</option>
-              <option value="source-only">仅原文</option>
-            </select>
-          </label>
-          <label>
-            <span>源语言</span>
-            <input
-              id="sourceLanguage"
-              v-model="translateForm.sourceLanguage"
-              name="sourceLanguage"
-              type="text"
-              list="sourceLanguageOptions"
-              placeholder="默认 en"
-              :disabled="isBusy"
-            >
-            <datalist id="sourceLanguageOptions">
-              <option value="en">英语</option>
-              <option value="zh">中文</option>
-              <option value="ja">日语</option>
-              <option value="ko">韩语</option>
-              <option value="yue">粤语</option>
-              <option value="fr">法语</option>
-              <option value="de">德语</option>
-              <option value="es">西班牙语</option>
-              <option value="it">意大利语</option>
-              <option value="pt">葡萄牙语</option>
-              <option value="ru">俄语</option>
-            </datalist>
-          </label>
-          <label class="check-row span-2">
-            <input
-              id="forceAsr"
-              v-model="translateForm.forceAsr"
-              type="checkbox"
-              :disabled="isBusy || Boolean(reusableSubtitle?.subtitlePath && reuseSourceSubtitle)"
-            >
-            <span>{{ reusableSubtitle?.subtitlePath && reuseSourceSubtitle ? "复用源字幕时不执行 ASR" : "不下载原字幕，改用 ASR" }}</span>
-          </label>
-          <label
-            v-if="translateForm.forceAsr"
-            class="span-2"
-          >
-            <span>ASR 模型</span>
-            <select
-              id="asrModel"
-              v-model="translateForm.asrModel"
-              :disabled="isBusy"
-            >
-              <option value="">
-                默认（{{ asrModels.find((model) => model.id === defaultAsrModel)?.label || defaultAsrModel }}）
-              </option>
-              <option
-                v-for="model in asrModels"
-                :key="model.id"
-                :value="model.id"
-                :title="model.description"
+                @click="configureProvider"
               >
-                {{ model.label }}
-              </option>
-            </select>
-          </label>
-          <label v-if="translateForm.forceAsr">
-            <span>ASR 设备</span>
-            <select
-              id="asrDevice"
-              v-model="translateForm.asrDevice"
-              :disabled="isBusy || isAsrDeviceAuto(translateForm.asrModel)"
-            >
-              <option value="">
-                {{ isAsrDeviceAuto(translateForm.asrModel) ? "自动（Metal GPU）" : "默认（CPU）" }}
-              </option>
-              <option value="cpu">
-                CPU
-              </option>
-              <option value="mps">
-                GPU（Apple MPS）
-              </option>
-              <option value="cuda">
-                GPU（CUDA）
-              </option>
-            </select>
-          </label>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <h3 class="form-group-title">
-          复核与高级
-        </h3>
-        <div class="form-fields">
-          <label>
-            <span>复核方式</span>
-            <select
-              id="reviewMode"
-              v-model="translateForm.reviewMode"
-              name="reviewMode"
-              :disabled="isBusy"
-            >
-              <option value="auto">自动修复</option>
-              <option value="config">使用配置</option>
-              <option value="tui">TUI 复核</option>
-            </select>
-          </label>
-          <label class="check-row">
-            <input
-              id="refineTranslation"
-              v-model="translateForm.refineTranslation"
-              type="checkbox"
-              :disabled="isBusy"
-            >
-            <span>启用二次润色</span>
-          </label>
-          <section
-            class="mkv-panel span-2"
-            aria-labelledby="embedMkvTitle"
-          >
-            <div class="mkv-panel-heading">
-              <label class="check-row">
-                <input
-                  id="embedMkv"
-                  v-model="translateForm.embedMkv"
-                  type="checkbox"
-                  :disabled="isBusy || !ffmpegAvailable"
-                  @change="onEmbedMkvChanged"
-                >
-                <span id="embedMkvTitle">翻译完成后生成带字幕 MKV</span>
-              </label>
-              <span
-                id="mkvCapabilityStatus"
-                :class="mkvCapabilityClass"
-              >{{ mkvCapabilityText }}</span>
+                {{ configureProviderText }}
+              </button>
             </div>
-            <label>
-              <span>视频文件</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <h3 class="form-group-title">
+            输出
+          </h3>
+          <div class="form-fields">
+            <label class="span-2">
+              <span>输出文件</span>
               <div class="inline-control">
                 <input
-                  id="translateVideo"
-                  v-model="translateForm.video"
+                  id="translateOutput"
+                  v-model="translateForm.output"
+                  name="output"
                   type="text"
-                  placeholder="视频 URL 会自动复用下载到的视频；本地字幕可手动选择"
-                  :disabled="isBusy || !ffmpegAvailable"
+                  placeholder="留空自动命名：data/output/<标题>.<语言>.srt"
+                  :disabled="isBusy"
                 >
                 <button
-                  id="chooseTranslateVideo"
+                  id="chooseOutput"
                   class="secondary-button"
                   type="button"
-                  :disabled="isBusy || !ffmpegAvailable"
-                  @click="chooseTranslateVideo"
-                >
-                  选择
-                </button>
+                  :disabled="isBusy"
+                  @click="chooseOutput"
+                >选择</button>
               </div>
             </label>
-          </section>
-          <details class="advanced-panel span-2">
-            <summary>高级配置</summary>
+            <label>
+              <span>输出格式</span>
+              <select
+                id="outputFormat"
+                v-model="translateForm.outputFormat"
+                name="outputFormat"
+                :disabled="isBusy"
+              >
+                <option value="">默认（双语 · 原文在前）</option>
+                <option value="source-first">双语 · 原文在前</option>
+                <option value="target-first">双语 · 译文在前</option>
+                <option value="target-only">仅译文</option>
+                <option value="source-only">仅原文</option>
+              </select>
+            </label>
+            <label>
+              <span>源语言</span>
+              <input
+                id="sourceLanguage"
+                v-model="translateForm.sourceLanguage"
+                name="sourceLanguage"
+                type="text"
+                list="sourceLanguageOptions"
+                placeholder="默认 en"
+                :disabled="isBusy"
+              >
+              <datalist id="sourceLanguageOptions">
+                <option value="en">英语</option>
+                <option value="zh">中文</option>
+                <option value="ja">日语</option>
+                <option value="ko">韩语</option>
+                <option value="yue">粤语</option>
+                <option value="fr">法语</option>
+                <option value="de">德语</option>
+                <option value="es">西班牙语</option>
+                <option value="it">意大利语</option>
+                <option value="pt">葡萄牙语</option>
+                <option value="ru">俄语</option>
+              </datalist>
+            </label>
+            <label class="check-row span-2">
+              <input
+                id="forceAsr"
+                v-model="translateForm.forceAsr"
+                type="checkbox"
+                :disabled="isBusy || Boolean(reusableSubtitle?.subtitlePath && reuseSourceSubtitle)"
+              >
+              <span>{{ reusableSubtitle?.subtitlePath && reuseSourceSubtitle ? "复用源字幕时不执行 ASR" : "不下载原字幕，改用 ASR" }}</span>
+            </label>
+            <label
+              v-if="translateForm.forceAsr"
+              class="span-2"
+            >
+              <span>ASR 模型</span>
+              <select
+                id="asrModel"
+                v-model="translateForm.asrModel"
+                :disabled="isBusy"
+              >
+                <option value="">
+                  默认（{{ asrModels.find((model) => model.id === defaultAsrModel)?.label || defaultAsrModel }}）
+                </option>
+                <option
+                  v-for="model in asrModels"
+                  :key="model.id"
+                  :value="model.id"
+                  :title="model.description"
+                >
+                  {{ model.label }}
+                </option>
+              </select>
+            </label>
+            <label v-if="translateForm.forceAsr">
+              <span>ASR 设备</span>
+              <select
+                id="asrDevice"
+                v-model="translateForm.asrDevice"
+                :disabled="isBusy || isAsrDeviceAuto(translateForm.asrModel)"
+              >
+                <option value="">
+                  {{ isAsrDeviceAuto(translateForm.asrModel) ? "自动（Metal GPU）" : "默认（CPU）" }}
+                </option>
+                <option value="cpu">
+                  CPU
+                </option>
+                <option value="mps">
+                  GPU（Apple MPS）
+                </option>
+                <option value="cuda">
+                  GPU（CUDA）
+                </option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <h3 class="form-group-title">
+            复核与高级
+          </h3>
+          <div class="form-fields">
+            <label>
+              <span>复核方式</span>
+              <select
+                id="reviewMode"
+                v-model="translateForm.reviewMode"
+                name="reviewMode"
+                :disabled="isBusy"
+              >
+                <option value="auto">自动修复</option>
+                <option value="config">使用配置</option>
+                <option value="tui">TUI 复核</option>
+              </select>
+            </label>
             <label class="check-row">
               <input
-                id="useYamlConfig"
-                v-model="translateForm.useYamlConfig"
+                id="refineTranslation"
+                v-model="translateForm.refineTranslation"
                 type="checkbox"
                 :disabled="isBusy"
               >
-              <span>使用 YAML 配置文件覆盖服务商和模型选择</span>
+              <span>启用二次润色</span>
             </label>
-            <label>
-              <span>配置文件</span>
-              <div class="inline-control">
-                <input
-                  id="translateConfig"
-                  v-model="translateForm.config"
-                  name="config"
-                  type="text"
-                  placeholder="默认配置"
-                  :disabled="!translateForm.useYamlConfig || isBusy"
-                >
-                <button
-                  id="chooseTranslateConfig"
-                  class="secondary-button"
-                  type="button"
-                  :disabled="!translateForm.useYamlConfig || isBusy"
-                  @click="chooseTranslateConfig"
-                >
-                  选择
-                </button>
-              </div>
-            </label>
-          </details>
-          <label class="check-row">
-            <input
-              id="resumeTranslate"
-              v-model="translateForm.resume"
-              name="resume"
-              type="checkbox"
-              :disabled="isBusy"
+            <section
+              class="mkv-panel span-2"
+              aria-labelledby="embedMkvTitle"
             >
-            <span>从断点继续</span>
-          </label>
+              <div class="mkv-panel-heading">
+                <label class="check-row">
+                  <input
+                    id="embedMkv"
+                    v-model="translateForm.embedMkv"
+                    type="checkbox"
+                    :disabled="isBusy || !ffmpegAvailable"
+                    @change="onEmbedMkvChanged"
+                  >
+                  <span id="embedMkvTitle">翻译完成后生成带字幕 MKV</span>
+                </label>
+                <span
+                  id="mkvCapabilityStatus"
+                  :class="mkvCapabilityClass"
+                >{{ mkvCapabilityText }}</span>
+              </div>
+              <label>
+                <span>视频文件</span>
+                <div class="inline-control">
+                  <input
+                    id="translateVideo"
+                    v-model="translateForm.video"
+                    type="text"
+                    placeholder="视频 URL 会自动复用下载到的视频；本地字幕可手动选择"
+                    :disabled="isBusy || !ffmpegAvailable"
+                  >
+                  <button
+                    id="chooseTranslateVideo"
+                    class="secondary-button"
+                    type="button"
+                    :disabled="isBusy || !ffmpegAvailable"
+                    @click="chooseTranslateVideo"
+                  >
+                    选择
+                  </button>
+                </div>
+              </label>
+            </section>
+            <details class="advanced-panel span-2">
+              <summary>高级配置</summary>
+              <label class="check-row">
+                <input
+                  id="useYamlConfig"
+                  v-model="translateForm.useYamlConfig"
+                  type="checkbox"
+                  :disabled="isBusy"
+                >
+                <span>使用 YAML 配置文件覆盖服务商和模型选择</span>
+              </label>
+              <label>
+                <span>配置文件</span>
+                <div class="inline-control">
+                  <input
+                    id="translateConfig"
+                    v-model="translateForm.config"
+                    name="config"
+                    type="text"
+                    placeholder="默认配置"
+                    :disabled="!translateForm.useYamlConfig || isBusy"
+                  >
+                  <button
+                    id="chooseTranslateConfig"
+                    class="secondary-button"
+                    type="button"
+                    :disabled="!translateForm.useYamlConfig || isBusy"
+                    @click="chooseTranslateConfig"
+                  >
+                    选择
+                  </button>
+                </div>
+              </label>
+            </details>
+            <label class="check-row">
+              <input
+                id="resumeTranslate"
+                v-model="translateForm.resume"
+                name="resume"
+                type="checkbox"
+                :disabled="isBusy"
+              >
+              <span>从断点继续</span>
+            </label>
+          </div>
         </div>
+      </details>
+      <div class="workspace-note span-2">
+        摘要用于理解内容；翻译模型负责译文和修复；Jev 只做判断。自动额外处理默认预留首轮 token 的 30%，费用未知。
+        <label class="check-row"><input
+          v-model="translateForm.semanticCheck"
+          type="checkbox"
+          :disabled="isBusy || translateForm.useYamlConfig"
+        > 使用 Jev 语义检查（不可用时仍保留译文，显示待补查）</label>
+        <button
+          type="button"
+          class="secondary-button"
+          @click="persistProviderPreference"
+        >
+          将模型选择明确保存为默认
+        </button>
       </div>
-
+      <div
+        v-if="translateForm.embedMkv && (!ffmpegAvailable || (reusableSubtitle && reuseSourceSubtitle && !reusableSubtitle.videoPath && !translateForm.video))"
+        class="workspace-note span-2"
+      >
+        当前缺少生成视频的条件；可以补充视频 / FFmpeg，也可明确选择先完成字幕。
+        <button
+          type="button"
+          class="secondary-button"
+          @click="translateForm.embedMkv = false"
+        >
+          本次仅翻译字幕
+        </button>
+      </div>
+      <p
+        v-if="translateForm.embedMkv"
+        class="span-2 help-text"
+      >
+        生成视频会下载或使用原视频；字幕先独立保存，视频失败可稍后单独重试。
+      </p>
       <div class="actions span-2">
         <button
           id="startTranslate"

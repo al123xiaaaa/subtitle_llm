@@ -29,6 +29,8 @@ data/logs/*-response.txt
 
 # Environments
 .env
+.env.local
+.env.*.local
 
 # macOS
 .DS_Store

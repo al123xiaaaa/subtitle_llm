@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlparse
@@ -33,16 +35,13 @@ from subtitle_llm.pipeline.model_segmentation import SegmentationSource, context
 from subtitle_llm.pipeline.model_segmenter import ModelSegmenter, model_request_key
 from subtitle_llm.pipeline.prompts import GENERATE_SUMMARY_PROMPT
 from subtitle_llm.pipeline.quality import QualityGate
+from subtitle_llm.pipeline.semantic_quality import JevSemanticReviewer, SemanticQualityGate
 from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.pipeline.run_ledger import RunLedger
 from subtitle_llm.pipeline.semantic_units import (
     SemanticUnit,
     build_semantic_units,
     semantic_entries,
-)
-from subtitle_llm.pipeline.source_corrections import (
-    source_corrections_from_context,
-    subtitle_with_source_display_corrections,
 )
 from subtitle_llm.pipeline.task_store import (
     TranslationTaskRecord,
@@ -53,6 +52,8 @@ from subtitle_llm.progress_contract import ProgressContract, SubtitlePreviewPubl
 from subtitle_llm.progress_events import ProgressEmitter
 from subtitle_llm.review import AutoReviewPort, ReviewPort, TuiReviewPort
 from subtitle_llm.settings import AppConfig
+from subtitle_llm.workspace import WorkspaceStore
+from subtitle_llm.workspace.pipeline import RecordingQualityGate, finish_first_pass
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,9 @@ class TranslationService:
             request.target_language,
             request.source_language,
         )
+        if task_record is None and not request.resume and (request.output_file is None or Path(output_file).exists()):
+            output_path = Path(output_file)
+            output_file = str(output_path.with_name(f'{output_path.stem}.{uuid.uuid4().hex[:8]}{output_path.suffix}'))
         progress_contract.output_resolved(output_file)
         output_format = request.output_format or self.config.default_output_format
         context_file = sidecar_path(output_file, "_context.txt")
@@ -161,7 +165,7 @@ class TranslationService:
             context_file=str(context_file),
             target_language=request.target_language,
             output_format=output_format,
-            source_video_file=resolved_input.video_file,
+            source_video_file=resolved_input.video_file or (task_record.source_video_file if task_record else None),
         )
         trace_recorder = LlmTraceRecorder.for_run(output_file)
         report.llm_trace_dir = str(trace_recorder.trace_dir)
@@ -269,10 +273,14 @@ class TranslationService:
                 # 恢复时输入已是本地 SRT，必须记住它原来走的是模型断句。
                 record_config = self.config.model_copy(deep=True)
                 record_config.pipeline.model_segmentation = "always"
+            snapshot_dir = self.task_store.db_path.parent / 'workspace-sources' / uuid.uuid4().hex
+            snapshot_dir.mkdir(parents=True, exist_ok=False)
+            source_snapshot = snapshot_dir / Path(input_file).name
+            shutil.copyfile(input_file, source_snapshot)
             task_record = self.task_store.create_task(
                 input_display=request.input_file,
                 working_directory=os.getcwd(),
-                source_subtitle_path=self._absolute_path(input_file),
+                source_subtitle_path=str(source_snapshot),
                 normalized_input_fingerprint=normalized_input_fingerprint,
                 target_language=request.target_language,
                 source_language=request.source_language,
@@ -285,6 +293,8 @@ class TranslationService:
                 source_url=request.input_file if self._is_url(request.input_file) else None,
                 status=task_lifecycle.state,
             )
+        workspace = WorkspaceStore(self.task_store)
+        report.workspace_recorded = True
         report.task_id = task_record.task_id
         report.task_db_file = str(self.task_store.db_path)
         task_projector = TaskLifecycleProjector(self.task_store, task_record.task_id, report, progress_contract)
@@ -306,6 +316,9 @@ class TranslationService:
             self.task_store, task_record.task_id, Subtitle([]) if model_segmentation else subtitle, report, [],
         )
         progress_contract.task_record_restored(len(resumed_indices))
+        if should_restore:
+            previous_report = self.task_store.load_resume_state(task_record.task_id).get('report', {})
+            report.first_pass_tokens = int(previous_report.get('first_pass_tokens', 0))
         restored_accepted_indices = set(report.accepted_entry_indices)
         preview.accept([entry for entry in subtitle.entries if entry.index in restored_accepted_indices])
         if resumed_indices:
@@ -332,14 +345,14 @@ class TranslationService:
                 "source": context_source, "language": request.target_language,
                 "model": self.config.summary_model.model_dump(mode="json"),
             })
-            saved_context = self.task_store.load_model_result(task_record.task_id, context_key) if model_segmentation else None
+            saved_context = self.task_store.load_model_result(task_record.task_id, context_key)
             if saved_context:
                 context, context_usage = saved_context["context"], CompletionUsage()
             else:
                 context, context_usage = context_service.build_context(context_source, request.target_language)
-                if model_segmentation:
-                    self.task_store.save_model_result(task_record.task_id, context_key, {"context": context})
+                self.task_store.save_model_result(task_record.task_id, context_key, {"context": context})
             report.token_usage.add_usage(context_usage.to_dict())
+            report.summary_tokens = context_usage.total_tokens
             context_service.save_context(context, context_file)
             progress_contract.context_generated(
                 context_file=context_file,
@@ -456,7 +469,20 @@ class TranslationService:
             total_chunks=report.total_chunks,
             progress=progress,
         )
+        model_source = SegmentationSource(subtitle.entries) if model_segmentation else None
         quality_gate = QualityGate()
+        if self.config.pipeline.semantic_quality == "jev":
+            # 模型断句后 planned.entries 会换成新 cue，必须提前按原始范围保存只读上下文。
+            segmentation_context = {
+                planned.index: model_source.readonly_context(*model_source.bounds(planned.entries))
+                for planned in planned_chunks
+            } if model_source is not None else None
+            quality_gate = SemanticQualityGate(JevSemanticReviewer(
+                context=context, report=report, store=self.task_store, task_id=task_record.task_id,
+                source_kind="asr" if resolved_input.from_asr else "subtitle",
+                source_language=request.source_language, segmentation_context=segmentation_context,
+            ))
+        quality_gate = RecordingQualityGate(quality_gate)
         review_port = self._review_port(review_mode)
         progress_contract.chunk_pool_started(total_chunks=report.total_chunks, threads=self.config.pipeline.threads)
         logger.info("审核模式: %s", review_mode)
@@ -473,13 +499,14 @@ class TranslationService:
             report=report,
             run_ledger=run_ledger,
             refine_translation=refine_translation,
+            defer_automatic=True,
+            review_mode=review_mode,
         )
         chunk_processor = ChunkProcessingCoordinator(
             threads=self.config.pipeline.threads,
             semantic_output_granularity=self.config.pipeline.semantic_output_granularity,
             preview=preview,
         )
-        model_source = SegmentationSource(subtitle.entries) if model_segmentation else None
         if model_segmentation:
             # 模型生成的字幕与原始 ASR 条目分开保存，不能把二者按旧编号混合。
             subtitle = Subtitle([])
@@ -521,22 +548,36 @@ class TranslationService:
 
             task_lifecycle = task_lifecycle.apply(TranslationTaskLifecycleEvent.PROCESS_CHUNKS_COMPLETED)
             task_projector.project(task_lifecycle.state, emit_progress=True)
-            run_ledger.finalize_subtitle(subtitle, translated_entries, report, reorder=not model_segmentation)
-            output_subtitle, source_display_corrections = subtitle_with_source_display_corrections(
-                subtitle,
-                source_corrections_from_context(context),
-            )
-            if source_display_corrections:
-                logger.info("写出字幕时应用源文展示修正: entries=%s", source_display_corrections)
+            run_ledger.finalize_subtitle(subtitle, translated_entries, report, reorder=False)
+            finish_first_pass(workspace, quality_gate, task_record.task_id, subtitle, report, self.config, self.translation_client)
+            translated_entries = list(subtitle.entries)
+            # 源文属于该版本的证据，摘要中的推测修正不能悄悄改写它。
+            output_subtitle = Subtitle([replace(entry) for entry in subtitle.entries])
             if model_source is not None:
                 self._write_model_normalization_artifacts(
                     model_source, subtitle, input_file, output_file, request.source_language, report,
                 )
                 output_subtitle = Subtitle([replace(entry) for entry in output_subtitle.entries])
                 output_subtitle.reorder_entries()
-            progress_contract.writing_srt(output_file)
-            SubtitleIO.write_srt(output_subtitle, output_file, output_format=output_format)
-            progress_contract.srt_written(output_file)
+            if report.translation_complete:
+                progress_contract.writing_srt(output_file)
+                artifact = workspace.begin_artifact(task_record.task_id, 'subtitle')
+                from subtitle_llm.workspace.artifacts import write_snapshot
+                destination = Path(output_file)
+                if destination.exists():
+                    destination = destination.with_name(f'{destination.stem}.{uuid.uuid4().hex[:8]}{destination.suffix}')
+                try:
+                    write_snapshot(artifact['entries'], destination, artifact['output_format'])
+                except Exception:
+                    workspace.finish_artifact(task_record.task_id, artifact['artifact_id'], error='字幕写入失败，可从素材页重新导出')
+                    raise
+                workspace.finish_artifact(task_record.task_id, artifact['artifact_id'], path=str(destination))
+                report.output_file = str(destination)
+                output_file = str(destination)
+                progress_contract.srt_written(output_file)
+            else:
+                progress.emit(stage='generate_result', detail='partial_saved', status='warning',
+                              label='已保存部分译文', message='译文尚未完整，请在素材页明确导出已完成部分')
             preview.finish(output_subtitle.entries)
             completion_event = (
                 TranslationTaskLifecycleEvent.FINALIZE_OUTPUT_COMPLETED_WITH_WARNINGS
@@ -550,6 +591,7 @@ class TranslationService:
                 emit_progress=emit_complete,
             )
             run_ledger.save_task_state(self.task_store, task_record.task_id, subtitle, report, translated_entries)
+            workspace.sync_task(task_record.task_id)
             logger.info(
                 "翻译任务完成: output=%s failed_chunks=%s total_tokens=%s",
                 output_file,
@@ -560,6 +602,7 @@ class TranslationService:
         except Exception as exc:
             task_lifecycle = task_lifecycle.apply(TranslationTaskLifecycleEvent.FAILED)
             task_projector.project(task_lifecycle.state, error_summary=str(exc))
+            workspace.sync_task(task_record.task_id)
             raise
         finally:
             stop_review = getattr(review_port, "stop", None)
@@ -679,8 +722,15 @@ class TranslationService:
                 raise RuntimeError(f"复用字幕不存在：{reuse_path}")
             progress.subtitle_ready(str(reuse_path))
             logger.info("复用已有字幕，跳过下载与ASR: input=%s subtitle=%s", input_file, reuse_path)
-            # 复用场景以 ASR 产物为主，沿用 ASR 来源的强制规范化
-            return ResolvedInput(subtitle_file=str(reuse_path), from_asr=True)
+            # 显式提供的字幕优先，不猜测其必然来自 ASR；可靠历史才恢复断句方式和视频关联。
+            from subtitle_llm.workspace.store import source_identity
+            from types import SimpleNamespace
+            identity = source_identity(SimpleNamespace(source_url=input_file))
+            matches = [task for task in self.task_store.list_tasks(limit=100000)
+                       if task.source_url and source_identity(task) == identity and Path(task.source_subtitle_path).resolve() == reuse_path.resolve()]
+            prior = matches[0] if matches else None
+            from_asr = bool(prior and config_from_snapshot(prior.config_snapshot_json).pipeline.model_segmentation == 'always')
+            return ResolvedInput(subtitle_file=str(reuse_path), from_asr=from_asr, video_file=prior.source_video_file if prior else None)
 
         if not self._is_url(input_file):
             progress.local_input_selected(input_file)

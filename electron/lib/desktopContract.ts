@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 // import attribute，而打包进 main.js 时又是内联——两种场景行为不一致。
 // 这里统一用 fs 按候选路径读取。
 export interface DesktopContract {
+  semanticQuality: "off" | "jev";
   modelParams: {
     summary: Record<string, string>;
     translation: Record<string, string>;

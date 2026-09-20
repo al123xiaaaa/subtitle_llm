@@ -36,6 +36,7 @@ export interface JobProgram {
 export function createJobProgram(ports: JobPorts): JobProgram {
   // 进度日志行去重用的上一阶段名，属程序内部暂态。
   let lastLogStage = "";
+  let translationIncomplete = false;
 
   const setBusy = (nextBusy: boolean): Effect.Effect<void> =>
     Effect.sync(() => {
@@ -140,6 +141,7 @@ export function createJobProgram(ports: JobPorts): JobProgram {
   const handleEvent = (event: JobEvent): Effect.Effect<void, never, Bridge> =>
     Effect.gen(function* () {
       if (event.type === "started") {
+        translationIncomplete = false;
         yield* setStatus("运行中");
         yield* Effect.sync(() => {
           ports.resetProgress(event.command);
@@ -164,6 +166,10 @@ export function createJobProgram(ports: JobPorts): JobProgram {
           lastLogStage = formatted.stage;
         }
       } else if (event.type === "result") {
+        translationIncomplete = event.event.translation_complete === false;
+        if (translationIncomplete) {
+          yield* Effect.sync(() => { ports.lastSubtitlePath.value = ""; ports.lastOutputPath.value = ""; });
+        }
         yield* setSubtitlePath(event.event.output_file);
         yield* setSourceVideoPath(event.event.source_video_file);
         yield* setEmbeddedVideoPath(event.event.output_video_file || event.event.embedded_video_file);
@@ -177,7 +183,7 @@ export function createJobProgram(ports: JobPorts): JobProgram {
         yield* appendLog(`${event.message}\n`, "stderr");
       } else if (event.type === "finished") {
         yield* setBusy(false);
-        yield* setStatus(event.code === 0 ? "完成" : `退出码 ${event.code}`);
+        yield* setStatus(event.code === 0 ? (translationIncomplete ? "执行结束 · 译文未完成" : "完成") : `退出码 ${event.code}`);
         yield* Effect.sync(() => {
           ports.finishProgress(event.code === 0);
         });

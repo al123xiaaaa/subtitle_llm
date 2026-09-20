@@ -7,6 +7,8 @@ TranslationService 只保留任务级编排。
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import logging
 from dataclasses import asdict, dataclass, field
 
@@ -95,7 +97,12 @@ class ChunkAcceptance:
         report: TranslationReport,
         run_ledger: RunLedger,
         refine_translation: bool = False,
+        defer_automatic: bool = False,
+        review_mode: str | None = None,
     ):
+        self.review_mode = review_mode
+        self.defer_automatic = defer_automatic
+        self._reviewed_chunks: set[int] = set()
         self.config = config
         self.translator = translator
         self.quality_gate = quality_gate
@@ -185,11 +192,12 @@ class ChunkAcceptance:
             planned.entries,
             translation=translation,
             target_language=self.target_language,
+            planned=planned,
         )
         if self.translator.trace_recorder:
             self.translator.trace_recorder.update_quality(result.final_trace_id, diagnosis)
         self.quality_gate.apply_diagnosis(planned.entries, diagnosis)
-        review_policy = ReviewPolicy.from_review_port(self.review_port)
+        review_policy = ReviewPolicy(mode="tui" if self.review_mode == "tui" else "auto") if self.review_mode is not None else ReviewPolicy.from_review_port(self.review_port)
         self._progress.quality_checked(
             planned.entries,
             chunk_index=planned.index,
@@ -206,7 +214,7 @@ class ChunkAcceptance:
                 diagnosis.summary,
             )
         if diagnosis.has_issues:
-            if review_policy.should_auto_repair(diagnosis):
+            if (not self.defer_automatic and review_policy.should_auto_repair(diagnosis)):
                 self._apply_chunk_event(planned, TranslationChunkLifecycleEvent.REPAIR_REQUIRED)
                 before_repair = snapshot_entry_translations(planned.entries)
                 repair_usage = CompletionUsage()
@@ -227,6 +235,7 @@ class ChunkAcceptance:
                     planned.entries,
                     translation=repaired,
                     target_language=self.target_language,
+                    planned=planned,
                 )
                 diagnosis = self._settle_auto_repair(
                     planned,
@@ -245,12 +254,12 @@ class ChunkAcceptance:
                     repaired_diagnosis.reliability,
                     repaired_diagnosis.flagged_entries,
                 )
-            else:
+            elif review_policy.should_manual_review(diagnosis):
                 self._apply_chunk_event(planned, TranslationChunkLifecycleEvent.REVIEW_REQUIRED)
                 self._review_chunk_with_tui(planned)
 
         planned.entries = self._apply_source_correction_gate(planned, planned.entries)
-        if review_policy.uses_manual_review and any(entry.needs_retranslation for entry in planned.entries):
+        if review_policy.uses_manual_review and any(entry.needs_retranslation for entry in planned.entries) and planned.index not in self._reviewed_chunks:
             self._apply_chunk_event(planned, TranslationChunkLifecycleEvent.REVIEW_REQUIRED)
             self._review_chunk_with_tui(planned)
 
@@ -365,6 +374,7 @@ class ChunkAcceptance:
             source_entries,
             translation=result.translation,
             target_language=self.target_language,
+            planned=planned,
         )
         quality_record: dict = {"initial": asdict(diagnosis), "review": "not_requested"}
         if preserve_diagnosis:
@@ -372,7 +382,7 @@ class ChunkAcceptance:
         if self.translator.trace_recorder:
             self.translator.trace_recorder.update_quality(result.final_trace_id, diagnosis)
         self.quality_gate.apply_diagnosis(source_entries, diagnosis)
-        review_policy = ReviewPolicy.from_review_port(self.review_port)
+        review_policy = ReviewPolicy(mode="tui" if self.review_mode == "tui" else "auto") if self.review_mode is not None else ReviewPolicy.from_review_port(self.review_port)
         self._progress.quality_checked(
             source_entries,
             chunk_index=planned.index,
@@ -381,7 +391,7 @@ class ChunkAcceptance:
             auto_repair=review_policy.quality_visual_auto_repair(diagnosis),
         )
 
-        if diagnosis.has_issues and review_policy.should_auto_repair(diagnosis):
+        if diagnosis.has_issues and (not self.defer_automatic and review_policy.should_auto_repair(diagnosis)):
             self._apply_chunk_event(planned, TranslationChunkLifecycleEvent.REPAIR_REQUIRED, semantic=True)
             before_repair = snapshot_entry_translations(source_entries)
             selected_entries = [entry for entry in source_entries if entry.needs_retranslation]
@@ -397,7 +407,7 @@ class ChunkAcceptance:
                 selected_indices={entry.index for entry in selected_entries},
                 stage="semantic-repair",
             )
-            repaired_diagnosis = self.quality_gate.diagnose_chunk(source_entries, target_language=self.target_language)
+            repaired_diagnosis = self.quality_gate.diagnose_chunk(source_entries, target_language=self.target_language, planned=planned)
             diagnosis = self._settle_auto_repair(
                 planned,
                 source_entries,
@@ -425,7 +435,7 @@ class ChunkAcceptance:
             for entry in source_entries
             if entry.needs_retranslation
         }
-        source_diagnosis = self.quality_gate.diagnose_chunk(source_entries, target_language=self.target_language)
+        source_diagnosis = self.quality_gate.diagnose_chunk(source_entries, target_language=self.target_language, planned=planned)
         self.quality_gate.apply_diagnosis(source_entries, source_diagnosis)
         for entry in source_entries:
             if entry.index in layout_review_indices:
@@ -452,7 +462,7 @@ class ChunkAcceptance:
                 semantic_units,
                 allow_layout_auto_merge=False,
             )
-            diagnosis = self.quality_gate.diagnose_chunk(source_entries, target_language=self.target_language)
+            diagnosis = self.quality_gate.diagnose_chunk(source_entries, target_language=self.target_language, planned=planned)
 
         if preserve_diagnosis:
             quality_record["final"] = asdict(diagnosis)
@@ -501,11 +511,12 @@ class ChunkAcceptance:
             planned.entries,
             translation=translation,
             target_language=self.target_language,
+            planned=planned,
         )
         if self.translator.trace_recorder:
             self.translator.trace_recorder.update_quality(result.final_trace_id, diagnosis)
         self.quality_gate.apply_diagnosis(planned.entries, diagnosis)
-        review_policy = ReviewPolicy.from_review_port(self.review_port)
+        review_policy = ReviewPolicy(mode="tui" if self.review_mode == "tui" else "auto") if self.review_mode is not None else ReviewPolicy.from_review_port(self.review_port)
         self._progress.quality_checked(
             planned.entries,
             chunk_index=planned.index,
@@ -513,7 +524,7 @@ class ChunkAcceptance:
             diagnosis=diagnosis,
             auto_repair=review_policy.quality_visual_auto_repair(diagnosis),
         )
-        if diagnosis.has_issues and review_policy.should_auto_repair(diagnosis):
+        if diagnosis.has_issues and (not self.defer_automatic and review_policy.should_auto_repair(diagnosis)):
             self._apply_chunk_event(planned, TranslationChunkLifecycleEvent.REPAIR_REQUIRED, semantic=True)
             before_repair = snapshot_entry_translations(planned.entries)
             repair_usage = CompletionUsage()
@@ -534,6 +545,7 @@ class ChunkAcceptance:
                 planned.entries,
                 translation=repaired,
                 target_language=self.target_language,
+                planned=planned,
             )
             diagnosis = self._settle_auto_repair(
                 planned,
@@ -563,6 +575,7 @@ class ChunkAcceptance:
             self.run_ledger,
             report,
             self.target_language,
+            allow_auto_merge=not self.defer_automatic,
         )
         source_entries = self._apply_source_correction_gate(planned, source_entries)
         layout_review_indices = {
@@ -570,7 +583,7 @@ class ChunkAcceptance:
             for entry in source_entries
             if entry.needs_retranslation
         }
-        source_diagnosis = self.quality_gate.diagnose_chunk(source_entries, target_language=self.target_language)
+        source_diagnosis = self.quality_gate.diagnose_chunk(source_entries, target_language=self.target_language, planned=planned)
         self.quality_gate.apply_diagnosis(source_entries, source_diagnosis)
         for entry in source_entries:
             if entry.index in layout_review_indices:
@@ -616,7 +629,7 @@ class ChunkAcceptance:
         diagnosis: ChunkDiagnosis,
         repaired_diagnosis: ChunkDiagnosis,
         before_repair: EntryTranslationSnapshot,
-        trace_ids: list[str | None],
+        trace_ids: Sequence[str | None],
         review_policy: ReviewPolicy,
         label: str,
     ) -> ChunkDiagnosis:
@@ -659,6 +672,22 @@ class ChunkAcceptance:
     # TUI 复核
     # ------------------------------------------------------------------
 
+    def _defer_manual_review(self, planned: PlannedChunk, review_result) -> None:
+        self._reviewed_chunks.add(planned.index)
+        requested = {entry.index for entry in review_result.entries_to_retranslate}
+        start = review_result.alignment_drift_start_index or review_result.cascade_start_index
+        if start is not None:
+            requested.update(entry.index for entry in review_result.chunk if entry.index >= start)
+        accepted = {entry.index for entry in review_result.chunk} - requested
+        self.report.human_protected_indices = sorted(set(self.report.human_protected_indices) | accepted)
+        for entry in review_result.chunk:
+            entry.needs_retranslation = entry.index in requested
+        if requested:
+            self.report.manual_review_requests.append({'indices': sorted(requested),
+                'context_indices': [entry.index for entry in review_result.chunk],
+                'token_limit': review_result.additional_token_limit})
+        self._progress.tui_accept(review_result.chunk, chunk_index=planned.index, total_chunks=self.report.total_chunks)
+
     def _review_chunk_with_tui(self, planned: PlannedChunk) -> None:
         report = self.report
         max_rounds = 2
@@ -674,8 +703,13 @@ class ChunkAcceptance:
                 report.total_chunks,
                 completed_chunks=report.completed_chunks,
             )
+            if not self.defer_automatic and not review_result.entries_to_retranslate:
+                report.human_protected_indices = sorted(set(report.human_protected_indices) | {e.index for e in review_result.chunk})
             self.run_ledger.record_removed_indices(review_result.removed_entry_indices)
             planned.entries = review_result.chunk
+            if self.defer_automatic:
+                self._defer_manual_review(planned, review_result)
+                return
             logger.info(
                 "TUI审核完成: chunk=%s round=%s selected_for_retranslation=%s cascade_start=%s drift_start=%s removed=%s",
                 planned.index + 1,
@@ -698,7 +732,7 @@ class ChunkAcceptance:
                 logger.info("TUI审核接受当前chunk: chunk=%s round=%s", planned.index + 1, review_round)
                 return
 
-            diagnosis = self.quality_gate.diagnose_chunk(planned.entries, target_language=self.target_language)
+            diagnosis = self.quality_gate.diagnose_chunk(planned.entries, target_language=self.target_language, planned=planned)
             if self.translator.trace_recorder:
                 for trace_id in outcome.trace_ids:
                     self.translator.trace_recorder.update_quality(trace_id, diagnosis)
@@ -838,7 +872,7 @@ class ChunkAcceptance:
         }
         current_entries = source_entries
         outcome = TuiReviewOutcome(retranslated=False)
-        diagnosis = self.quality_gate.diagnose_chunk(current_entries, target_language=self.target_language)
+        diagnosis = self.quality_gate.diagnose_chunk(current_entries, target_language=self.target_language, planned=planned)
 
         for review_round in range(1, max_rounds + 1):
             self._progress.tui_wait(
@@ -853,8 +887,13 @@ class ChunkAcceptance:
                 report.total_chunks,
                 completed_chunks=report.completed_chunks,
             )
+            if not self.defer_automatic and not review_result.entries_to_retranslate:
+                report.human_protected_indices = sorted(set(report.human_protected_indices) | {e.index for e in review_result.chunk})
             self.run_ledger.record_removed_indices(review_result.removed_entry_indices)
             current_entries = review_result.chunk
+            if self.defer_automatic:
+                self._defer_manual_review(planned, review_result)
+                return current_entries
             logger.info(
                 "语义TUI审核完成: chunk=%s round=%s selected_for_retranslation=%s cascade_start=%s drift_start=%s removed=%s",
                 planned.index + 1,
@@ -865,7 +904,7 @@ class ChunkAcceptance:
                 review_result.removed_entry_indices,
             )
 
-            review_diagnosis = self.quality_gate.diagnose_chunk(current_entries, target_language=self.target_language)
+            review_diagnosis = self.quality_gate.diagnose_chunk(current_entries, target_language=self.target_language, planned=planned)
             outcome = self._apply_semantic_tui_review_result(
                 planned,
                 current_entries,
@@ -899,7 +938,7 @@ class ChunkAcceptance:
                 for entry in current_entries
                 if entry.needs_retranslation
             }
-            diagnosis = self.quality_gate.diagnose_chunk(current_entries, target_language=self.target_language)
+            diagnosis = self.quality_gate.diagnose_chunk(current_entries, target_language=self.target_language, planned=planned)
             if self.translator.trace_recorder:
                 for trace_id in outcome.trace_ids:
                     self.translator.trace_recorder.update_quality(trace_id, diagnosis)
@@ -1244,13 +1283,17 @@ class ChunkAcceptance:
                 for flag in flags
             ],
         )
+        if self.defer_automatic:
+            self.report.source_review_requests.extend({'indices': [flag.cue_id], 'type': 'source_uncertain',
+                'description': f'原文可能为 {flag.corrected}，当前为 {flag.observed}；摘要推测尚无直接音视频核实。',
+                'candidate_only': True} for flag in flags)
         entry_by_index = {entry.index: entry for entry in entries}
         pairs = [
             (entry_by_index[flag.cue_id], flag)
             for flag in flags
             if flag.cue_id in entry_by_index
         ]
-        if pairs:
+        if pairs and not self.defer_automatic:
             self._repair_source_correction_flags(planned, pairs, entries)
 
         remaining_flags = find_unadopted_hard_corrections(corrections, entries)

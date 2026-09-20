@@ -19,8 +19,10 @@ class CompletionUsage:
     prompt_cache_miss_tokens: int = 0
     # 厂商未提供时保持未知；推理用量是明细，不额外累加到 total_tokens。
     reasoning_tokens: int | None = None
+    estimated: bool = False
 
     def add(self, other: "CompletionUsage") -> None:
+        self.estimated = self.estimated or other.estimated
         self.prompt_tokens += other.prompt_tokens
         self.completion_tokens += other.completion_tokens
         self.total_tokens += other.total_tokens
@@ -32,7 +34,7 @@ class CompletionUsage:
     @classmethod
     def from_any(cls, usage) -> "CompletionUsage":
         if usage is None:
-            return cls()
+            return cls(estimated=True)
         def field(value, name):
             return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
 
@@ -46,6 +48,7 @@ class CompletionUsage:
             prompt_cache_hit_tokens=int(field(usage, "prompt_cache_hit_tokens") or 0),
             prompt_cache_miss_tokens=int(field(usage, "prompt_cache_miss_tokens") or 0),
             reasoning_tokens=int(reasoning) if reasoning is not None else None,
+            estimated=bool(field(usage, "estimated")) or not bool(field(usage, "total_tokens")),
         )
 
     def to_dict(self) -> dict:
@@ -56,6 +59,7 @@ class CompletionUsage:
             "prompt_cache_hit_tokens": self.prompt_cache_hit_tokens,
             "prompt_cache_miss_tokens": self.prompt_cache_miss_tokens,
             "reasoning_tokens": self.reasoning_tokens,
+            **({"estimated": True} if self.estimated else {}),
         }
 
 

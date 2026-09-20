@@ -99,6 +99,12 @@ class SegmentationSource:
     def source_text(self, start: int, end: int) -> str:
         return self.text[self.positions[start - 1].start:self.positions[end - 1].end]
 
+    def readonly_context(self, start: int, end: int) -> tuple[str, str]:
+        """翻译与质检共享同一范围的前后各 24 个源文位置。"""
+        before = self.source_text(max(1, start - 24), start - 1) if start > 1 else ""
+        after = self.source_text(end + 1, min(len(self.positions), end + 24)) if end < len(self.positions) else ""
+        return before, after
+
     def format_range(self, start: int, end: int, *, local_positions: bool = True) -> str:
         """原文只出现一次；每个 ASR 段只附一个紧凑的相对时间窗口。"""
         selected = self.positions[start - 1:end]
@@ -185,8 +191,7 @@ def segmentation_prompt(
     legacy: bool = False,
 ) -> str:
     # 前后各最多 24 个源文位置，只读且不带可输出的编号。
-    before = source.source_text(max(1, start - 24), start - 1) if start > 1 else ""
-    after = source.source_text(end + 1, min(len(source.positions), end + 24)) if end < len(source.positions) else ""
+    before, after = source.readonly_context(start, end)
     relevant_source = " ".join((before, source.source_text(start, end), after))
     # v1 提示仅用于精确查找旧任务缓存；新的生成/补齐请求一律使用局部编号。
     first, last = (start, end) if legacy else (1, end - start + 1)
