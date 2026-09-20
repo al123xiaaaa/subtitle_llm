@@ -31,6 +31,13 @@ export function useTaskForms(options: TaskFormsOptions) {
     embedMkv: false,
     video: "",
   });
+  watch(options.appState, (next, previous) => {
+    if (next && !previous) {
+      translateForm.semanticCheck = next.preferences.semanticQuality !== 'off';
+      translateForm.asrModel = next.preferences.asrModel || '';
+      translateForm.asrDevice = next.preferences.asrDevice || '';
+    }
+  });
 
   const muxForm = reactive<MuxFormState>({
     subtitle: "",

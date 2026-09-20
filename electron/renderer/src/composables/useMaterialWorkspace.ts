@@ -13,6 +13,7 @@ export function useMaterialWorkspace() {
   const selected = ref<string[]>([]);
   const editCue = ref<Cue | null>(null);
   const editRevision = ref(0);
+  const editTaskId = ref('');
   const additional = ref<AdditionalRequest | null>(null);
   const running = ref(new Set<string>());
   const undoConflict = ref<string | null>(null);
@@ -44,6 +45,8 @@ export function useMaterialWorkspace() {
     version.value = result; materialId.value = result.material_id; language.value = result.language; selected.value = [];
   }
   async function openMaterial(value: Material, target?: string) {
+    selectionGeneration += 1;
+    version.value = null;
     materialId.value = value.material_id;
     language.value = target || Object.keys(value.defaults)[0] || value.tasks[0]?.language || '';
     const id = value.defaults[language.value] || value.tasks.find(v => v.language === language.value)?.task_id;
@@ -59,10 +62,10 @@ export function useMaterialWorkspace() {
     await request({action: 'accept', task_id: taskId, item_ids: selected.value});
     await reload(taskId);
   }
-  function startEdit(cue: Cue) { editCue.value = {...cue}; editRevision.value = version.value?.revision || 0; }
+  function startEdit(cue: Cue) { editCue.value = {...cue}; editRevision.value = version.value?.revision || 0; editTaskId.value = version.value?.task_id || ''; }
   async function saveEdit() {
-    if (!editCue.value || !version.value) return;
-    const taskId = version.value.task_id;
+    if (!editCue.value || !editTaskId.value) return;
+    const taskId = editTaskId.value;
     await request({action: 'edit', task_id: taskId, revision: editRevision.value, changes: {[editCue.value.index]: {
       translated_text: editCue.value.translated_text, start_time: editCue.value.start_time, end_time: editCue.value.end_time,
     }}});
@@ -86,14 +89,17 @@ export function useMaterialWorkspace() {
   }
   async function prepare(action: AdditionalRequest['action'], item?: ReviewItem) {
     if (!version.value) return;
+    const doc = version.value;
+    const generation = selectionGeneration;
     const indices = item ? (action === 'retranscribe' ? item.indices : item.context.map(c => c.index)) : version.value.entries.map(c => c.index);
-    const result = await request<{estimated_tokens: number}>({action: 'estimate', task_id: version.value.task_id, indices, repair: action === 'repair'});
-    additional.value = {action, indices, item_id: item?.item_id, estimated_tokens: result.estimated_tokens, token_limit: result.estimated_tokens};
+    const result = await request<{estimated_tokens: number}>({action: 'estimate', task_id: doc.task_id, indices, repair: action !== 'check'});
+    if (generation !== selectionGeneration) return;
+    additional.value = {action, task_id: doc.task_id, revision: doc.revision, indices, item_id: item?.item_id, estimated_tokens: result.estimated_tokens, token_limit: result.estimated_tokens};
   }
   async function runAdditional() {
-    if (!version.value || !additional.value) return;
-    const taskId = version.value.task_id;
-    const payload = {...additional.value, task_id: taskId};
+    if (!additional.value) return;
+    const taskId = additional.value.task_id;
+    const payload = {...additional.value};
     additional.value = null; running.value.add(taskId);
     try { await request(payload); await reload(taskId); message.value = '追加处理已结束，结果与用量已记录。'; }
     finally { running.value.delete(taskId); }

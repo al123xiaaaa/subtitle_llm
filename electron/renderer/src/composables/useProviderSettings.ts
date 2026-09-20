@@ -1,5 +1,5 @@
 import { computed, nextTick, reactive, ref } from "vue";
-import type { AppState, ModelSelection, ProviderModel, ProviderSummary } from "../../../types";
+import type { AppState, DesktopPreferences, ModelSelection, ProviderModel, ProviderSummary } from "../../../types";
 import type { TaskTab } from "./controllerTypes";
 import { cleanString, statusPillClass } from "./controllerUtils";
 import { appRuntime } from "../effect/runtime";
@@ -14,6 +14,7 @@ import type { ProviderPorts } from "../effect/programs/providers";
 import { parseTranslationMaxTokens } from "../../../lib/outputBudget";
 
 interface ProviderSettingsOptions {
+  getTaskRoleSettings: () => Partial<DesktopPreferences>;
   appendLog: (text: string, kind?: "stdout" | "stderr") => void;
   getUseYamlConfig: () => boolean;
   setActiveTab: (tab: TaskTab) => void;
@@ -127,7 +128,17 @@ export function useProviderSettings(options: ProviderSettingsOptions) {
     customModelInput.value = selectedCustomModelForProvider(provider);
   }
 
+  function restoreTaskDefaults(): void {
+    const preferences = appState.value?.preferences;
+    selectedProviderId.value = preferences?.lastProviderId || appState.value?.preferredProviderId || 'deepseek';
+    summaryProviderId.value = preferences?.summaryProviderId || '';
+    summaryModelId.value = preferences?.summaryModelId || '';
+    translationMaxTokensInput.value = preferences?.translationMaxTokens ?? '';
+    syncModelSelection();
+  }
+
   function updateAppState(nextState: AppState): void {
+    const initial = !appState.value;
     const previousProviderId = selectedProviderId.value;
     // 仅首次加载恢复预算；保存密钥/偏好或刷新模型列表不能覆盖正在编辑的值。
     if (!appState.value) {
@@ -145,6 +156,7 @@ export function useProviderSettings(options: ProviderSettingsOptions) {
       selectedOnboardingProviderId.value = "deepseek";
     }
     syncModelSelection();
+    if (initial) restoreTaskDefaults();
     void appRuntime.runPromise(loadDynamicModelsProgram(selectedProvider.value, providerPorts));
   }
 
@@ -176,6 +188,7 @@ export function useProviderSettings(options: ProviderSettingsOptions) {
     }
     await appRuntime.runPromise(persistProviderPreferenceProgram(providerPorts));
     const saved = await window.subtitleLLM.savePreferences(JSON.parse(JSON.stringify({...appState.value!.preferences,
+      ...options.getTaskRoleSettings(),
       summaryProviderId: summaryProviderId.value, summaryModelId: summaryModelId.value})));
     updateAppState(saved);
   }
@@ -236,6 +249,7 @@ export function useProviderSettings(options: ProviderSettingsOptions) {
   }
 
   return {
+    restoreTaskDefaults,
     apiKeyDrafts,
     appState,
     clearSettingsKey,

@@ -30,6 +30,9 @@ export interface ProviderSummary extends ProviderDefinition {
 }
 
 export interface DesktopPreferences {
+  semanticQuality?: "jev" | "off";
+  asrModel?: string;
+  asrDevice?: string;
   summaryProviderId?: string;
   summaryModelId?: string;
   lastProviderId: string;
@@ -52,6 +55,7 @@ export interface FfmpegStatus {
 }
 
 export interface AppState {
+  gatewayCredentialState?: "environment" | "local-file" | "missing";
   projectRoot: string;
   pythonExecutable: string;
   hasMainPy: boolean;

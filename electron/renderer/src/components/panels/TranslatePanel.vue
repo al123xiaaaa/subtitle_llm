@@ -509,6 +509,18 @@ const { ffmpegAvailable } = props.providerState;
           type="checkbox"
           :disabled="isBusy || translateForm.useYamlConfig"
         > 使用 Jev 语义检查（不可用时仍保留译文，显示待补查）</label>
+        <p v-if="providerState.appState.value?.gatewayCredentialState === 'missing' && translateForm.semanticCheck && !translateForm.useYamlConfig">
+          Jev 尚未配置凭据，请在本地配置 AI_GATEWAY_API_KEY。
+          <button
+            type="button"
+            @click="translateForm.semanticCheck = false"
+          >
+            仅翻译，稍后补查
+          </button>
+        </p>
+        <p v-else-if="providerState.appState.value?.gatewayCredentialState === 'local-file' && translateForm.semanticCheck">
+          将从本地配置加载 Jev 凭据；检测到配置文件不代表服务已验证可用。
+        </p>
         <button
           type="button"
           class="secondary-button"
@@ -516,6 +528,7 @@ const { ffmpegAvailable } = props.providerState;
         >
           将模型选择明确保存为默认
         </button>
+        <small>保存翻译、摘要、转写与语义检查的职责设置；本次临时选择不会自动保存。</small>
       </div>
       <div
         v-if="translateForm.embedMkv && (!ffmpegAvailable || (reusableSubtitle && reuseSourceSubtitle && !reusableSubtitle.videoPath && !translateForm.video))"

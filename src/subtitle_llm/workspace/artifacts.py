@@ -1,4 +1,5 @@
 """产物写入采用独立快照与不覆盖发布，编辑不会改动已有文件。"""
+
 from __future__ import annotations
 
 import os
@@ -11,7 +12,7 @@ from subtitle_llm.io import SubtitleIO
 
 def write_snapshot(entries: list[dict], output: Path, output_format: str) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    handle, temporary = tempfile.mkstemp(suffix='.srt', dir=output.parent)
+    handle, temporary = tempfile.mkstemp(suffix=".srt", dir=output.parent)
     os.close(handle)
     try:
         subtitle = Subtitle([SubtitleEntry.from_dict(entry) for entry in entries])

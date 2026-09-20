@@ -7,6 +7,7 @@ import RunPanel from "./components/RunPanel.vue";
 import SidebarNav from "./components/SidebarNav.vue";
 import TaskRecordsPanel from "./components/TaskRecordsPanel.vue";
 import { useAppController } from "./composables/useAppController";
+import type { Source } from './composables/workspaceTypes';
 
 const controller = useAppController();
 const { formActions, forms, inspectedRecord, isBusy, job, onboarding, providerState, records, shell } = controller;
@@ -16,6 +17,16 @@ async function resumeWorkspaceTask(taskId: string) {
   await records.refreshTaskRecords();
   const record = records.taskRecords.value.find(item => item.task_id === taskId);
   if (record) { workspacePage.value = 'jobs'; await records.continueTaskRecord(record); }
+}
+function translateSource(source: Source) {
+  formActions.newTranslation();
+  Object.assign(forms.translateForm, {input:source.path || source.source_url || '', sourceLanguage:source.language,
+    video:source.source_video || '', embedMkv:Boolean(source.source_video && /\.(mp4|mkv|mov|webm)$/i.test(source.source_video))});
+}
+function useMaterialTool(kind: 'download' | 'transcribe', source: Source) {
+  if (kind === 'download') Object.assign(forms.downloadForm, {url:source.source_url || '', sourceLanguage:source.language});
+  else Object.assign(forms.transcribeForm, {audio:source.source_video || '', language:source.language});
+  shell.setActiveTab(kind);
 }
 </script>
 
@@ -35,8 +46,10 @@ async function resumeWorkspaceTask(taskId: string) {
       <main class="main-workspace">
         <MaterialWorkspace
           v-show="workspacePage === 'materials'"
-          @create="shell.setActiveTab('translate')"
+          @create="formActions.newTranslation"
           @resume="resumeWorkspaceTask"
+          @source="translateSource"
+          @tool="useMaterialTool"
         />
         <div
           v-show="workspacePage === 'jobs'"

@@ -48,11 +48,17 @@ class RunLedger:
             pass
         report.human_protected_indices = sorted(protected)
         report.first_pass_tokens = int(report_data.get('first_pass_tokens', 0))
+        report.summary_tokens_total = int(report_data.get('summary_tokens_total', report_data.get('summary_tokens', 0)))
         failed_entry_indices = {
             int(index)
             for failed in report_data.get("failed_chunks", [])
             for index in failed.get("entry_indices", [])
         }
+        # 人工保留只保护内容，不能抹去未完成事实；其他失败范围由本轮重新处理。
+        for failed in report_data.get('failed_chunks', []):
+            unresolved = sorted(set(failed.get('entry_indices', [])) & protected)
+            if unresolved:
+                report.mark_failed(failed['chunk_index'], unresolved, failed.get('error', '该范围仍未完成'))
 
         resumed_indices: set[int] = set()
         restored_entries: list[SubtitleEntry] = []

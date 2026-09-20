@@ -98,6 +98,7 @@ export function createDesktopRuntime({
   function getAppState(): AppState {
     return {
       projectRoot,
+      gatewayCredentialState: env.AI_GATEWAY_API_KEY ? "environment" : fs.existsSync(path.join(projectRoot, ".env.local")) ? "local-file" : "missing",
       pythonExecutable: resolvePythonExecutable(),
       hasMainPy: fs.existsSync(path.join(projectRoot, "main.py")),
       settingsPath: getSettingsPath(),
@@ -347,29 +348,13 @@ export function createDesktopRuntime({
   // 重跑同 URL 时找到可复用的源字幕（通常是上次 ASR 产物），
   // 让用户跳过下载与转写。取最近一次非删除记录，文件须仍在磁盘上。
   // 同时带出状态与译文路径：已有完整译文时提示可查看结果而非重翻。
-  function canonicalSource(value: string): string {
-    try {
-      const parsed = new URL(value);
-      const host = parsed.hostname.replace(/^www\./, "");
-      if (["youtube.com", "m.youtube.com"].includes(host)) {
-        const id = parsed.searchParams.get("v") || (/^\/(shorts|embed)\//.test(parsed.pathname) ? parsed.pathname.split("/")[2] : "");
-        if (id) return `youtube:${id}`;
-      }
-      if (host === "youtu.be") return `youtube:${parsed.pathname.slice(1)}`;
-      parsed.hash = "";
-      for (const key of new Set(parsed.searchParams.keys())) if (key.startsWith("utm_")) parsed.searchParams.delete(key);
-      parsed.searchParams.sort();
-      return parsed.toString();
-    } catch { return value; }
-  }
-
   function findReusableSubtitle(sourceUrl: string): ReusableSubtitleMatch | null {
     const cleaned = cleanText(sourceUrl);
     if (!cleaned) {
       return null;
     }
-    const candidates = listTranslationTasks()
-      .filter((task) => !task.deleted_at && canonicalSource(task.source_url || "") === canonicalSource(cleaned))
+    const candidates = (JSON.parse(runTasksCommand(["--json", "--source-url", cleaned]) || "[]") as TranslationTaskSummary[])
+      .filter((task) => !task.deleted_at)
       .toSorted((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
     const existingPath = (value: string): string => {
       const resolved = value ? resolveUserPath(value) : "";

@@ -46,7 +46,7 @@ def _is_bot_wall(exc: Exception) -> bool:
 def _extract_metadata(url: str, cookie_browser: str | None) -> dict:
     opts = _finalize_ydl_opts({"quiet": True}, cookie_browser)
     with YoutubeDL(cast(Any, opts)) as ydl:
-        return ydl.extract_info(url, download=False)
+        return cast(dict, ydl.extract_info(url, download=False))
 
 
 def _probe_with_cookie_fallback(url: str, progress: ProgressEmitter | None) -> tuple[dict, str | None]:

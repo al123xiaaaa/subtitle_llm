@@ -23,7 +23,7 @@ from subtitle_llm.pipeline.lifecycle.states import (
 from subtitle_llm.pipeline.report import TranslationReport
 from subtitle_llm.settings import AppConfig
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class TranslationTaskStoreError(RuntimeError):
@@ -134,7 +134,12 @@ class TranslationTaskStore:
                 raise TranslationTaskStoreError(
                     f"任务记录数据库版本过新：{version} > {SCHEMA_VERSION}"
                 )
-            if version not in {2, SCHEMA_VERSION}:
+            if version < 4:
+                backup = self.db_path.with_suffix('.before-workspace.sqlite3')
+                if not backup.exists():
+                    with sqlite3.connect(backup) as target:
+                        connection.backup(target)
+            if version not in {2, 3, SCHEMA_VERSION}:
                 self._rebuild_schema(connection)
             # v2 -> v3 只增加模型结果缓存，保留已有任务和复核进度。
             connection.execute("""
@@ -146,6 +151,8 @@ class TranslationTaskStore:
                     PRIMARY KEY (task_id, request_key)
                 )
             """)
+            from .workspace_storage import create_workspace_schema
+            create_workspace_schema(connection)
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def _rebuild_schema(self, connection: sqlite3.Connection) -> None:
@@ -460,12 +467,8 @@ class TranslationTaskStore:
                     task_id,
                 ),
             )
-            protected = {}
-            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='workspace_versions'").fetchone():
-                row = connection.execute('SELECT document_json FROM workspace_versions WHERE task_id=?', (task_id,)).fetchone()
-                if row:
-                    doc = json.loads(row[0])
-                    protected = {e['index']: e for e in doc['entries'] if e['index'] in doc['protected_indices']}
+            from .workspace_storage import protected_entries
+            protected = protected_entries(connection, task_id)
             if report.model_segmentation_applied:
                 # 数量和编号由模型决定；删除旧快照里不再存在的条目，事务内整体替换。
                 connection.execute("DELETE FROM translation_cues WHERE task_id = ?", (task_id,))

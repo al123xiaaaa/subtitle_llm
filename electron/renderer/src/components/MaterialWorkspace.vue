@@ -2,8 +2,8 @@
 import { computed, ref } from 'vue';
 import { useMaterialWorkspace } from '../composables/useMaterialWorkspace';
 import WorkspaceCues from './WorkspaceCues.vue';
-import type { Issue, Version } from '../composables/workspaceTypes';
-const emit = defineEmits<{create: []; resume: [taskId: string]}>();
+import type { Issue, Source, Version } from '../composables/workspaceTypes';
+const emit = defineEmits<{create: []; resume: [taskId: string]; source: [value: Source]; tool: [kind: 'download' | 'transcribe', value: Source]}>();
 const ws = useMaterialWorkspace();
 const {materials, materialId, language, material, languages, versions, version, view, message, loading, includeAll, selected, editCue, additional, running, items, undoConflict} = ws;
 const forkModel = ref('');
@@ -19,11 +19,18 @@ function issueSummary(issue: Issue) {
   return issue.candidate_only ? labels[issue.type] || issue.description : issue.description;
 }
 const checkState = computed(() => {
-  const checks = version.value?.checks.filter(c => !c.outdated) || [];
-  if (!checks.length) return '检查证据未知';
-  return checks.some(c => c.status !== 'checked') ? '检查未完成' : '检查已完成';
+  const state = version.value?.check_state;
+  return state === 'checked' ? '检查已完成' : state === 'incomplete' ? '检查未完成' : '检查证据未知';
 });
 const pendingCount = computed(() => version.value?.review_items.filter(i => !i.outdated && i.state === 'pending').length || 0);
+const usage = computed(() => {
+  const doc = version.value;
+  const operations = doc?.operations || [];
+  const known = (items: typeof operations) => items.reduce((sum, item) => sum + (typeof item.usage === 'number' ? item.usage : 0), 0);
+  return {manual: known(operations.filter(item => !item.automatic)), automatic: known(operations.filter(item => item.automatic)),
+    total: (doc?.report.first_pass_tokens || 0) + (doc?.report.summary_tokens_total || 0) + known(operations),
+    unknown: operations.some(item => typeof item.usage !== 'number') || Boolean(doc?.report.token_usage?.unknown_usage_calls)};
+});
 const statuses: Record<string, string> = {created:'待开始', processing_chunks:'翻译中', prepare_translation:'准备翻译', preparing_input:'准备素材', completed:'执行完成', completed_with_warnings:'执行完成，有待回顾项', failed:'执行失败', stopped:'已停止', pending:'待复核', accepted:'已保留当前译文', check_pending:'待补查', checked:'已检查', unavailable:'服务未完成', candidate:'候选未采用', uncertain:'证据不足', applied:'已应用', running:'处理中', derived:'已创建派生任务', not_checked:'尚未检查'};
 function label(value: string) { return statuses[value] || value; }
 function back() { materialId.value = ''; version.value = null; }
@@ -32,6 +39,7 @@ function chooseVersion(event: Event) { void ws.guarded(() => ws.openVersion((eve
 function checkDetails(id: string) { return version.value?.checks.find(c => c.check_id === id)?.details; }
 function openFile(path: string) { void window.subtitleLLM.openPath(path); }
 function checkScope(doc: Version) { return doc.checks.filter(c => !c.outdated).map(c => c.indices); }
+function sourceForVersion(doc: Version): Source { return {path:doc.source, source_url:doc.source_url, source_video:doc.source_video, language:doc.source_language}; }
 </script>
 <template>
   <section
@@ -81,6 +89,37 @@ function checkScope(doc: Version) { return doc.checks.filter(c => !c.outdated).m
           <span class="material-monogram">字</span><h2>{{ entry.title }}</h2><p>{{ Object.keys(entry.defaults).join(' · ') || '尚无完整版本' }}</p><span>{{ entry.versions.length }} 个完整版本 · {{ entry.tasks.length - entry.versions.length }} 个未完成任务</span>
         </button>
       </div>
+    </template>
+    <template v-else-if="material && !version">
+      <button @click="back">
+        ← 素材库
+      </button>
+      <p>素材已保存，尚未生成翻译版本。可直接使用源字幕开始翻译，或先转写已有音视频。</p>
+      <article
+        v-for="source in material.sources || []"
+        :key="source.source_id"
+        class="history-card"
+      >
+        <p>{{ source.language }} · {{ source.path || source.source_video }}</p>
+        <button
+          v-if="source.path"
+          @click="emit('source', source)"
+        >
+          使用此源字幕翻译
+        </button>
+        <button
+          v-if="source.source_video"
+          @click="emit('tool', 'transcribe', source)"
+        >
+          系统转写此素材
+        </button>
+        <button
+          v-if="source.source_url"
+          @click="emit('tool', 'download', source)"
+        >
+          重新下载此素材字幕
+        </button>
+      </article>
     </template>
     <template v-else-if="version">
       <div class="workspace-actions version-selector">
@@ -182,7 +221,7 @@ function checkScope(doc: Version) { return doc.checks.filter(c => !c.outdated).m
           :key="artifact.artifact_id"
           class="artifact-row"
         >
-          <strong>{{ artifact.kind === 'video' ? '视频' : '字幕' }} · r{{ artifact.revision }}</strong><span>{{ artifact.status === 'ready' ? '已生成' : artifact.status === 'failed' ? '生成失败' : '生成中 / 待恢复' }}{{ artifact.outdated ? ' · 需要更新' : '' }}{{ artifact.missing ? ' · 文件已移走' : '' }}{{ artifact.partial ? ' · 未完成部分' : '' }}</span><button
+          <strong>{{ artifact.kind === 'video' ? '视频' : '字幕' }} · r{{ artifact.revision ?? '未知' }}</strong><span>{{ artifact.status === 'ready' ? '已生成' : artifact.status === 'failed' ? '生成失败' : '生成中 / 待恢复' }}{{ artifact.outdated ? ' · 需要更新' : '' }}{{ artifact.missing ? ' · 文件已移走' : '' }}{{ artifact.partial ? ' · 未完成部分' : '' }}</span><button
             v-if="artifact.path && !artifact.missing"
             @click="openFile(artifact.path)"
           >
@@ -194,6 +233,18 @@ function checkScope(doc: Version) { return doc.checks.filter(c => !c.outdated).m
           </p>
         </div>
         <details class="workspace-details">
+          <button
+            v-if="version.source_url"
+            @click="emit('tool', 'download', sourceForVersion(version))"
+          >
+            下载此素材字幕
+          </button>
+          <button
+            v-if="version.source_video"
+            @click="emit('tool', 'transcribe', sourceForVersion(version))"
+          >
+            系统转写此素材
+          </button>
           <summary>源字幕与模型来源 / 换模型接续</summary><p>{{ version.source_url || version.source }}</p><p>当前源字幕：{{ version.source }}</p><p v-if="version.parent_task_id">
             派生自 {{ version.parent_task_id }}
           </p><p
@@ -303,6 +354,13 @@ function checkScope(doc: Version) { return doc.checks.filter(c => !c.outdated).m
           <h2>资源用量</h2><p>首轮累计 {{ version.legacy ? '未知' : version.report.first_pass_tokens ?? '未知' }} tokens</p><p v-if="version.budget">
             自动额外额度 {{ version.budget.limit }} · 已知使用 {{ version.budget.spent }} · 预留 / 未知 {{ version.budget.reserved }} · 可用 {{ version.budget.available }}
           </p><p>额外额度默认是首轮 token 的 30%，不等于金额的 30%。费用未知；本版不承诺金额停止线。</p>
+          <p>摘要已知 {{ version.report.summary_tokens_total ?? '未知' }} · 自动追加已知 {{ usage.automatic }} · 人工追加已知 {{ usage.manual }} tokens</p>
+          <p>累计已知部分 {{ usage.total }} tokens{{ usage.unknown || version.legacy ? '；仍有未知用量，不能作为完整总数' : '' }}。估算用量不计入可靠额度基准。</p>
+          <p v-if="version.origin_operation">
+            本次新源翻译与验收计入原版本的同一笔追加操作：<button @click="ws.guarded(() => ws.openVersion(version!.origin_operation!.task_id))">
+              查看来源及用量
+            </button>
+          </p>
         </div>
         <article
           v-for="operation in [...(version.operations || [])].reverse()"
@@ -314,7 +372,9 @@ function checkScope(doc: Version) { return doc.checks.filter(c => !c.outdated).m
             @click="ws.guarded(() => ws.openVersion(operation.derived_task_id!))"
           >
             查看派生任务
-          </button><details v-if="operation.candidate">
+          </button><p v-if="operation.audio_seconds">
+            本地识别范围 {{ operation.audio_seconds }} 秒 · 处理耗时 {{ operation.elapsed_seconds ?? '处理中' }} 秒；本地计算不计作服务商 tokens。
+          </p><details v-if="operation.candidate">
             <summary>保留的候选稿</summary><pre>{{ JSON.stringify(operation.candidate, null, 2) }}</pre>
           </details>
         </article>
@@ -323,7 +383,7 @@ function checkScope(doc: Version) { return doc.checks.filter(c => !c.outdated).m
           :key="change.id"
           class="history-card"
         >
-          <strong>{{ change.kind === 'accept' ? '人工保留并保护' : change.kind === 'undo' ? '局部撤销' : change.kind === 'repair' ? '验收后自动修复' : change.kind === 'edit' ? '人工编辑' : '版本来源变更' }}</strong><span>{{ new Date(change.at).toLocaleString() }}</span><p>{{ change.reason }}</p><details v-if="change.before">
+          <strong>{{ change.kind === 'accept' ? '人工保留并保护' : change.kind === 'undo' ? '局部撤销' : change.kind === 'repair' ? '验收后自动修复' : change.kind === 'edit' ? '人工编辑' : '版本来源变更' }}{{ change.category === 'timing' ? ' · 时间' : change.category === 'translation' ? ' · 译文' : '' }}</strong><span>{{ new Date(change.at).toLocaleString() }}</span><p>{{ change.reason }}</p><details v-if="change.before">
             <summary>查看前后差异</summary><h3>修改前</h3><WorkspaceCues :entries="change.before" /><h3>修改后</h3><WorkspaceCues :entries="change.after || []" />
           </details><button
             v-if="change.before"

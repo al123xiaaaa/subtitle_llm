@@ -26,6 +26,8 @@ export function useAppController() {
   let taskForms = {} as ReturnType<typeof useTaskForms>;
   let jobLifecycle = {} as ReturnType<typeof useJobLifecycle>;
   const providerState = useProviderSettings({
+    getTaskRoleSettings: () => ({semanticQuality: taskForms.translateForm.semanticCheck ? 'jev' : 'off',
+      asrModel: taskForms.translateForm.asrModel, asrDevice: taskForms.translateForm.asrDevice}),
     appendLog: (text, kind) => jobLifecycle.appendLog(text, kind),
     getUseYamlConfig: () => Boolean(taskForms.translateForm?.useYamlConfig),
     setActiveTab: shell.setActiveTab,
@@ -68,6 +70,10 @@ export function useAppController() {
     if (translationSubmitting.value || !canStartTranslate.value) return;
     const form = { ...taskForms.translateForm };
     const input = cleanString(form.input);
+    if (!form.useYamlConfig && form.semanticCheck && providerState.appState.value?.gatewayCredentialState === 'missing') {
+      jobLifecycle.appendLog('Jev 尚未配置凭据，请在本地配置，或明确选择“仅翻译，稍后补查”。\n', 'stderr');
+      return;
+    }
     if (!input || !cleanString(form.targetLanguage)) return;
     const match = reusableSubtitle.value;
     const reuse = reuseSourceSubtitle.value && match?.sourceUrl === input && match.subtitlePath ? match : null;
@@ -277,6 +283,13 @@ export function useAppController() {
   );
 
   const formActions = {
+    newTranslation: () => {
+      const preferences = providerState.appState.value?.preferences;
+      providerState.restoreTaskDefaults();
+      Object.assign(taskForms.translateForm, {input:'', output:'', video:'', useYamlConfig:false,
+        semanticCheck:preferences?.semanticQuality !== 'off', asrModel:preferences?.asrModel || '', asrDevice:preferences?.asrDevice || ''});
+      shell.setActiveTab('translate');
+    },
     canStartMux,
     canStartTranslate,
     dismissReusableSubtitle,

@@ -88,6 +88,7 @@ class TranslationReport(BaseModel):
     manual_review_requests: list[dict] = Field(default_factory=list)
     human_protected_indices: list[int] = Field(default_factory=list)
     summary_tokens: int = 0
+    summary_tokens_total: int = 0
     first_pass_tokens: int = 0
     automatic_budget: dict = Field(default_factory=dict)
     semantic_quality_checks: list[dict] = Field(default_factory=list)

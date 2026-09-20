@@ -359,6 +359,12 @@ def download(
         typer.secho(f"日志文件：{log_path}", fg=typer.colors.YELLOW, err=True)
         raise
     logger.info("命令完成: download result=%s", result)
+    from subtitle_llm.workspace import WorkspaceStore
+    source = result[1] if len(result) > 1 else None
+    media = result[0] or (result[2] if len(result) > 2 else None)
+    if (source and Path(source).is_file()) or (media and Path(media).is_file()):
+        WorkspaceStore(TranslationTaskStore()).import_source(source, language=source_language, source_url=url, media=media)
+    emit_result_event('download', output_file=source, source_video_file=media)
     progress.emit(
         stage="complete",
         detail="complete",
@@ -411,6 +417,10 @@ def transcribe(
         typer.secho(f"日志文件：{log_path}", fg=typer.colors.YELLOW, err=True)
         raise
     logger.info("命令完成: transcribe output=%s", output)
+    if output.is_file():
+        from subtitle_llm.workspace import WorkspaceStore
+        WorkspaceStore(TranslationTaskStore()).import_source(str(output), language=language, media=str(audio))
+    emit_result_event('transcribe', output_file=str(output), source_video_file=str(audio))
     progress.emit(
         stage="complete",
         detail="complete",
@@ -423,6 +433,7 @@ def transcribe(
 
 @app.command("tasks")
 def list_tasks(
+    source_url: Annotated[str | None, typer.Option("--source-url", help="按可靠素材身份筛选任务记录")] = None,
     include_deleted: Annotated[
         bool,
         typer.Option("--include-deleted", help="Include soft-deleted translation task records."),
@@ -451,6 +462,7 @@ def list_tasks(
         typer.echo(f"已恢复任务记录：{restore}")
         return
 
+    from subtitle_llm.workspace.store import url_identity
     records = [
         {
             "task_id": record.task_id,
@@ -471,6 +483,7 @@ def list_tasks(
             "deleted_at": record.deleted_at,
         }
         for record in store.list_tasks(include_deleted=include_deleted)
+        if source_url is None or url_identity(record.source_url or "") == url_identity(source_url)
     ]
     if json_output:
         typer.echo(json.dumps(records, ensure_ascii=False))
