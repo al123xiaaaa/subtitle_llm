@@ -22,7 +22,7 @@
     "lint:desktop:vue:fix": "eslint electron/renderer/src --ext .vue --fix",
     "typecheck:desktop": "vue-tsc --noEmit",
     "test:desktop": "npm run lint:desktop && npm run build:desktop && npm run typecheck:desktop && npm run test:desktop:smoke && npm run test:desktop:e2e",
-    "test:desktop:e2e": "node electron/tests/e2e.test.mjs && node electron/tests/workspace.e2e.test.mjs",
+    "test:desktop:e2e": "node electron/tests/e2e.test.mjs && node electron/tests/workspace.e2e.test.mjs && node electron/tests/workspace-layout.e2e.test.mjs",
     "test:desktop:smoke": "node electron/tests/smoke.test.mjs"
   },
   "devDependencies": {

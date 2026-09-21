@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { useAppController } from "../composables/useAppController";
+import { LibraryBig, ChevronRight } from '@lucide/vue';
 
 type Controller = ReturnType<typeof useAppController>;
 
@@ -39,14 +40,14 @@ const { appState, providers, runtimeInfo, statusPillClass } = props.providerStat
         data-workspace="materials"
         @click="workspacePage = 'materials'"
       >
-        素材库
+        <LibraryBig />素材库
       </button>
       <button
-        class="tab"
+        class="tab nav-group-label"
         data-workspace="jobs"
         @click="workspacePage = 'jobs'"
       >
-        任务与工具
+        任务与工具<ChevronRight />
       </button>
       <button
         v-for="tab in taskTabs"
@@ -77,7 +78,10 @@ const { appState, providers, runtimeInfo, statusPillClass } = props.providerStat
           class="provider-status-item"
         >
           <span>{{ provider.name }}</span>
-          <span :class="statusPillClass(provider.credential)">{{ provider.credential.label }}</span>
+          <span
+            :class="statusPillClass(provider.credential)"
+            :title="provider.credential.source === 'env' ? `从 ${provider.credential.envKey} 读取` : provider.credential.available ? '已保存此服务的配置' : '尚未配置此服务'"
+          >{{ provider.credential.source === 'env' ? '环境变量' : provider.credential.available ? '已配置' : '未配置' }}</span>
         </div>
       </div>
     </section>

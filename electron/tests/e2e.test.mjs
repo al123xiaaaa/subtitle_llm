@@ -747,7 +747,7 @@ async function testManualMuxFlow() {
 async function testEnvCredentialFallback() {
   await withApp({ env: { DEEPSEEK_API_KEY: "env-e2e-deepseek" } }, async ({ page, userDataDir }) => {
     await page.locator("#onboarding").waitFor({ state: "hidden" });
-    await page.locator("#sidebarProviderStatus .status-pill.is-env", { hasText: "DEEPSEEK_API_KEY" }).waitFor();
+    await page.locator("#sidebarProviderStatus .status-pill.is-env[title*='DEEPSEEK_API_KEY']", { hasText: "环境变量" }).waitFor();
     assert.equal(fs.existsSync(path.join(userDataDir, "settings.json")), false);
   });
 }
