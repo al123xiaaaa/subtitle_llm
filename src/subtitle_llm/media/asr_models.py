@@ -33,7 +33,8 @@ class AsrModelProfile:
     spk_model: str | None = None
     forced_aligner: str | None = None
     max_single_segment_time: int = 30000
-    # code = en/zh（paraformer 系）；name = 英文/中文（Fun-ASR 系）
+    # code = en/zh（paraformer 系）；name = 英文/中文（Fun-ASR 系）；
+    # english = English/Chinese（qwen-asr 包的 Qwen3-ASR 系）；iso = BCP-47（whisper 系）
     language_style: str = "code"
     # 传给 model.generate 的额外参数（不同模型的签名差异在此吸收）
     generate_kwargs: dict[str, Any] = field(default_factory=dict)
@@ -81,8 +82,10 @@ _BUILTIN_PROFILES: tuple[AsrModelProfile, ...] = (
         trust_remote_code=True,
         forced_aligner="Qwen/Qwen3-ForcedAligner-0.6B",
         max_single_segment_time=8000,
-        language_style="name",
-        generate_kwargs={"itn": True, "batch_size": 1},
+        language_style="english",
+        # return_time_stamps 必须显式开启，否则 funasr 不调用 forced_aligner、
+        # 不返回字符级时间戳，VAD 段内无法按句拆分
+        generate_kwargs={"itn": True, "batch_size": 1, "return_time_stamps": True},
         segment_via_vad=True,
     ),
     AsrModelProfile(

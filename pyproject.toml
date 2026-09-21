@@ -30,7 +30,9 @@ dependencies = [
 subtitle-llm = "subtitle_llm.cli.app:app"
 
 [project.optional-dependencies]
-asr = ["funasr", "torchaudio"]  # torchaudio: funasr 的 fbank 特征提取后端
+# torchaudio: funasr 的 fbank 特征提取后端；qwen-asr: funasr 的 Qwen3-ASR 模型
+# （qwen3-asr profile，含 ForcedAligner）所需的运行时包
+asr = ["funasr", "torchaudio", "qwen-asr"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

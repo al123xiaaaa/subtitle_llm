@@ -139,10 +139,11 @@
       "spk_model": null,
       "forced_aligner": "Qwen/Qwen3-ForcedAligner-0.6B",
       "max_single_segment_time": 8000,
-      "language_style": "name",
+      "language_style": "english",
       "generate_kwargs": {
         "itn": true,
-        "batch_size": 1
+        "batch_size": 1,
+        "return_time_stamps": true
       },
       "segment_via_vad": true,
       "backend": "funasr",

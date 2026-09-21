@@ -503,7 +503,10 @@ class FunasrAsrBackend:
         lang: str,
         progress: ProgressEmitter | None,
     ) -> list[AsrCue]:
-        """独立 fsmn-vad 切段 → 逐段识别。段时间戳即字幕时间轴，不做段数配对。"""
+        """独立 fsmn-vad 切段 → 逐段识别。段时间戳兜底字幕时间轴，不做段数配对。
+
+        段内有字符级时间戳（Qwen3-ASR + ForcedAligner）时按标点拆句，见
+        ``_split_segment_cues``；无时间戳的模型整段一条。"""
         import soundfile
 
         _patch_funasr_distribute_spk()
@@ -544,19 +547,32 @@ class FunasrAsrBackend:
             for batch_start in range(0, len(slices), batch_size):
                 batch = slices[batch_start:batch_start + batch_size]
                 batch_paths = [slice_path for _, _, slice_path in batch]
-                results = model.generate(
-                    input=batch_paths,
-                    cache={},
-                    language=lang,
-                    **{**generate_kwargs, "batch_size": len(batch_paths)},
-                )
-                by_key = {str(item.get("key", "")): item for item in results or []}
-                for start_ms, end_ms, slice_path in batch:
-                    item = by_key.get(Path(slice_path).stem)
-                    text = clean_sensevoice_text(str(item.get("text", "") if item else "")).strip()
+                pairs = self._qwen3_direct_pairs(model, batch_paths, lang)
+                if pairs is None:
+                    results = model.generate(
+                        input=batch_paths,
+                        cache={},
+                        language=lang,
+                        **{**generate_kwargs, "batch_size": len(batch_paths)},
+                    )
+                    by_key = {str(item.get("key", "")): item for item in results or []}
+                    pairs = []
+                    for slice_path in batch_paths:
+                        item = by_key.get(Path(slice_path).stem)
+                        text = clean_sensevoice_text(str(item.get("text", "") if item else "")).strip()
+                        raw_ts = item.get("timestamp") if isinstance(item, dict) else None
+                        ts: list[tuple[int, int]] = []
+                        if isinstance(raw_ts, list):
+                            ts = [
+                                (int(t[0]), int(t[1]))
+                                for t in raw_ts
+                                if isinstance(t, (list, tuple)) and len(t) == 2
+                            ]
+                        pairs.append((text, ts))
+                for (start_ms, end_ms, _slice_path), (text, ts) in zip(batch, pairs):
                     if not text:
                         continue
-                    cues.append(AsrCue(start_ms=start_ms, end_ms=end_ms, text=text))
+                    cues.extend(self._split_segment_cues(text, ts, start_ms, end_ms))
                 emit_asr_progress(
                     progress,
                     "transcribe_audio",
@@ -569,6 +585,73 @@ class FunasrAsrBackend:
         )
         emit_asr_progress(progress, "load_asr", "加载 ASR", "识别完成", status="done")
         return cues
+
+    @staticmethod
+    def _qwen3_direct_pairs(
+        model: object, paths: list[str], language: str,
+    ) -> list[tuple[str, list[tuple[int, int]]]] | None:
+        """Qwen3-ASR 专用：绕过 funasr generate 直调 qwen-asr 的 transcribe。
+
+        funasr 1.4.15 的包装层把 qwen-asr 的秒级时间戳直接 int() 截断成毫秒，
+        时间轴全部失真；这里拿浮点秒自算毫秒。返回 None 表示不是 Qwen3-ASR
+        或直调失败，调用方回退 funasr generate。
+        """
+        inner = getattr(getattr(model, "model", None), "qwen3_asr_model", None)
+        if inner is None:
+            return None
+        try:
+            results = inner.transcribe(
+                audio=list(paths),
+                language=None if language in ("auto", "none", "") else language,
+                return_time_stamps=True,
+            )
+        except Exception:
+            logger.warning("qwen-asr 直调失败，回退 funasr generate", exc_info=True)
+            return None
+        if not results or len(results) != len(paths):
+            logger.warning("qwen-asr 直调结果数与输入不符（%s vs %s），回退 funasr generate", len(results or []), len(paths))
+            return None
+        pairs: list[tuple[str, list[tuple[int, int]]]] = []
+        for r in results:
+            text = clean_sensevoice_text(str(getattr(r, "text", "") or "")).strip()
+            ts: list[tuple[int, int]] = []
+            items = getattr(getattr(r, "time_stamps", None), "items", None) or []
+            for it in items:
+                s = getattr(it, "start_time", None)
+                e = getattr(it, "end_time", None)
+                if s is None or e is None:
+                    ts = []
+                    break
+                ts.append((round(float(s) * 1000), round(float(e) * 1000)))
+            pairs.append((text, ts))
+        return pairs
+
+    @staticmethod
+    def _split_segment_cues(
+        text: str, timestamps_ms: list[tuple[int, int]], start_ms: int, end_ms: int,
+    ) -> list[AsrCue]:
+        """单个 VAD 段拆成字幕条目。
+
+        timestamps_ms 为段内相对的词/字符级时间戳（毫秒）时，加上段起点偏移后
+        按标点在段内拆句；为空或与文本配不上时整段一条（Fun-ASR-Nano 等无
+        时间戳模型）。时间戳粒度随语言变化（实测英文为词级），先按空格分词
+        配对，不齐再按字符配对。
+        """
+        if timestamps_ms:
+            words = text.split()
+            if len(words) != len(timestamps_ms):
+                words = _synthesize_words_from_chars(text, timestamps_ms)
+            offset: list[list[int]] = []
+            for s, e in timestamps_ms:
+                offset.append([
+                    min(max(s + start_ms, start_ms), end_ms),
+                    min(max(e + start_ms, start_ms), end_ms),
+                ])
+            if words:
+                split = _build_cues_by_punctuation(words, offset)
+                if split:
+                    return split
+        return [AsrCue(start_ms=start_ms, end_ms=end_ms, text=text)]
 
     def _transcribe_combined(
         self,
@@ -798,7 +881,9 @@ class FunasrAsrBackend:
         """把 ASR 语言标识（如 "English"）转为当前模型接受的形式。
 
         language_style=code（paraformer 系）：funasr 标准模型接受 "en"/"zh" 等代码；
-        language_style=name（Fun-ASR / Qwen3-ASR 系）：自定义 generate 要 "英文"/"中文"。
+        language_style=name（Fun-ASR 系）：自定义 generate 要 "英文"/"中文"。
+        language_style=english（qwen-asr 包的 Qwen3-ASR 系）：qwen-asr 只接受
+        English/Chinese 等英文语名（中文语名会被 validate_language 拒绝）。
         None/"auto" 时由模型自动检测。
         """
         if not language:
@@ -814,6 +899,16 @@ class FunasrAsrBackend:
                 "auto": "auto",
             }
             return name_mapping.get(normalized, language.strip())
+        if self.config.language_style == "english":
+            english_mapping = {
+                "english": "English", "en": "English",
+                "chinese": "Chinese", "zh": "Chinese",
+                "japanese": "Japanese", "ja": "Japanese",
+                "korean": "Korean", "ko": "Korean",
+                "cantonese": "Cantonese", "yue": "Cantonese",
+                "auto": "auto",
+            }
+            return english_mapping.get(normalized, language.strip())
         mapping = {
             "english": "en", "chinese": "zh", "japanese": "ja",
             "korean": "ko", "cantonese": "yue", "auto": "auto",
