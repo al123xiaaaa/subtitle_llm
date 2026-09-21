@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { toRefs } from "vue";
+import { ChevronDown, Save, ShieldCheck, SlidersHorizontal } from "@lucide/vue";
 import type { useAppController } from "../../composables/useAppController";
 import type { TaskTab } from "../../composables/controllerTypes";
 
@@ -71,7 +72,7 @@ const { ffmpegAvailable } = props.providerState;
 
 <template>
   <section
-    :class="['task-panel', { 'is-active': activeTab === 'translate' }]"
+    :class="['task-panel', 'translate-panel', { 'is-active': activeTab === 'translate' }]"
     data-panel="translate"
     aria-label="翻译字幕"
   >
@@ -82,11 +83,11 @@ const { ffmpegAvailable } = props.providerState;
     >
       <div class="form-group">
         <h3 class="form-group-title">
-          基础
+          翻译内容
         </h3>
         <div class="form-fields">
           <label class="span-2">
-            <span>输入</span>
+            <span>字幕文件或视频链接</span>
             <input
               id="translateInput"
               v-model="translateForm.input"
@@ -164,13 +165,20 @@ const { ffmpegAvailable } = props.providerState;
       </div>
 
       <details class="span-2 translate-options">
-        <summary>本次设置 · {{ translateForm.useYamlConfig ? '按 YAML 配置' : (showCustomModelInput ? customModelInput : selectedModelId) || '选择翻译模型' }} · {{ translateForm.semanticCheck ? 'Jev 检查' : '稍后补查' }} · {{ translateForm.embedMkv ? '双语字幕 + 视频' : '字幕文件' }}</summary>
+        <summary>
+          <span class="translation-options-title"><SlidersHorizontal :size="15" />本次设置<ChevronDown
+            :size="14"
+            class="translation-options-chevron"
+          /></span>
+          <span class="translation-model-summary">{{ translateForm.useYamlConfig ? '按 YAML 配置' : (showCustomModelInput ? customModelInput : selectedModelId) || '选择翻译模型' }}</span>
+          <span class="translation-option-tags"><span>{{ translateForm.semanticCheck ? 'Jev 检查' : '稍后补查' }}</span><span>{{ translateForm.embedMkv ? '双语字幕 + 视频' : '字幕文件' }}</span></span>
+        </summary>
         <div class="form-group">
           <h3 class="form-group-title">
             模型
           </h3>
           <div class="form-fields">
-            <label>
+            <label class="span-2">
               <span>翻译服务</span>
               <select
                 id="providerSelect"
@@ -185,7 +193,7 @@ const { ffmpegAvailable } = props.providerState;
                 >{{ provider.name }}</option>
               </select>
             </label>
-            <label>
+            <label class="span-2">
               <span>模型</span>
               <select
                 id="modelSelect"
@@ -502,39 +510,62 @@ const { ffmpegAvailable } = props.providerState;
           </div>
         </div>
       </details>
-      <div class="workspace-note span-2">
-        摘要用于理解内容；翻译模型负责译文和修复；Jev 只做判断。自动额外处理默认预留首轮 token 的 30%，费用未知。
-        <label class="check-row"><input
-          v-model="translateForm.semanticCheck"
-          type="checkbox"
-          :disabled="isBusy || translateForm.useYamlConfig"
-        > 使用 Jev 语义检查（不可用时仍保留译文，显示待补查）</label>
-        <p v-if="providerState.appState.value?.gatewayCredentialState === 'missing' && translateForm.semanticCheck && !translateForm.useYamlConfig">
-          Jev 尚未配置凭据，请在本地配置 AI_GATEWAY_API_KEY。
+      <section
+        class="translation-quality"
+        aria-labelledby="translationQualityTitle"
+      >
+        <h3 id="translationQualityTitle">
+          <ShieldCheck :size="16" />质量检查
+        </h3>
+        <label class="check-row semantic-check-row">
+          <input
+            v-model="translateForm.semanticCheck"
+            type="checkbox"
+            :disabled="isBusy || translateForm.useYamlConfig"
+          >
+          <span>使用 Jev 语义检查<small>不可用时仍保留译文，标记为待补查。</small></span>
+        </label>
+        <div
+          v-if="providerState.appState.value?.gatewayCredentialState === 'missing' && translateForm.semanticCheck && !translateForm.useYamlConfig"
+          class="translation-alert"
+        >
+          <p>Jev 尚未配置凭据，请在本地配置 AI_GATEWAY_API_KEY。</p>
           <button
             type="button"
+            class="secondary-button"
             @click="translateForm.semanticCheck = false"
           >
             仅翻译，稍后补查
           </button>
-        </p>
-        <p v-else-if="providerState.appState.value?.gatewayCredentialState === 'local-file' && translateForm.semanticCheck">
+        </div>
+        <p
+          v-else-if="providerState.appState.value?.gatewayCredentialState === 'local-file' && translateForm.semanticCheck"
+          class="translation-help"
+        >
           将从本地配置加载 Jev 凭据；检测到配置文件不代表服务已验证可用。
         </p>
+        <details class="translation-method">
+          <summary>模型分工与额外额度</summary>
+          <p>摘要用于理解内容；翻译模型负责译文和修复；Jev 只做判断。自动额外处理默认预留首轮 token 的 30%，费用未知。</p>
+        </details>
+      </section>
+      <div class="translation-defaults">
         <button
           type="button"
           class="secondary-button"
+          aria-label="将模型选择明确保存为默认"
+          :disabled="isBusy"
           @click="persistProviderPreference"
         >
-          将模型选择明确保存为默认
+          <Save :size="14" />保存为默认设置
         </button>
-        <small>保存翻译、摘要、转写与语义检查的职责设置；本次临时选择不会自动保存。</small>
+        <p>保存翻译、摘要、转写与语义检查设置。本次临时选择不会自动保存。</p>
       </div>
       <div
         v-if="translateForm.embedMkv && (!ffmpegAvailable || (reusableSubtitle && reuseSourceSubtitle && !reusableSubtitle.videoPath && !translateForm.video))"
-        class="workspace-note span-2"
+        class="translation-alert span-2"
       >
-        当前缺少生成视频的条件；可以补充视频 / FFmpeg，也可明确选择先完成字幕。
+        <p>当前缺少生成视频的条件；可以补充视频 / FFmpeg，也可明确选择先完成字幕。</p>
         <button
           type="button"
           class="secondary-button"
@@ -549,7 +580,7 @@ const { ffmpegAvailable } = props.providerState;
       >
         生成视频会下载或使用原视频；字幕先独立保存，视频失败可稍后单独重试。
       </p>
-      <div class="actions span-2">
+      <div class="actions span-2 translation-submit">
         <button
           id="startTranslate"
           class="primary-button"
@@ -637,3 +668,5 @@ const { ffmpegAvailable } = props.providerState;
     </form>
   </section>
 </template>
+
+<style src="../../styles/translation-form.css"></style>

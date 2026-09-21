@@ -480,7 +480,7 @@
   font-size: 10px;
 }
 
-.workspace-note {
+.material-workspace .workspace-note {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -493,7 +493,7 @@
   border-radius: 7px;
 }
 
-.workspace-note svg {
+.material-workspace .workspace-note svg {
   flex: 0 0 auto;
   margin-top: 2px;
   color: #879690;
